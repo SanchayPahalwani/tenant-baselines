@@ -56,7 +56,7 @@ demo: jar up submit
 	@echo "Flink http://localhost:8081"
 	@echo
 	@echo "In about 3 minutes eu-central gets an error spike for 10 minutes." \
-		"Alerts appear in Alertmanager about 4 minutes after it starts."
+		"Alerts appear in Alertmanager about 3 minutes after it starts."
 
 smoke: demo
 	scripts/smoke.sh
