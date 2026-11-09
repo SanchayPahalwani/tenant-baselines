@@ -80,4 +80,14 @@ class ScorerTest {
       assertThat(e.eventTimeMs()).isEqualTo(720_000);
     }
   }
+
+  @Test
+  void scorerSurvivesJavaSerialization() throws Exception {
+    List<ThresholdSet> sets;
+    try (InputStream in = ScorerTest.class.getResourceAsStream("/thresholds-demo.json")) {
+      sets = ThresholdsFile.load(in);
+    }
+    Scorer copy = org.apache.flink.util.InstantiationUtil.clone(new Scorer("run", sets));
+    assertThat(copy).isNotNull();
+  }
 }
