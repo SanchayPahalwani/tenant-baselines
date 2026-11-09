@@ -41,3 +41,12 @@ def test_error_spike_raises_error_rate():
     other = [m for m in msgs if m["rg"] != "eu-central"]
     assert sum(not m["ok"] for m in eu) / len(eu) > 0.4
     assert sum(not m["ok"] for m in other) / len(other) < 0.1
+
+
+def test_delivery_stats_counts_failures(caplog):
+    stats = DeliveryStats()
+    stats.on_delivery(None, object())
+    with caplog.at_level("WARNING", logger="gen_live"):
+        stats.on_delivery("broker down", object())
+    assert (stats.delivered, stats.failed) == (1, 1)
+    assert "broker down" in caplog.text

@@ -59,6 +59,21 @@ class LiveGenerator:
         return [(k, p) for _, k, p in out]
 
 
+class DeliveryStats:
+    """Counts delivery results; `on_delivery` is the producer callback."""
+
+    def __init__(self) -> None:
+        self.failed = 0
+        self.delivered = 0
+
+    def on_delivery(self, err, msg) -> None:
+        if err is not None:
+            self.failed += 1
+            log.warning("delivery failed: %s", err)
+        else:
+            self.delivered += 1
+
+
 def main() -> None:
     from confluent_kafka import Producer
 
@@ -76,11 +91,19 @@ def main() -> None:
     script = demo_script(world, next_second) if args.script == "demo" else []
     gen = LiveGenerator(world, args.seed, script)
     producer = Producer(
-        {"bootstrap.servers": args.bootstrap, "linger.ms": 50, "compression.type": "zstd"}
+        {
+            "bootstrap.servers": args.bootstrap,
+            "linger.ms": 50,
+            "compression.type": "zstd",
+            # A retry must not reorder messages within a partition.
+            "enable.idempotence": True,
+        }
     )
 
+    stats = DeliveryStats()
     sent = 0
     sent_total = 0
+    last_delivered = last_failed = 0
     last_log = time.monotonic()
     while True:
         # Produce a second only after it has ended, so events stay in time order.
@@ -90,7 +113,12 @@ def main() -> None:
         for key, payload in gen.tick(next_second):
             while True:
                 try:
-                    producer.produce(args.topic, value=payload, key=key.encode())
+                    producer.produce(
+                        args.topic,
+                        value=payload,
+                        key=key.encode(),
+                        on_delivery=stats.on_delivery,
+                    )
                     break
                 except BufferError:
                     producer.poll(0.1)
@@ -99,8 +127,15 @@ def main() -> None:
         next_second += 1000
         if time.monotonic() - last_log >= 10:
             sent_total += sent
-            log.info("sent %d events in last 10s (%d total)", sent, sent_total)
+            log.info(
+                "queued %d, delivered %d, failed %d in last 10s (%d queued total)",
+                sent,
+                stats.delivered - last_delivered,
+                stats.failed - last_failed,
+                sent_total,
+            )
             sent = 0
+            last_delivered, last_failed = stats.delivered, stats.failed
             last_log = time.monotonic()
 
 
