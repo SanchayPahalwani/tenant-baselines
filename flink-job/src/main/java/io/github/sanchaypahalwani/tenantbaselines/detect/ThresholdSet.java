@@ -10,7 +10,8 @@ public record ThresholdSet(
     long validFromMs,
     long validToMs,
     Map<Signal, Level> global,
-    Map<String, Map<Signal, Level>> perKey) {
+    Map<String, Map<Signal, Level>> perKey)
+    implements java.io.Serializable {
 
   public boolean activeAt(long minuteMs) {
     return minuteMs >= validFromMs && minuteMs < validToMs;
