@@ -14,6 +14,7 @@
     <maven.compiler.release>17</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <flink.version>2.2.1</flink.version>
+    <flink.kafka.version>5.0.0-2.2</flink.kafka.version>
     <jackson.version>2.18.12</jackson.version>
     <junit.version>5.11.4</junit.version>
     <assertj.version>3.27.7</assertj.version>
@@ -39,6 +40,18 @@
       <artifactId>flink-runtime</artifactId>
       <version>${flink.version}</version>
       <scope>provided</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>org.apache.flink</groupId>
+      <artifactId>flink-connector-base</artifactId>
+      <version>${flink.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.flink</groupId>
+      <artifactId>flink-connector-kafka</artifactId>
+      <version>${flink.kafka.version}</version>
     </dependency>
 
     <dependency>
@@ -117,7 +130,13 @@
               <createDependencyReducedPom>false</createDependencyReducedPom>
               <artifactSet>
                 <excludes>
-                  <exclude>org.apache.flink:*</exclude>
+                  <exclude>org.apache.flink:flink-core</exclude>
+                  <exclude>org.apache.flink:flink-core-api</exclude>
+                  <exclude>org.apache.flink:flink-streaming-java</exclude>
+                  <exclude>org.apache.flink:flink-runtime</exclude>
+                  <exclude>org.apache.flink:flink-annotations</exclude>
+                  <exclude>org.apache.flink:flink-metrics-core</exclude>
+                  <exclude>org.apache.flink:flink-connector-base</exclude>
                 </excludes>
               </artifactSet>
               <filters>
@@ -134,6 +153,7 @@
                 </filter>
               </filters>
               <transformers>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
                 <transformer implementation="org.apache.maven.plugins.shade.resource.ApacheLicenseResourceTransformer"/>
                 <transformer implementation="org.apache.maven.plugins.shade.resource.IncludeResourceTransformer">
                   <resource>META-INF/LICENSE</resource>
