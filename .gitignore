@@ -1,0 +1,7 @@
+target/
+data/
+.venv/
+__pycache__/
+.idea/
+*.iml
+.DS_Store
