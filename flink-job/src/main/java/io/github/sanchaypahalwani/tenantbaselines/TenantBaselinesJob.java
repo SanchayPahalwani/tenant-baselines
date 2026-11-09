@@ -40,26 +40,37 @@ public final class TenantBaselinesJob {
     }
 
     StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+    addTo(env, cfg, sets);
+    env.execute("tenant-baselines-" + cfg.ns());
+  }
 
+  /**
+   * Adds the job's source, operators and sinks to {@code env}. Each has a uid, so checkpoints
+   * still restore after operators are added elsewhere in the graph.
+   */
+  static void addTo(StreamExecutionEnvironment env, JobConfig cfg, List<ThresholdSet> sets) {
     DataStream<Event> events =
         env.fromSource(
-            eventSource(cfg),
-            cfg.mode().equals("live") ? Watermarks.live() : Watermarks.replay(),
-            "events");
+                eventSource(cfg),
+                cfg.mode().equals("live") ? Watermarks.live() : Watermarks.replay(),
+                "events")
+            .uid("events-source");
 
     Pipeline.Outputs out = Pipeline.build(events, cfg, sets);
 
     out.aggregates().sinkTo(sink(cfg.bootstrap(), cfg.aggregatesTopic(), JsonSerialization.aggKey()))
+        .uid("aggregates-sink")
         .name("aggregates-sink");
     out.alerts().sinkTo(sink(cfg.bootstrap(), cfg.alertsTopic(), JsonSerialization.alertKey()))
+        .uid("alerts-sink")
         .name("alerts-sink");
     out.late()
         .map(new CountLate())
+        .uid("late-events")
         .name("late-events")
         .sinkTo(new DiscardingSink<>())
+        .uid("late-events-discard")
         .name("late-events-discard");
-
-    env.execute("tenant-baselines-" + cfg.ns());
   }
 
   // The connector's offsets API still takes kafka-clients' OffsetResetStrategy, deprecated there.
