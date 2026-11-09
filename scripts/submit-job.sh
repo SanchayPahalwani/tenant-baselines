@@ -127,7 +127,7 @@ else
   checkpoint=$(newest_checkpoint)
   if [ -n "$checkpoint" ]; then
     echo "restoring from the newest checkpoint, $checkpoint"
-    submit -s "$checkpoint"
+    submit -s "$checkpoint" || fail "could not restore from $checkpoint"
   else
     echo "no checkpoint under $CHECKPOINT_DIR; starting with empty state"
     submit
