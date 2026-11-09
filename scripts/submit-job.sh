@@ -3,8 +3,11 @@
 #
 #   docker compose exec -T jobmanager bash /opt/tb-scripts/submit-job.sh [--from-checkpoint]
 #
-# By default it cancels any running or restarting tenant-baselines-live job and submits a new
-# one, which starts with empty state from the consumer group's committed offsets.
+# By default it cancels any running or restarting tenant-baselines-live job (checkpoints are
+# retained on cancel) and submits a new one restored from the newest retained checkpoint of any
+# job, so alerts that are firing carry over and get their resolved events. Only when there is no
+# checkpoint does it start with empty state, from the consumer group's committed offsets. It
+# prints which of the two it did.
 #
 # --from-checkpoint waits until the running job has completed 3 checkpoints, cancels it
 # (checkpoints are retained on cancel) and restores the new job from the oldest retained one.
@@ -87,6 +90,13 @@ retained_checkpoints() {
   done | sort -n | cut -d' ' -f2
 }
 
+# The newest chk-N directory with its _metadata file, of any job; nothing if there is none.
+newest_checkpoint() {
+  [ -d "$CHECKPOINT_DIR" ] || return 0
+  find "$CHECKPOINT_DIR" -mindepth 3 -maxdepth 3 -path '*/chk-*/_metadata' -printf '%T@ %h\n' \
+    | sort -n | tail -n 1 | cut -d' ' -f2-
+}
+
 submit() {
   flink run -d "$@" "$JAR" \
     --bootstrap kafka:19092 --ns live --run-id live --mode live \
@@ -114,5 +124,12 @@ else
   for id in "${ids[@]}"; do
     cancel "$id"
   done
-  submit
+  checkpoint=$(newest_checkpoint)
+  if [ -n "$checkpoint" ]; then
+    echo "restoring from the newest checkpoint, $checkpoint"
+    submit -s "$checkpoint"
+  else
+    echo "no checkpoint under $CHECKPOINT_DIR; starting with empty state"
+    submit
+  fi
 fi

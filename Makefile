@@ -43,6 +43,7 @@ down:
 reset:
 	docker compose down -v
 
+# Replaces the running job with one restored from the newest retained checkpoint, if any.
 submit:
 	docker compose exec -T jobmanager bash /opt/tb-scripts/submit-job.sh
 
