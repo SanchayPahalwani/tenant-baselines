@@ -63,6 +63,38 @@ def test_resolve_sets_endsAt_and_drops_after_300s():
     assert s.due(1100 + 301) == []
 
 
+def test_new_firing_alert_ends_older_firing_alert_with_same_labels():
+    # An alert left firing by a job that was replaced without its state never gets a
+    # resolved event. Alertmanager knows both by the same labels.
+    s = new_state()
+    s.apply(event(), now_s=1000)
+    s.mark_sent(["a1"], 1000)
+    s.apply(event(alert_id="a2", starts_at_ms=600_000, event_time_ms=780_000), now_s=2000)
+    ids = [i for i, _ in s.due_items(2000)]
+    out = s.due(2000)
+    # The older one goes first, so Alertmanager ends it before it takes the new one.
+    assert ids == ["a1", "a2"]
+    assert out[0]["startsAt"] == "1970-01-01T00:00:00Z"
+    assert out[0]["endsAt"] == "1970-01-01T00:10:00Z"
+    assert "endsAt" not in out[1]
+    s.mark_sent(ids, 2000)
+    assert [i for i, _ in s.due_items(2060)] == ["a1", "a2"]
+    # The ended one is dropped 300 s later; the new one is still sent.
+    assert [i for i, _ in s.due_items(2000 + 301)] == ["a2"]
+
+
+def test_new_firing_alert_leaves_other_labels_and_resolved_alerts_alone():
+    s = new_state()
+    s.apply(event(), now_s=1000)
+    s.apply(event(state="resolved", event_time_ms=600_000), now_s=1100)
+    s.apply(event(alert_id="b1", tenant="other", key="other"), now_s=1100)
+    s.apply(event(alert_id="a2", starts_at_ms=1_200_000, event_time_ms=1_380_000), now_s=1200)
+    out = dict(s.due_items(1200))
+    assert out["a1"]["endsAt"] == "1970-01-01T00:10:00Z"
+    assert "endsAt" not in out["b1"]
+    assert "endsAt" not in out["a2"]
+
+
 def test_resolve_of_unknown_id_does_nothing():
     s = new_state()
     s.apply(event(state="resolved"), now_s=1000)

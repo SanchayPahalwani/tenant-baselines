@@ -76,17 +76,36 @@ class ForwarderState:
             if event["emitted_at_ms"] - event["event_time_ms"] > self._stale_s * 1000:
                 return  # decided during backfill, not a live alert
             if alert_id not in self._alerts:
+                entry = to_am_alert(event)
+                self._end_same_labels(alert_id, entry, now_s)
                 self._alerts[alert_id] = {
-                    "entry": to_am_alert(event),
+                    "entry": entry,
                     "resolved_seen_s": None,
                     "last_sent_s": None,
                 }
         elif event["state"] == "resolved":
             a = self._alerts.get(alert_id)
             if a is not None and a["resolved_seen_s"] is None:
-                a["entry"] = {**a["entry"], "endsAt": _rfc3339(event["event_time_ms"])}
-                a["resolved_seen_s"] = now_s
-                a["last_sent_s"] = None  # send the resolution right away
+                self._end(a, _rfc3339(event["event_time_ms"]), now_s)
+
+    def _end_same_labels(self, new_id: str, entry: dict, now_s: float) -> None:
+        """End the firing alerts that have the labels of a new firing alert.
+
+        Alertmanager tells alerts apart by their labels. A firing alert with the same labels
+        and another id was left by a job replaced without its state, and no resolved event
+        will come for it: end it where the new one starts. It was stored first, so it stays
+        ahead of the new one in every batch and Alertmanager ends it before taking the new one.
+        """
+        for alert_id, a in self._alerts.items():
+            if a["resolved_seen_s"] is None and a["entry"]["labels"] == entry["labels"]:
+                log.info("ending alert %s: %s fires with the same labels", alert_id, new_id)
+                self._end(a, entry["startsAt"], now_s)
+
+    @staticmethod
+    def _end(a: dict, ends_at: str, now_s: float) -> None:
+        a["entry"] = {**a["entry"], "endsAt": ends_at}
+        a["resolved_seen_s"] = now_s
+        a["last_sent_s"] = None  # send the resolution right away
 
     def due_items(self, now_s: float) -> list[tuple[str, dict]]:
         """(alert_id, API entry) pairs that are due; also drops expired resolved alerts."""
