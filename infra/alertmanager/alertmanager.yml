@@ -1,0 +1,29 @@
+# Routes the forwarder's alerts to the pager-sink webhook. Regional and tenant alerts
+# go to separate receivers; a firing regional alert mutes tenant alerts on the same
+# region and signal.
+route:
+  receiver: tenant-pager
+  group_by: [alertname, region, signal]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - matchers: ['scope="region"']
+      receiver: regional-pager
+    - matchers: ['scope="tenant"']
+      receiver: tenant-pager
+
+receivers:
+  - name: regional-pager
+    webhook_configs:
+      - url: http://pager-sink:8099/regional
+        send_resolved: true
+  - name: tenant-pager
+    webhook_configs:
+      - url: http://pager-sink:8099/tenant
+        send_resolved: true
+
+inhibit_rules:
+  - source_matchers: ['scope="region"']
+    target_matchers: ['scope="tenant"']
+    equal: [region, signal]
