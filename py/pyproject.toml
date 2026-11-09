@@ -1,0 +1,38 @@
+[project]
+name = "tenant-baselines"
+version = "0.1.0"
+description = "Synthetic traffic generators and helpers for the tenant-baselines demo"
+requires-python = ">=3.12,<3.13"
+license = "Apache-2.0"
+dependencies = [
+    "confluent-kafka==2.16.1",
+    "orjson==3.13.0",
+    "numpy==2.5.4",
+    "httpx==0.28.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest==9.2.0",
+    "ruff==0.17.4",
+]
+
+[project.scripts]
+gen-live = "tenant_baselines.gen_live:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tenant_baselines"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
