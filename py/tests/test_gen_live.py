@@ -1,7 +1,7 @@
 import orjson
 import pytest
 
-from tenant_baselines.gen_live import LiveGenerator
+from tenant_baselines.gen_live import DeliveryStats, LiveGenerator
 from tenant_baselines.incidents import Incident
 from tenant_baselines.world import build_world
 
