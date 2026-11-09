@@ -1,3 +1,5 @@
+import logging
+
 import httpx
 
 from tenant_baselines.forwarder import ForwarderState, post_due, to_am_alert
@@ -71,6 +73,27 @@ def test_stale_backfill_alert_is_skipped():
     s = new_state()
     s.apply(event(emitted_at_ms=180_000 + 3 * 3600 * 1000), now_s=1000)
     assert s.due(1000) == []
+
+
+def test_malformed_firing_event_is_rejected_by_apply(caplog):
+    s = new_state()
+    bad = event()
+    del bad["value"]
+    with caplog.at_level(logging.WARNING, logger="forwarder"):
+        s.apply(bad, now_s=1000)
+    assert "skipping bad alert event" in caplog.text
+    assert s.due(1000) == []
+    s.apply(event(alert_id="a2"), now_s=1001)
+    assert len(s.due(1001)) == 1
+
+
+def test_malformed_resolved_event_leaves_alert_firing():
+    s = new_state()
+    s.apply(event(), now_s=1000)
+    s.apply(event(state="resolved", event_time_ms="soon"), now_s=1001)
+    out = s.due(1001)
+    assert len(out) == 1
+    assert "endsAt" not in out[0]
 
 
 def test_other_detector_ignored():

@@ -24,25 +24,25 @@ def _rfc3339(ms: int) -> str:
     return datetime.fromtimestamp(ms / 1000, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def to_am_alert(a: dict) -> dict:
-    """Alertmanager API v2 entry for a stored alert (or a raw alert event)."""
-    labels = {"alertname": "TenantAnomaly" if a["scope"] == "tenant" else "RegionAnomaly"}
+def to_am_alert(event: dict) -> dict:
+    """Alertmanager API v2 entry for a firing alert event, without endsAt.
+
+    Raises KeyError, TypeError or ValueError on a missing or malformed field.
+    """
+    labels = {"alertname": "TenantAnomaly" if event["scope"] == "tenant" else "RegionAnomaly"}
     for name in LABEL_FIELDS:
-        if a.get(name):
-            labels[name] = a[name]
-    who = a.get("tenant") or a.get("region") or a.get("key")
-    out = {
+        if event.get(name):
+            labels[name] = event[name]
+    who = event.get("tenant") or event.get("region") or event.get("key")
+    return {
         "labels": labels,
         "annotations": {
-            "summary": f"{a['signal']} for {who} / {a.get('unit') or 'all units'}",
-            "value": str(a["value"]),
-            "reference": str(a["reference"]),
+            "summary": f"{event['signal']} for {who} / {event.get('unit') or 'all units'}",
+            "value": str(event["value"]),
+            "reference": str(event["reference"]),
         },
-        "startsAt": _rfc3339(a["starts_at_ms"]),
+        "startsAt": _rfc3339(event["starts_at_ms"]),
     }
-    if a.get("ends_at_ms") is not None:
-        out["endsAt"] = _rfc3339(a["ends_at_ms"])
-    return out
 
 
 class ForwarderState:
@@ -62,6 +62,13 @@ class ForwarderState:
         self._alerts: dict[str, dict] = {}
 
     def apply(self, event: dict, now_s: float) -> None:
+        """Apply one alert event. A malformed event is logged and leaves the state as it was."""
+        try:
+            self._apply(event, now_s)
+        except (KeyError, TypeError, ValueError, OverflowError) as e:
+            log.warning("skipping bad alert event (%s: %s)", type(e).__name__, e)
+
+    def _apply(self, event: dict, now_s: float) -> None:
         if event["detector"] != self._detector or event["setting"] != self._setting:
             return
         alert_id = event["alert_id"]
@@ -70,15 +77,14 @@ class ForwarderState:
                 return  # decided during backfill, not a live alert
             if alert_id not in self._alerts:
                 self._alerts[alert_id] = {
-                    **event,
-                    "ends_at_ms": None,
+                    "entry": to_am_alert(event),
                     "resolved_seen_s": None,
                     "last_sent_s": None,
                 }
         elif event["state"] == "resolved":
             a = self._alerts.get(alert_id)
-            if a is not None and a["ends_at_ms"] is None:
-                a["ends_at_ms"] = event["event_time_ms"]
+            if a is not None and a["resolved_seen_s"] is None:
+                a["entry"] = {**a["entry"], "endsAt": _rfc3339(event["event_time_ms"])}
                 a["resolved_seen_s"] = now_s
                 a["last_sent_s"] = None  # send the resolution right away
 
@@ -92,7 +98,7 @@ class ForwarderState:
         ]:
             del self._alerts[alert_id]
         return [
-            (i, to_am_alert(a))
+            (i, a["entry"])
             for i, a in self._alerts.items()
             if a["last_sent_s"] is None or now_s - a["last_sent_s"] >= self._resend_s
         ]
@@ -158,8 +164,8 @@ def main() -> None:
                 else:
                     try:
                         state.apply(orjson.loads(msg.value()), time.time())
-                    except (orjson.JSONDecodeError, KeyError, TypeError) as e:
-                        log.warning("skipping bad alert event: %s", e)
+                    except orjson.JSONDecodeError as e:
+                        log.warning("skipping alert event that is not JSON: %s", e)
             if time.monotonic() >= next_post:
                 sent = post_due(client, args.alertmanager, state, time.time())
                 if sent:
