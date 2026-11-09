@@ -2,12 +2,15 @@
 # 10 GB Docker VM. Data lives in named volumes; only config, scripts and the job
 # project are bind-mounted, read-only. Published ports listen on loopback only.
 
+# Three retained checkpoints, 30 s apart: the oldest is at least 60 s old, which
+# scripts/submit-job.sh --from-checkpoint relies on.
 x-flink-properties: &flink-properties |
   jobmanager.rpc.address: jobmanager
   state.backend.type: rocksdb
   execution.checkpointing.incremental: true
   execution.checkpointing.dir: file:///flink-data/checkpoints
   execution.checkpointing.interval: 30 s
+  execution.checkpointing.num-retained: 3
   execution.checkpointing.externalized-checkpoint-retention: RETAIN_ON_CANCELLATION
   restart-strategy.type: fixed-delay
   restart-strategy.fixed-delay.attempts: 10
