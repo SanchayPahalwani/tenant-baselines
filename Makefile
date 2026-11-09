@@ -3,7 +3,7 @@ MVN = docker run --rm -v $(PWD):/w -v tb-m2:/root/.m2 -w /w/flink-job maven:3.10
 .PHONY: jar test-java
 
 jar:
-	$(MVN) package
+	$(MVN) clean package
 
 test-java:
-	$(MVN) verify
+	$(MVN) clean verify
