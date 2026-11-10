@@ -199,6 +199,10 @@ services:
       - "1"
       - --script
       - demo
+      - --history-days
+      - "21"
+      - --partitions
+      - "8"
     depends_on:
       kafka-init:
         condition: service_completed_successfully

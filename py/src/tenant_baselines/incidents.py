@@ -4,6 +4,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Literal
 
+from tenant_baselines.traffic import key_rate_rpm
 from tenant_baselines.world import Key, World
 
 
@@ -56,7 +57,51 @@ def effects(incidents: Iterable[Incident], key: Key, t_ms: int) -> Effects:
     return Effects(volume, error, latency)
 
 
+def _key_rates(world: World, t_ms: int) -> list[tuple[Key, float]]:
+    tenants = {t.name: t for t in world.tenants}
+    per_tenant: dict[str, int] = {}
+    for k in world.keys:
+        per_tenant[k.tenant] = per_tenant.get(k.tenant, 0) + 1
+    return [(k, key_rate_rpm(tenants[k.tenant], per_tenant[k.tenant], t_ms)) for k in world.keys]
+
+
+def pick_drop_key(world: World, t_ms: int) -> Key:
+    """The key on a dedicated unit with the highest rate at t_ms (first in world order on a tie)."""
+    dedicated = {u.name for u in world.units if u.dedicated_for is not None}
+    candidates = [(k, r) for k, r in _key_rates(world, t_ms) if k.unit in dedicated]
+    return max(candidates, key=lambda kr: kr[1])[0]
+
+
+def pick_spike_region(world: World, t_ms: int) -> str:
+    """The region with the most keys at 25 requests/min or more at t_ms (first on a tie)."""
+    busy: dict[str, int] = {r.name: 0 for r in world.regions}
+    for k, r in _key_rates(world, t_ms):
+        if r >= 25:
+            busy[k.region] += 1
+    return max(busy, key=lambda name: busy[name])
+
+
 def demo_script(world: World, t0_ms: int) -> list[Incident]:
+    """A traffic drop on a dedicated unit, then an error spike in one region.
+
+    Both targets are picked for the time they start, so each is detectable
+    whenever the demo is run.
+    """
+    drop_start = t0_ms + 2 * 60_000
+    spike_start = t0_ms + 14 * 60_000
     return [
-        Incident("error_spike", t0_ms + 3 * 60_000, t0_ms + 13 * 60_000, 0.20, region="eu-central")
+        Incident(
+            "volume_mult",
+            drop_start,
+            t0_ms + 12 * 60_000,
+            0.1,
+            key=pick_drop_key(world, drop_start).key,
+        ),
+        Incident(
+            "error_spike",
+            spike_start,
+            t0_ms + 24 * 60_000,
+            0.20,
+            region=pick_spike_region(world, spike_start),
+        ),
     ]

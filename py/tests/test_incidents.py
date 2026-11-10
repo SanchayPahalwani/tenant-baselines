@@ -1,5 +1,6 @@
 import pytest
 
+from tenant_baselines.gen_live import LiveGenerator
 from tenant_baselines.incidents import Incident, demo_script, effects
 from tenant_baselines.world import Key, build_world
 
@@ -28,13 +29,36 @@ def test_combination_and_key_scope():
     assert e.error_add == 0
 
 
-def test_demo_script():
-    (inc,) = demo_script(build_world("demo", 1), 1_000_000)
-    assert inc.kind == "error_spike"
-    assert inc.region == "eu-central"
-    assert inc.start_ms == 1_000_000 + 180_000
-    assert inc.end_ms == 1_000_000 + 780_000
-    assert inc.magnitude == pytest.approx(0.20)
+def test_demo_script_shape():
+    w = build_world("demo", 1)
+    units = {u.name: u for u in w.units}
+    drop, spike = demo_script(w, 1_000_000)
+    assert drop.kind == "volume_mult"
+    assert drop.magnitude == pytest.approx(0.1)
+    key = next(k for k in w.keys if k.key == drop.key)
+    assert units[key.unit].dedicated_for is not None
+    assert drop.end_ms - drop.start_ms == 10 * 60_000
+    assert spike.kind == "error_spike"
+    assert spike.magnitude == pytest.approx(0.20)
+    assert spike.region is not None
+    assert spike.start_ms == drop.end_ms + 2 * 60_000
+
+
+def test_demo_script_targets_are_detectable_all_week():
+    w = build_world("demo", 1)
+    gen = LiveGenerator(w, 1, [])
+    t_start = 1_767_225_600_000  # a Thursday 00:00 UTC
+    for h in range(7 * 24):
+        t0 = t_start + h * 3_600_000
+        drop, spike = demo_script(w, t0)
+        key = next(k for k in w.keys if k.key == drop.key)
+        assert gen.key_rate_rpm(key, drop.start_ms) >= 7
+        busy = [
+            k
+            for k in w.keys
+            if k.region == spike.region and gen.key_rate_rpm(k, spike.start_ms) >= 25
+        ]
+        assert len(busy) >= 2
 
 
 def test_volume_mult_scales_volume():
