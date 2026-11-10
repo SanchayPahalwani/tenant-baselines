@@ -216,7 +216,7 @@ aggregate generator (Python, eval) ─▶ <run>.aggregates-in ─┘
 **Forwarder (Python).**
 - Reads `live.alerts` for the live setting only (seasonal, k = 4).
 - Re-sends each firing alert to Alertmanager's `/api/v2/alerts` every 60 s. On resolve it sends `endsAt` and keeps re-sending for 5 minutes.
-- Skips alerts that started more than 10 minutes ago by wall clock, so backfill history never pages.
+- Skips an alert that was decided more than 10 minutes after its event time (`emitted_at − event_time > 10 min`), so backfill history never pages. An incident still firing when the forwarder restarts keeps paging. *(Amended 2026-11-10 by the owner, to match the milestone 1 build.)*
 - On start, it rebuilds its firing set by reading the topic from the beginning.
 
 **Alertmanager.**
