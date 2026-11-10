@@ -33,9 +33,9 @@
 
 ## Open questions for the owner
 
-Tasks that depend on an answer are marked **(pending Q*n*)** and are written for the recommended option.
+Both questions are resolved; the owner's answers are recorded below.
 
-1. **Demo warm-up path.** Three weeks of the demo world is about 20.7 million events (computed from `build_world("demo", 1)` and `traffic.py`). Measured on the host: the current per-second `tick` needs about 105 s of pure generation for 3 weeks (1.8 million ticks), before any Kafka produce; a per-minute numpy batch needs about 12 s. Produce is estimated at 50–70 s either way, and Flink catch-up at 100–200 s on parallelism 2 (an estimate: one RocksDB read-modify-write of an 830-byte accumulator per event; not measured).
+1. **Demo warm-up path. Resolved:** the owner chose A on 2026-11-10. Three weeks of the demo world is about 20.7 million events (computed from `build_world("demo", 1)` and `traffic.py`). Measured on the host: the current per-second `tick` needs about 105 s of pure generation for 3 weeks (1.8 million ticks), before any Kafka produce; a per-minute numpy batch needs about 12 s. Produce is estimated at 50–70 s either way, and Flink catch-up at 100–200 s on parallelism 2 (an estimate: one RocksDB read-modify-write of an 830-byte accumulator per event; not measured).
    - **A (recommended, planned in Task 9):** backfill in whole-minute batches, live second by second. Estimated warm-up 2–3.5 minutes, bound by Flink. Cost: a second generation method and its tests; the two methods use different random draws.
    - **B:** keep per-second ticks for history. No new path. Estimated 3–4.5 minutes, bound by the generator.
    - **C:** halve the demo traffic. Halves both sides, but puts more keys under minimum evidence and departs from §5.2's median of 150.
@@ -469,7 +469,7 @@ Seasonal tests use `sets = List.of()`, `List.of(SeasonalSetting.ofK(4))`, key `a
   Expected: `['signal', None]`.
 - [ ] **Step 6: Commit.** `git add -A && git commit -m "Wire PopulationBaselines and scores through the job, ClickHouse and Grafana"`
 
-### Task 9: Generator on one continuous timeline (pending Q1)
+### Task 9: Generator on one continuous timeline
 
 **Files:**
 - Modify: `py/src/tenant_baselines/gen_live.py`, `py/src/tenant_baselines/incidents.py`, `docker-compose.yml` (generator command)
