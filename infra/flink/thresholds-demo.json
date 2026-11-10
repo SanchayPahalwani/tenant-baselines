@@ -1,0 +1,16 @@
+{
+  "sets": [
+    {
+      "detector": "global_static",
+      "setting": "default",
+      "valid_from_ms": 0,
+      "valid_to_ms": null,
+      "global": {
+        "error_rate": { "fire": 0.05, "resolve": 0.025 },
+        "latency_p95": { "fire": 400, "resolve": 250 },
+        "volume_5m": { "fire": 0, "resolve": 5 }
+      },
+      "per_key": {}
+    }
+  ]
+}
