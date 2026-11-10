@@ -1,13 +1,17 @@
 package io.github.sanchaypahalwani.tenantbaselines;
 
 import io.github.sanchaypahalwani.tenantbaselines.agg.MinuteAggregator;
+import io.github.sanchaypahalwani.tenantbaselines.baseline.PopulationBaseline;
+import io.github.sanchaypahalwani.tenantbaselines.baseline.PopulationBaselines;
 import io.github.sanchaypahalwani.tenantbaselines.detect.Scorer;
+import io.github.sanchaypahalwani.tenantbaselines.detect.SeasonalSetting;
 import io.github.sanchaypahalwani.tenantbaselines.detect.ThresholdSet;
 import io.github.sanchaypahalwani.tenantbaselines.model.AlertEvent;
 import io.github.sanchaypahalwani.tenantbaselines.model.Event;
 import io.github.sanchaypahalwani.tenantbaselines.model.MinuteAgg;
 import java.time.Duration;
 import java.util.List;
+import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 
@@ -29,10 +33,22 @@ public final class Pipeline {
             .uid("minute-aggregator")
             .name("minute-aggregator");
 
+    SingleOutputStreamOperator<PopulationBaseline> population =
+        aggregates
+            .keyBy(a -> PopulationBaselines.SINGLE_KEY, Types.STRING)
+            .process(new PopulationBaselines())
+            .setParallelism(1)
+            .uid("population-baselines")
+            .name("population-baselines");
+
+    Scorer scorer =
+        new Scorer(
+            cfg.runId(), sets, List.of(SeasonalSetting.ofK(4)), false, Duration.ofDays(7));
     SingleOutputStreamOperator<AlertEvent> alerts =
         aggregates
             .keyBy(MinuteAgg::key)
-            .process(new Scorer(cfg.runId(), sets))
+            .connect(population.broadcast(Scorer.POPULATION))
+            .process(scorer)
             .uid("scorer")
             .name("scorer");
 

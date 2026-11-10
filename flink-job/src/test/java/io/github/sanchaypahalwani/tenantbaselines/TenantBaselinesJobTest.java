@@ -38,6 +38,7 @@ class TenantBaselinesJobTest {
                     .as("uid of %s", node.getOperatorName())
                     .isNotNull());
     assertThat(graph.getStreamNodes().stream().map(StreamNode::getTransformationUID))
-        .contains("events-source", "minute-aggregator", "scorer", "late-events");
+        .contains(
+            "events-source", "minute-aggregator", "population-baselines", "scorer", "late-events");
   }
 }

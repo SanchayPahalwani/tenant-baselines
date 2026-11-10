@@ -21,6 +21,17 @@ class MinuteSignalsTest {
   }
 
   @Test
+  void exactlyTwentyRequestsIsScored() {
+    var scored = MinuteSignals.of(agg(20, 1, 120.0), 100);
+    assertThat(scored.errorRate()).isEqualTo(0.05);
+    assertThat(scored.latencyP95()).isEqualTo(120.0);
+
+    var unscored = MinuteSignals.of(agg(19, 1, 120.0), 100);
+    assertThat(unscored.errorRate()).isNaN();
+    assertThat(unscored.latencyP95()).isNaN();
+  }
+
+  @Test
   void errorRateIsFraction() {
     var s = MinuteSignals.of(agg(100, 10, 120.0), Double.NaN);
     assertThat(s.errorRate()).isEqualTo(0.1);

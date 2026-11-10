@@ -2,12 +2,14 @@ package io.github.sanchaypahalwani.tenantbaselines.detect;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.github.sanchaypahalwani.tenantbaselines.baseline.PopulationBaseline;
 import io.github.sanchaypahalwani.tenantbaselines.model.AlertEvent;
 import io.github.sanchaypahalwani.tenantbaselines.model.MinuteAgg;
 import java.io.InputStream;
+import java.time.Duration;
 import java.util.List;
 import org.apache.flink.api.common.typeinfo.Types;
-import org.apache.flink.streaming.util.KeyedOneInputStreamOperatorTestHarness;
+import org.apache.flink.streaming.util.KeyedBroadcastOperatorTestHarness;
 import org.apache.flink.streaming.util.ProcessFunctionTestHarnesses;
 import org.junit.jupiter.api.Test;
 
@@ -15,18 +17,25 @@ class ScorerTest {
 
   private static final String KEY = "a|eu|u1";
 
-  private static KeyedOneInputStreamOperatorTestHarness<String, MinuteAgg, AlertEvent> harness()
-      throws Exception {
-    List<ThresholdSet> sets;
+  private static List<ThresholdSet> thresholds() throws Exception {
     try (InputStream in = ScorerTest.class.getResourceAsStream("/thresholds-demo.json")) {
-      sets = ThresholdsFile.load(in);
+      return ThresholdsFile.load(in);
     }
-    return ProcessFunctionTestHarnesses.forKeyedProcessFunction(
-        new Scorer("run", sets), MinuteAgg::key, Types.STRING);
+  }
+
+  private static Scorer scorer() throws Exception {
+    return new Scorer("run", thresholds(), List.of(), false, Duration.ofDays(7));
+  }
+
+  private static KeyedBroadcastOperatorTestHarness<
+          String, MinuteAgg, PopulationBaseline, AlertEvent>
+      harness() throws Exception {
+    return ProcessFunctionTestHarnesses.forKeyedBroadcastProcessFunction(
+        scorer(), MinuteAgg::key, Types.STRING, Scorer.POPULATION);
   }
 
   private static void feed(
-      KeyedOneInputStreamOperatorTestHarness<String, MinuteAgg, AlertEvent> h,
+      KeyedBroadcastOperatorTestHarness<String, MinuteAgg, PopulationBaseline, AlertEvent> h,
       int fromMinute,
       int toMinute,
       long count,
@@ -83,11 +92,7 @@ class ScorerTest {
 
   @Test
   void scorerSurvivesJavaSerialization() throws Exception {
-    List<ThresholdSet> sets;
-    try (InputStream in = ScorerTest.class.getResourceAsStream("/thresholds-demo.json")) {
-      sets = ThresholdsFile.load(in);
-    }
-    Scorer copy = org.apache.flink.util.InstantiationUtil.clone(new Scorer("run", sets));
+    Scorer copy = org.apache.flink.util.InstantiationUtil.clone(scorer());
     assertThat(copy).isNotNull();
   }
 }

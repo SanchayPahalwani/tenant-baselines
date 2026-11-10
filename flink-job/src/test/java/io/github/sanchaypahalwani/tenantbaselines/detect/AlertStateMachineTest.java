@@ -47,6 +47,14 @@ class AlertStateMachineTest {
   }
 
   @Test
+  void unscoredPausesCalmStreak() {
+    var m = new AlertStateMachine();
+    run(m, 0, BREACH, BREACH, BREACH);
+    assertThat(run(m, 3, CALM, CALM, UNSCORED, CALM, CALM, CALM))
+        .containsExactly(NONE, NONE, NONE, NONE, NONE, RESOLVE);
+  }
+
+  @Test
   void resolvesAfterFiveCalm() {
     var m = new AlertStateMachine();
     run(m, 0, BREACH, BREACH, BREACH);
