@@ -48,8 +48,8 @@ def test_demo_script_targets_are_detectable_all_week():
     w = build_world("demo", 1)
     gen = LiveGenerator(w, 1, [])
     t_start = 1_767_225_600_000  # a Thursday 00:00 UTC
-    for h in range(7 * 24):
-        t0 = t_start + h * 3_600_000
+    for q in range(7 * 24 * 4):
+        t0 = t_start + q * 15 * 60_000
         drop, spike = demo_script(w, t0)
         key = next(k for k in w.keys if k.key == drop.key)
         assert gen.key_rate_rpm(key, drop.start_ms) >= 7

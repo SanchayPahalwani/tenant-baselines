@@ -37,27 +37,21 @@ ci:
 up:
 	docker compose up -d --build && scripts/wait-ready.sh
 
+# The demo profile is included so the generator container goes too.
 down:
-	docker compose down
+	docker compose --profile demo down
 
 reset:
-	docker compose down -v
+	docker compose --profile demo down -v
 
 # Replaces the running job with one restored from the newest retained checkpoint, if any.
 submit:
 	docker compose exec -T jobmanager bash /opt/tb-scripts/submit-job.sh
 
-# Recreating the generator restarts its demo script, so the timings printed below hold
-# on a second run too.
-demo: jar up submit
-	docker compose --profile demo up -d --build --force-recreate --no-deps generator
-	@echo
-	@echo "Grafana http://localhost:3000/d/tenant-baselines"
-	@echo "Alertmanager http://localhost:9093"
-	@echo "Flink http://localhost:8081"
-	@echo
-	@echo "In about 3 minutes eu-central gets an error spike for 10 minutes." \
-		"Alerts appear in Alertmanager about 3 minutes after it starts."
+# Needs an empty stack (make reset): the demo timeline starts three weeks back and cannot
+# restart on data that is already there. scripts/demo.sh refuses if live.events has data.
+demo: jar up
+	scripts/demo.sh
 
 smoke: demo
 	scripts/smoke.sh

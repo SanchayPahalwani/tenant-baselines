@@ -248,10 +248,11 @@ def main() -> None:
             if catching_up:
                 done = (next_ms - history_start_ms) / max(1, start_ms - history_start_ms)
                 log.info(
-                    "history: reached %s UTC, %.0f%% done, %.0f events/s",
+                    "history: reached %s UTC, %.0f%% done, %.0f events/s, %d failed",
                     time.strftime("%Y-%m-%d %H:%M", time.gmtime(next_ms / 1000)),
                     100 * min(1.0, done),
                     sent / 10,
+                    stats.failed,
                 )
             else:
                 log.info(

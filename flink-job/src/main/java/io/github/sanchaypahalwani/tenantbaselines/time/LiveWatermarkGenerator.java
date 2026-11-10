@@ -8,9 +8,15 @@ import org.apache.flink.api.common.eventtime.WatermarkOutput;
 
 /**
  * Watermark generator for a live source. While the source is catching up on old data it follows
- * event time. Once event time is within the catch-up window of the wall clock (or an empty split
- * has waited that long) it latches, and from then on follows the wall clock, so minutes keep
- * closing during a total outage when no events arrive. It never emits a lower watermark.
+ * event time. Once event time is within the catch-up window of the wall clock it latches, and from
+ * then on follows the wall clock, so minutes keep closing during a total outage when no events
+ * arrive. It never emits a lower watermark.
+ *
+ * <p>An output that has seen no event by the end of the catch-up window is marked idle, so an
+ * empty split does not hold back the others. It never emits the wall clock: Flink also runs a
+ * generator for the source reader's main output, which never sees an event (the Kafka source
+ * emits through per-split outputs) and whose watermarks are not combined with the splits'. A
+ * wall-clock watermark from it would drop a backlog older than the wall clock as late.
  */
 public class LiveWatermarkGenerator implements WatermarkGenerator<Event> {
 
@@ -38,21 +44,16 @@ public class LiveWatermarkGenerator implements WatermarkGenerator<Event> {
     @Override
     public void onPeriodicEmit(WatermarkOutput output) {
         long now = clockMs.getAsLong();
-        if (!latched) {
-            if (maxTs != Long.MIN_VALUE) {
-                latched = maxTs >= now - catchUpMs;
-            } else {
-                latched = now - createdAt >= catchUpMs;
+        if (maxTs == Long.MIN_VALUE) {
+            if (now - createdAt >= catchUpMs) {
+                output.markIdle();
             }
-        }
-        long candidate;
-        if (latched) {
-            candidate = Math.max(maxTs, now) - boundMs - 1;
-        } else if (maxTs == Long.MIN_VALUE) {
             return;
-        } else {
-            candidate = maxTs - boundMs - 1;
         }
+        if (!latched) {
+            latched = maxTs >= now - catchUpMs;
+        }
+        long candidate = (latched ? Math.max(maxTs, now) : maxTs) - boundMs - 1;
         if (candidate > lastEmitted) {
             lastEmitted = candidate;
             output.emitWatermark(new Watermark(candidate));

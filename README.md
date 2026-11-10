@@ -2,7 +2,7 @@
 
 A small reference pipeline for anomaly alerting on multi-tenant service traffic, sized to run on one laptop. Request events go through Kafka into a Flink job, which builds per-minute aggregates for each tenant, region and unit, checks them against thresholds and writes alerts back to Kafka. ClickHouse and Grafana show the aggregates and the alert log, and Prometheus Alertmanager routes the alerts. The question the project is built to test is whether a baseline per key and hour of the week catches more incidents and pages less than fixed thresholds when traffic follows working hours.
 
-Work in progress: milestone 1 of 6. This milestone runs end to end with static thresholds only. There are no baselines and no eval results yet.
+Work in progress: milestone 2 of 6. A seasonal detector scores each key's minute against the median and spread of the same hour of the week over the key's last four weeks, falling back to the region's and then the global baseline for error rate and latency while a key is new; it pages through Alertmanager, and the static thresholds run beside it. There are no eval results yet.
 
 **Synthetic data only.** Every event comes from the generator in `py/`; none of it describes a real system.
 
@@ -16,16 +16,18 @@ The compose network uses the fixed subnet 10.231.0.0/24; change it in `docker-co
 ## Quickstart
 
 ```sh
-docker compose up -d   # start the stack
-make demo              # build and submit the job, start the generator, print the URLs
+make reset   # make demo needs an empty stack
+make demo    # build the job, start the stack and the generator, submit the job, wait for warm-up
 ```
 
-`make demo` prints the Grafana, Alertmanager and Flink URLs and what to watch for. `make smoke` runs the demo and checks it end to end (run `make reset` first), `make test` runs the unit tests, and `make ci` runs the GitHub Actions workflow's commands locally. `make down` stops the stack; `make reset` also deletes its data.
+The generator writes three weeks of synthetic history at full speed and then continues live, so `make demo` needs an empty stack: on one that already has events it refuses and asks for `make reset`. Warm-up, until the job has caught up with the wall clock, takes about 3.5 minutes (measured on an 8-CPU, 10 GB Docker VM). `make demo` then prints the Grafana, Alertmanager and Flink URLs, the times of the scripted tenant drop and regional error spike, and what to watch for.
+
+`make smoke` runs the demo and checks it end to end (run `make reset` first), `make test` runs the unit tests, and `make ci` runs the GitHub Actions workflow's commands locally. `make down` stops the stack; `make reset` also deletes its data.
 
 The ClickHouse user `tb` with password `tb-local` is a local demo credential, not a secret.
 
 ## Design
 
-The design and its reasons are in [docs/superpowers/specs/2026-11-09-tenant-baselines-design.md](docs/superpowers/specs/2026-11-09-tenant-baselines-design.md), and the milestone 1 plan is in [docs/superpowers/plans/2026-11-09-m1-static-end-to-end.md](docs/superpowers/plans/2026-11-09-m1-static-end-to-end.md).
+The design and its reasons are in [docs/superpowers/specs/2026-11-09-tenant-baselines-design.md](docs/superpowers/specs/2026-11-09-tenant-baselines-design.md), the milestone 1 plan is in [docs/superpowers/plans/2026-11-09-m1-static-end-to-end.md](docs/superpowers/plans/2026-11-09-m1-static-end-to-end.md), and the milestone 2 plan is in [docs/superpowers/plans/2026-11-10-m2-seasonal-baselines.md](docs/superpowers/plans/2026-11-10-m2-seasonal-baselines.md).
 
 Licensed under Apache-2.0.

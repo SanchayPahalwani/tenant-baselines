@@ -1,6 +1,7 @@
 package io.github.sanchaypahalwani.tenantbaselines.time;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.sanchaypahalwani.tenantbaselines.model.Event;
@@ -15,17 +16,23 @@ class LiveWatermarkGeneratorTest {
 
     static final class RecordingOutput implements WatermarkOutput {
         final List<Long> emitted = new ArrayList<>();
+        boolean idle = false;
 
         @Override
         public void emitWatermark(Watermark watermark) {
             emitted.add(watermark.getTimestamp());
+            idle = false;
         }
 
         @Override
-        public void markIdle() {}
+        public void markIdle() {
+            idle = true;
+        }
 
         @Override
-        public void markActive() {}
+        public void markActive() {
+            idle = false;
+        }
 
         long last() {
             return emitted.get(emitted.size() - 1);
@@ -63,16 +70,38 @@ class LiveWatermarkGeneratorTest {
     }
 
     @Test
-    void emptySplitLatchesAfterCatchUpWindow() {
+    void outputWithoutEventsGoesIdleAfterCatchUpWindow() {
         AtomicLong clock = new AtomicLong(NOW);
         LiveWatermarkGenerator g = new LiveWatermarkGenerator(clock::get, 20_000, 60_000);
         RecordingOutput out = new RecordingOutput();
         clock.addAndGet(59_000);
         g.onPeriodicEmit(out);
         assertTrue(out.emitted.isEmpty());
+        assertFalse(out.idle);
         clock.addAndGet(2_000);
         g.onPeriodicEmit(out);
-        assertEquals(NOW + 61_000 - 20_001, out.last());
+        assertTrue(out.idle);
+        clock.addAndGet(600_000);
+        g.onPeriodicEmit(out);
+        assertTrue(out.emitted.isEmpty(), "an output without events never emits the wall clock");
+    }
+
+    // Flink also runs a generator for the source reader's main output, which never sees an event
+    // (the Kafka source emits through per-split outputs) and whose watermarks are not combined
+    // with the splits'. A wall-clock watermark from it would drop a backlog older than the wall
+    // clock as late.
+    @Test
+    void backlogReadAfterCatchUpWindowFollowsEventTime() {
+        AtomicLong clock = new AtomicLong(NOW);
+        LiveWatermarkGenerator g = new LiveWatermarkGenerator(clock::get, 20_000, 60_000);
+        RecordingOutput out = new RecordingOutput();
+        clock.addAndGet(120_000);
+        g.onPeriodicEmit(out);
+        long weeksAgo = NOW - 21 * 86_400_000L;
+        g.onEvent(at(weeksAgo), weeksAgo, out);
+        g.onPeriodicEmit(out);
+        assertEquals(List.of(weeksAgo - 20_001), out.emitted);
+        assertFalse(out.idle);
     }
 
     @Test
