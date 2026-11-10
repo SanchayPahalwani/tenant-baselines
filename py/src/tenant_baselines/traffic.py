@@ -46,9 +46,14 @@ def rate_rpm(tenant: Tenant, t_ms: int) -> float:
     return tenant.peak_rpm * load(tenant, t_ms)
 
 
-def error_prob(load: float) -> float:
-    return 0.003 + 0.002 * load
+def key_rate_rpm(tenant: Tenant, n_keys: int, t_ms: int) -> float:
+    """Base rate of one key: its tenant's rate split evenly over the tenant's keys."""
+    return tenant.peak_rpm * load(tenant, t_ms) / n_keys
 
 
-def latency_median_ms(base: float, load: float) -> float:
-    return base * (1 + 0.6 * load**2)
+def error_prob(load_frac: float) -> float:
+    return 0.003 + 0.002 * load_frac
+
+
+def latency_median_ms(base: float, load_frac: float) -> float:
+    return base * (1 + 0.6 * load_frac**2)

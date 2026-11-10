@@ -18,9 +18,9 @@ def test_region_incident_window_and_scope():
 def test_combination_and_key_scope():
     k = Key("t01", "eu-central", "s1")
     incs = [
-        Incident("volume_drop", 0, 10, 0.5, key=k.key),
+        Incident("volume_mult", 0, 10, 0.5, key=k.key),
         Incident("latency_spike", 0, 10, 3.0, region="eu-central"),
-        Incident("volume_drop", 0, 10, 0.5, key="other|x|y"),
+        Incident("volume_mult", 0, 10, 0.5, key="other|x|y"),
     ]
     e = effects(incs, k, 5)
     assert e.volume_mult == pytest.approx(0.5)
@@ -35,3 +35,17 @@ def test_demo_script():
     assert inc.start_ms == 1_000_000 + 180_000
     assert inc.end_ms == 1_000_000 + 780_000
     assert inc.magnitude == pytest.approx(0.20)
+
+
+def test_volume_mult_scales_volume():
+    k = Key("t01", "eu-central", "s1")
+    inc = Incident("volume_mult", 0, 60_000, 0.3, key=k.key)
+    assert effects([inc], k, 30_000).volume_mult == pytest.approx(0.3)
+    assert effects([inc], k, 60_000).volume_mult == 1.0
+    both = [Incident("volume_mult", 0, 10, 0.5), Incident("volume_mult", 0, 10, 0.5)]
+    assert effects(both, k, 5).volume_mult == pytest.approx(0.25)
+
+
+def test_negative_volume_mult_is_rejected():
+    with pytest.raises(ValueError):
+        Incident("volume_mult", 0, 1, -0.1)

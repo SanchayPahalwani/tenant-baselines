@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from tenant_baselines.traffic import error_prob, latency_median_ms, rate_rpm, shape
+from tenant_baselines.traffic import error_prob, key_rate_rpm, latency_median_ms, rate_rpm, shape
 from tenant_baselines.world import Tenant
 
 
@@ -29,3 +29,9 @@ def test_error_and_latency():
     assert error_prob(1) == pytest.approx(0.005)
     assert latency_median_ms(50, 0) == 50
     assert latency_median_ms(50, 1) == pytest.approx(80)
+
+
+def test_key_rate_splits_tenant_rate():
+    t = Tenant("tx", "us-east", 0, 120.0)
+    wed_noon = int(datetime(2026, 11, 11, 12, tzinfo=UTC).timestamp() * 1000)
+    assert key_rate_rpm(t, 3, wed_noon) == 40.0

@@ -11,17 +11,22 @@ from tenant_baselines.world import Key, World
 class Incident:
     """An incident active on [start_ms, end_ms).
 
-    magnitude: error_spike adds it to the error probability; volume_drop removes
-    that fraction of traffic; latency_spike multiplies latency by it. With neither
-    region nor key set the incident applies to every key.
+    magnitude: error_spike adds it to the error probability; volume_mult is the
+    factor traffic is multiplied by (0.3 leaves 30%, 3.0 is a surge); latency_spike
+    multiplies latency by it. With neither region nor key set the incident applies
+    to every key.
     """
 
-    kind: Literal["error_spike", "volume_drop", "latency_spike"]
+    kind: Literal["error_spike", "volume_mult", "latency_spike"]
     start_ms: int
     end_ms: int
     magnitude: float
     region: str | None = None
     key: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.kind == "volume_mult" and self.magnitude < 0:
+            raise ValueError(f"volume_mult magnitude must not be negative: {self.magnitude}")
 
 
 @dataclass(frozen=True)
@@ -44,8 +49,8 @@ def effects(incidents: Iterable[Incident], key: Key, t_ms: int) -> Effects:
             continue
         if inc.kind == "error_spike":
             error += inc.magnitude
-        elif inc.kind == "volume_drop":
-            volume *= 1.0 - inc.magnitude
+        elif inc.kind == "volume_mult":
+            volume *= inc.magnitude
         else:
             latency *= inc.magnitude
     return Effects(volume, error, latency)

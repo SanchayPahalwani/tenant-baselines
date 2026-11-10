@@ -8,7 +8,13 @@ import numpy as np
 
 from tenant_baselines.events import encode
 from tenant_baselines.incidents import Incident, demo_script, effects
-from tenant_baselines.traffic import LATENCY_SIGMA, error_prob, latency_median_ms, load
+from tenant_baselines.traffic import (
+    LATENCY_SIGMA,
+    error_prob,
+    key_rate_rpm,
+    latency_median_ms,
+    load,
+)
 from tenant_baselines.world import Key, World, build_world
 
 log = logging.getLogger("gen_live")
@@ -33,7 +39,7 @@ class LiveGenerator:
         """Base rate of a key: its tenant's rate split evenly over the tenant's keys."""
         for k, tenant, _, n_keys in self._rows:
             if k == key:
-                return tenant.peak_rpm * load(tenant, t_ms) / n_keys
+                return key_rate_rpm(tenant, n_keys, t_ms)
         raise KeyError(key)
 
     def tick(self, second_ms: int) -> list[tuple[str, bytes]]:
@@ -42,7 +48,7 @@ class LiveGenerator:
         for key, tenant, base_latency, n_keys in self._rows:
             fx = effects(self._incidents, key, second_ms)
             lo = load(tenant, second_ms)
-            rate = tenant.peak_rpm * lo / n_keys / 60.0 * fx.volume_mult
+            rate = key_rate_rpm(tenant, n_keys, second_ms) / 60.0 * fx.volume_mult
             n = int(self._rng.poisson(rate))
             if n == 0:
                 continue
