@@ -16,12 +16,18 @@ public class VolumeRing {
   public long lastMinuteMs = Long.MIN_VALUE;
   public long[] counts = new long[WINDOW];
   public int filled;
-  public double[] medians = new double[WINDOW];
-  public double[] scaledMads = new double[WINDOW];
+  public double[] medians = nans();
+  public double[] scaledMads = nans();
   public long[] before = new long[HISTORY];
   public int beforeFilled;
 
   public VolumeRing() {}
+
+  private static double[] nans() {
+    double[] a = new double[WINDOW];
+    java.util.Arrays.fill(a, Double.NaN);
+    return a;
+  }
 
   /** Returns the 5-minute sum, or NaN until five consecutive minutes have been seen. */
   public double push(long minuteMs, long count) {
@@ -34,10 +40,10 @@ public class VolumeRing {
    */
   public double push(long minuteMs, long count, double median, double scaledMad) {
     if (medians == null) {
-      medians = new double[WINDOW];
+      medians = nans();
     }
     if (scaledMads == null) {
-      scaledMads = new double[WINDOW];
+      scaledMads = nans();
     }
     if (before == null) {
       before = new long[HISTORY];

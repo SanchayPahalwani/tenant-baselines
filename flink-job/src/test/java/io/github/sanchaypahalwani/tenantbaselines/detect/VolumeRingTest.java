@@ -97,9 +97,31 @@ class VolumeRingTest {
     r.scaledMads = null;
     r.before = null;
     assertThat(r.push(240_000, 5)).isEqualTo(15);
+    assertThat(r.expected()).isNaN();
+    assertThat(r.trailingExpected()).isNaN();
     assertThat(r.push(300_000, 6, 2, 1)).isEqualTo(20);
+    assertThat(r.expected()).isNaN();
     assertThat(r.medians).isNotNull();
     assertThat(r.scaledMads).isNotNull();
     assertThat(r.before).isNotNull();
+  }
+
+  @Test
+  void restoredFullRingHasNoExpectationUntilFiveNewMinutes() {
+    var r = new VolumeRing();
+    for (int i = 0; i < 5; i++) {
+      r.push(i * 60_000L, 1);
+    }
+    r.medians = null;
+    r.scaledMads = null;
+    r.before = null;
+    for (int i = 5; i < 9; i++) {
+      r.push(i * 60_000L, 1, 10, 2);
+      assertThat(r.expected()).isNaN();
+      assertThat(r.spread()).isNaN();
+    }
+    r.push(9 * 60_000L, 1, 10, 2);
+    assertThat(r.expected()).isEqualTo(50);
+    assertThat(r.spread()).isCloseTo(Math.max(Math.sqrt(5) * 2, Math.sqrt(50)), within(1e-9));
   }
 }
