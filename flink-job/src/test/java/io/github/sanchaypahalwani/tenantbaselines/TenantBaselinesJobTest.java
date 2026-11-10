@@ -20,15 +20,23 @@ class TenantBaselinesJobTest {
     }
   }
 
+  private static StreamGraph graph(String... args) throws Exception {
+    StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+    TenantBaselinesJob.addTo(env, JobConfig.parse(args), thresholds());
+    return env.getStreamGraph();
+  }
+
+  private static List<String> uids(StreamGraph graph) {
+    return graph.getStreamNodes().stream().map(StreamNode::getTransformationUID).toList();
+  }
+
   /**
    * Generated operator ids depend on the operator's place in the graph, so without a uid an
    * operator added upstream in a later milestone would stop older checkpoints from restoring.
    */
   @Test
   void everyOperatorOfTheLiveJobHasAUid() throws Exception {
-    StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-    TenantBaselinesJob.addTo(env, JobConfig.parse(new String[] {"--mode", "live"}), thresholds());
-    StreamGraph graph = env.getStreamGraph();
+    StreamGraph graph = graph("--mode", "live");
 
     assertThat(graph.getStreamNodes())
         .isNotEmpty()
@@ -37,8 +45,20 @@ class TenantBaselinesJobTest {
                 assertThat(node.getTransformationUID())
                     .as("uid of %s", node.getOperatorName())
                     .isNotNull());
-    assertThat(graph.getStreamNodes().stream().map(StreamNode::getTransformationUID))
+    assertThat(uids(graph))
         .contains(
-            "events-source", "minute-aggregator", "population-baselines", "scorer", "late-events");
+            "events-source",
+            "minute-aggregator",
+            "population-baselines",
+            "scorer",
+            "scores-sink",
+            "late-events");
+  }
+
+  @Test
+  void scoresAreSunkOnlyWhenEmitted() throws Exception {
+    assertThat(uids(graph("--ns", "eval", "--mode", "replay"))).doesNotContain("scores-sink");
+    assertThat(uids(graph("--ns", "eval", "--mode", "replay", "--scores", "true")))
+        .contains("scores-sink");
   }
 }

@@ -1,7 +1,7 @@
 {
   "uid": "tenant-baselines",
   "title": "Tenant baselines",
-  "description": "Synthetic demo data. One key's signals and the live alert log.",
+  "description": "Synthetic demo data. One key's signals against their seasonal baseline, and the live alert log.",
   "tags": [
     "tenant-baselines"
   ],
@@ -10,7 +10,7 @@
   "timezone": "utc",
   "refresh": "30s",
   "time": {
-    "from": "now-1h",
+    "from": "now-3h",
     "to": "now"
   },
   "schemaVersion": 41,
@@ -33,6 +33,44 @@
         "includeAll": false,
         "current": {},
         "options": []
+      },
+      {
+        "name": "signal",
+        "label": "signal",
+        "type": "custom",
+        "query": "error_rate,latency_p95,volume_5m",
+        "multi": true,
+        "includeAll": false,
+        "hide": 2,
+        "current": {
+          "text": [
+            "error_rate",
+            "latency_p95",
+            "volume_5m"
+          ],
+          "value": [
+            "error_rate",
+            "latency_p95",
+            "volume_5m"
+          ]
+        },
+        "options": [
+          {
+            "text": "error_rate",
+            "value": "error_rate",
+            "selected": true
+          },
+          {
+            "text": "latency_p95",
+            "value": "latency_p95",
+            "selected": true
+          },
+          {
+            "text": "volume_5m",
+            "value": "volume_5m",
+            "selected": true
+          }
+        ]
       }
     ]
   },
@@ -40,10 +78,12 @@
     {
       "id": 1,
       "type": "timeseries",
-      "title": "$key: error rate, p95 latency and 5-minute volume",
-      "description": "Red dashed lines are the demo static fire levels (infra/flink/thresholds-demo.json). Volume fires at or below its line.",
+      "title": "$key: $signal with baseline band",
+      "description": "The seasonal baseline of the key's hour of the week (or its region's or the global one while the key is cold). The dashed line is the median, for volume the expected 5-minute sum. The band is 4 spreads either side of it, the k4 fire level: error rate and latency fire above it, volume below it.",
+      "repeat": "signal",
+      "repeatDirection": "v",
       "gridPos": {
-        "h": 12,
+        "h": 8,
         "w": 24,
         "x": 0,
         "y": 0
@@ -62,7 +102,7 @@
           "editorType": "sql",
           "queryType": "timeseries",
           "format": 0,
-          "rawSql": "SELECT time, error_rate, latency_p95, volume_5m\nFROM (\n    SELECT\n        minute AS time,\n        errors / nullIf(count, 0) AS error_rate,\n        p95_latency_ms AS latency_p95,\n        sum(count) OVER (ORDER BY toUnixTimestamp(minute) RANGE BETWEEN 240 PRECEDING AND CURRENT ROW) AS volume_5m\n    FROM tb.aggregates FINAL\n    WHERE ns = 'live' AND key = '${key}'\n        AND minute >= $__fromTime - INTERVAL 4 MINUTE AND minute <= $__toTime\n)\nWHERE time >= $__fromTime\nORDER BY time"
+          "rawSql": "SELECT minute AS time, value, median, median + 4 * spread AS upper,\n       greatest(median - 4 * spread, 0) AS lower\nFROM tb.scores FINAL\nWHERE ns = 'live' AND key = '${key}' AND signal = '${signal}'\n  AND minute >= $__fromTime AND minute <= $__toTime\nORDER BY time"
         }
       ],
       "fieldConfig": {
@@ -72,149 +112,57 @@
             "lineWidth": 1,
             "showPoints": "never",
             "spanNulls": false,
-            "thresholdsStyle": {
-              "mode": "dashed"
-            }
+            "axisSoftMin": 0
           }
         },
         "overrides": [
           {
             "matcher": {
               "id": "byName",
-              "options": "error_rate"
+              "options": "median"
             },
             "properties": [
               {
-                "id": "displayName",
-                "value": "error rate"
-              },
-              {
-                "id": "unit",
-                "value": "percentunit"
-              },
-              {
-                "id": "custom.axisPlacement",
-                "value": "left"
-              },
-              {
-                "id": "custom.axisLabel",
-                "value": "error rate"
-              },
-              {
-                "id": "custom.axisSoftMin",
-                "value": 0
-              },
-              {
-                "id": "thresholds",
+                "id": "custom.lineStyle",
                 "value": {
-                  "mode": "absolute",
-                  "steps": [
-                    {
-                      "color": "transparent",
-                      "value": null
-                    },
-                    {
-                      "color": "red",
-                      "value": 0.05
-                    }
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
                   ]
                 }
-              },
-              {
-                "id": "custom.axisSoftMax",
-                "value": 0.1
               }
             ]
           },
           {
             "matcher": {
               "id": "byName",
-              "options": "latency_p95"
+              "options": "upper"
             },
             "properties": [
               {
-                "id": "displayName",
-                "value": "p95 latency"
-              },
-              {
-                "id": "unit",
-                "value": "ms"
-              },
-              {
-                "id": "custom.axisPlacement",
-                "value": "right"
-              },
-              {
-                "id": "custom.axisLabel",
-                "value": "p95 latency"
-              },
-              {
-                "id": "custom.axisSoftMin",
+                "id": "custom.lineWidth",
                 "value": 0
               },
               {
-                "id": "thresholds",
-                "value": {
-                  "mode": "absolute",
-                  "steps": [
-                    {
-                      "color": "transparent",
-                      "value": null
-                    },
-                    {
-                      "color": "red",
-                      "value": 400
-                    }
-                  ]
-                }
+                "id": "custom.fillBelowTo",
+                "value": "lower"
               },
               {
-                "id": "custom.axisSoftMax",
-                "value": 500
+                "id": "custom.fillOpacity",
+                "value": 15
               }
             ]
           },
           {
             "matcher": {
               "id": "byName",
-              "options": "volume_5m"
+              "options": "lower"
             },
             "properties": [
               {
-                "id": "displayName",
-                "value": "5-minute volume"
-              },
-              {
-                "id": "unit",
-                "value": "short"
-              },
-              {
-                "id": "custom.axisPlacement",
-                "value": "right"
-              },
-              {
-                "id": "custom.axisLabel",
-                "value": "5-minute volume"
-              },
-              {
-                "id": "custom.axisSoftMin",
+                "id": "custom.lineWidth",
                 "value": 0
-              },
-              {
-                "id": "thresholds",
-                "value": {
-                  "mode": "absolute",
-                  "steps": [
-                    {
-                      "color": "transparent",
-                      "value": null
-                    },
-                    {
-                      "color": "red",
-                      "value": 0
-                    }
-                  ]
-                }
               }
             ]
           }
@@ -240,7 +188,7 @@
         "h": 12,
         "w": 24,
         "x": 0,
-        "y": 12
+        "y": 8
       },
       "datasource": {
         "type": "grafana-clickhouse-datasource",

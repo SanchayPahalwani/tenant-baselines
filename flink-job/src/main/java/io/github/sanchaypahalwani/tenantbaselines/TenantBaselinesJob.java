@@ -26,7 +26,7 @@ import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.sink.v2.DiscardingSink;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 
-/** Entry point: Kafka events in, minute aggregates and alerts out. */
+/** Entry point: Kafka events in; minute aggregates, alerts and, if enabled, scores out. */
 public final class TenantBaselinesJob {
 
   private TenantBaselinesJob() {}
@@ -64,6 +64,11 @@ public final class TenantBaselinesJob {
     out.alerts().sinkTo(sink(cfg.bootstrap(), cfg.alertsTopic(), JsonSerialization.alertKey()))
         .uid("alerts-sink")
         .name("alerts-sink");
+    if (cfg.emitScores()) {
+      out.scores().sinkTo(sink(cfg.bootstrap(), cfg.scoresTopic(), JsonSerialization.scoreKey()))
+          .uid("scores-sink")
+          .name("scores-sink");
+    }
     out.late()
         .map(new CountLate())
         .uid("late-events")

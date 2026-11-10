@@ -172,9 +172,9 @@ services:
       - --alertmanager
       - http://alertmanager:9093
       - --live-detector
-      - global_static
+      - seasonal
       - --live-setting
-      - default
+      - k4
     depends_on:
       kafka-init:
         condition: service_completed_successfully

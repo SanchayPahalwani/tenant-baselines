@@ -63,6 +63,16 @@ def test_resolve_sets_endsAt_and_drops_after_300s():
     assert s.due(1100 + 301) == []
 
 
+def test_resolve_is_due_immediately():
+    s = new_state()
+    s.apply(event(), now_s=1000)
+    s.mark_sent(["a1"], 1000)
+    s.apply(event(state="resolved", event_time_ms=600_000), now_s=1010)
+    out = s.due(1010)
+    assert len(out) == 1
+    assert out[0]["endsAt"] == "1970-01-01T00:10:00Z"
+
+
 def test_new_firing_alert_ends_older_firing_alert_with_same_labels():
     # An alert left firing by a job that was replaced without its state never gets a
     # resolved event. Alertmanager knows both by the same labels.
@@ -105,6 +115,15 @@ def test_stale_backfill_alert_is_skipped():
     s = new_state()
     s.apply(event(emitted_at_ms=180_000 + 3 * 3600 * 1000), now_s=1000)
     assert s.due(1000) == []
+
+
+def test_stale_boundary_is_600s():
+    kept = new_state()
+    kept.apply(event(event_time_ms=180_000, emitted_at_ms=780_000), now_s=1000)
+    assert len(kept.due(1000)) == 1
+    skipped = new_state()
+    skipped.apply(event(event_time_ms=180_000, emitted_at_ms=780_001), now_s=1000)
+    assert skipped.due(1000) == []
 
 
 def test_malformed_firing_event_is_rejected_by_apply(caplog):

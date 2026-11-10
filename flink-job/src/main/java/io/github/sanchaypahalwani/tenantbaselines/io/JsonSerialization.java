@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import io.github.sanchaypahalwani.tenantbaselines.model.AlertEvent;
 import io.github.sanchaypahalwani.tenantbaselines.model.MinuteAgg;
+import io.github.sanchaypahalwani.tenantbaselines.model.ScoreEvent;
 import java.nio.charset.StandardCharsets;
 import org.apache.flink.api.common.serialization.SerializationSchema;
 
@@ -19,6 +20,10 @@ public final class JsonSerialization {
 
   public static SerializationSchema<MinuteAgg> aggKey() {
     return agg -> agg.key().getBytes(StandardCharsets.UTF_8);
+  }
+
+  public static SerializationSchema<ScoreEvent> scoreKey() {
+    return score -> score.key().getBytes(StandardCharsets.UTF_8);
   }
 
   public static SerializationSchema<AlertEvent> alertKey() {

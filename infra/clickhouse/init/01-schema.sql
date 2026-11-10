@@ -28,6 +28,33 @@ SETTINGS
     kafka_num_consumers = 1,
     kafka_handle_error_mode = 'stream';
 
+-- Each signal of each key and minute against its seasonal baseline (ScoreEvent JSON).
+-- The job writes these only with --scores true, the default in the live namespace. A
+-- number that does not exist is null.
+CREATE TABLE IF NOT EXISTS tb.kafka_scores
+(
+    run_id String,
+    key String,
+    tenant String,
+    region String,
+    unit String,
+    signal String,
+    minute_ms Int64,
+    value Nullable(Float64),
+    median Nullable(Float64),
+    spread Nullable(Float64),
+    score Nullable(Float64),
+    source Nullable(String)
+)
+ENGINE = Kafka
+SETTINGS
+    kafka_broker_list = 'kafka:19092',
+    kafka_topic_list = 'live.scores,eval.scores,bench.scores',
+    kafka_group_name = 'ch-scores',
+    kafka_format = 'JSONEachRow',
+    kafka_num_consumers = 1,
+    kafka_handle_error_mode = 'stream';
+
 -- Alert transitions (AlertEvent JSON).
 CREATE TABLE IF NOT EXISTS tb.kafka_alerts
 (
@@ -74,6 +101,25 @@ CREATE TABLE IF NOT EXISTS tb.aggregates
 ENGINE = ReplacingMergeTree
 ORDER BY (ns, run_id, key, minute);
 
+CREATE TABLE IF NOT EXISTS tb.scores
+(
+    ns LowCardinality(String),
+    run_id LowCardinality(String),
+    key LowCardinality(String),
+    tenant LowCardinality(String),
+    region LowCardinality(String),
+    unit LowCardinality(String),
+    signal LowCardinality(String),
+    minute DateTime64(3, 'UTC'),
+    value Nullable(Float64),
+    median Nullable(Float64),
+    spread Nullable(Float64),
+    score Nullable(Float64),
+    source LowCardinality(Nullable(String))
+)
+ENGINE = ReplacingMergeTree
+ORDER BY (ns, run_id, key, signal, minute);
+
 CREATE TABLE IF NOT EXISTS tb.alert_log
 (
     ns LowCardinality(String),
@@ -98,7 +144,7 @@ CREATE TABLE IF NOT EXISTS tb.alert_log
 ENGINE = ReplacingMergeTree
 ORDER BY (ns, run_id, alert_id, state);
 
--- Messages that failed to parse, from either topic family.
+-- Messages that failed to parse, from any of the topic families.
 CREATE TABLE IF NOT EXISTS tb.ingest_errors
 (
     at DateTime64(3) DEFAULT now64(3),
@@ -130,6 +176,32 @@ SELECT
     _error AS error,
     _raw_message AS raw
 FROM tb.kafka_aggregates
+WHERE length(_error) > 0;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS tb.mv_scores TO tb.scores AS
+SELECT
+    splitByChar('.', _topic)[1] AS ns,
+    run_id,
+    key,
+    tenant,
+    region,
+    unit,
+    signal,
+    fromUnixTimestamp64Milli(minute_ms, 'UTC') AS minute,
+    value,
+    median,
+    spread,
+    score,
+    source
+FROM tb.kafka_scores
+WHERE length(_error) = 0;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS tb.mv_scores_errors TO tb.ingest_errors AS
+SELECT
+    _topic AS topic,
+    _error AS error,
+    _raw_message AS raw
+FROM tb.kafka_scores
 WHERE length(_error) > 0;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS tb.mv_alerts TO tb.alert_log AS
