@@ -5,9 +5,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import io.github.sanchaypahalwani.tenantbaselines.baseline.PopulationBaseline;
 import io.github.sanchaypahalwani.tenantbaselines.model.AlertEvent;
 import io.github.sanchaypahalwani.tenantbaselines.model.MinuteAgg;
+import io.github.sanchaypahalwani.tenantbaselines.model.Signal;
 import java.io.InputStream;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.streaming.util.KeyedBroadcastOperatorTestHarness;
 import org.apache.flink.streaming.util.ProcessFunctionTestHarnesses;
@@ -24,14 +26,24 @@ class ScorerTest {
   }
 
   private static Scorer scorer() throws Exception {
-    return new Scorer("run", thresholds(), List.of(), false, Duration.ofDays(7));
+    return scorer(thresholds());
+  }
+
+  private static Scorer scorer(List<ThresholdSet> sets) {
+    return new Scorer("run", sets, List.of(), false, Duration.ofDays(7));
+  }
+
+  private static KeyedBroadcastOperatorTestHarness<
+          String, MinuteAgg, PopulationBaseline, AlertEvent>
+      harness(List<ThresholdSet> sets) throws Exception {
+    return ProcessFunctionTestHarnesses.forKeyedBroadcastProcessFunction(
+        scorer(sets), MinuteAgg::key, Types.STRING, Scorer.POPULATION);
   }
 
   private static KeyedBroadcastOperatorTestHarness<
           String, MinuteAgg, PopulationBaseline, AlertEvent>
       harness() throws Exception {
-    return ProcessFunctionTestHarnesses.forKeyedBroadcastProcessFunction(
-        scorer(), MinuteAgg::key, Types.STRING, Scorer.POPULATION);
+    return harness(thresholds());
   }
 
   private static void feed(
@@ -87,6 +99,34 @@ class ScorerTest {
       assertThat(e.state()).isEqualTo("firing");
       assertThat(e.startsAtMs()).isEqualTo(540_000);
       assertThat(e.eventTimeMs()).isEqualTo(720_000);
+    }
+  }
+
+  @Test
+  void zeroTrafficFiresWithoutAVolumeLevel() throws Exception {
+    ThresholdSet noVolume =
+        new ThresholdSet(
+            "global_static",
+            "default",
+            0,
+            Long.MAX_VALUE,
+            Map.of(
+                Signal.ERROR_RATE, new Level(0.05, 0.025), Signal.LATENCY_P95, new Level(400, 250)),
+            Map.of());
+    try (var h = harness(List.of(noVolume))) {
+      feed(h, 0, 39, 4, 0);
+      feed(h, 40, 47, 0, 0);
+
+      List<AlertEvent> out = h.extractOutputValues();
+      assertThat(out).hasSize(1);
+      AlertEvent e = out.get(0);
+      assertThat(e.detector()).isEqualTo("global_static");
+      assertThat(e.signal()).isEqualTo("volume_5m");
+      assertThat(e.state()).isEqualTo("firing");
+      assertThat(e.startsAtMs()).isEqualTo(44 * 60_000L);
+      assertThat(e.reason()).isEqualTo("zero_traffic");
+      assertThat(e.value()).isZero();
+      assertThat(e.reference()).isEqualTo(0.0);
     }
   }
 

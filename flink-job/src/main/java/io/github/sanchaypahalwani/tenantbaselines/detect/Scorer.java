@@ -7,14 +7,17 @@ import io.github.sanchaypahalwani.tenantbaselines.baseline.HourOfWeek;
 import io.github.sanchaypahalwani.tenantbaselines.baseline.PopulationBaseline;
 import io.github.sanchaypahalwani.tenantbaselines.baseline.Scores;
 import io.github.sanchaypahalwani.tenantbaselines.model.AlertEvent;
+import io.github.sanchaypahalwani.tenantbaselines.model.Keys;
 import io.github.sanchaypahalwani.tenantbaselines.model.MinuteAgg;
 import io.github.sanchaypahalwani.tenantbaselines.model.ScoreEvent;
 import io.github.sanchaypahalwani.tenantbaselines.model.Signal;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import org.apache.flink.api.common.functions.OpenContext;
 import org.apache.flink.api.common.state.MapState;
 import org.apache.flink.api.common.state.MapStateDescriptor;
+import org.apache.flink.api.common.state.ReadOnlyBroadcastState;
 import org.apache.flink.api.common.state.ValueState;
 import org.apache.flink.api.common.state.ValueStateDescriptor;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
@@ -28,7 +31,13 @@ import org.apache.flink.util.OutputTag;
  * firing. The seasonal detector scores the minute against the key's hour-of-week baseline, once
  * per {@link SeasonalSetting}; each {@link ThresholdSet} judges it against fixed levels. Every
  * minute then goes into the key's baseline. Expects one {@link MinuteAgg} per key per minute, in
- * order. The broadcast input carries region and global baselines, which are not used yet.
+ * order.
+ *
+ * <p>While a key is cold for error rate or latency, those signals are scored against its region's
+ * baseline, else the global one, from the broadcast input. Volume never falls back.
+ *
+ * <p>A key without a request for the expiry period of event time loses its state; each of its
+ * firing alerts first gets a resolved event with reason "expired".
  */
 public class Scorer
     extends KeyedBroadcastProcessFunction<String, MinuteAgg, PopulationBaseline, AlertEvent> {
@@ -41,9 +50,19 @@ public class Scorer
 
   public static final String SEASONAL = "seasonal";
 
+  /**
+   * How long after the expiry period a key's state goes. MinuteAggregator emits the key's last zero
+   * minute up to the expiry period after its last event, so this keeps any of those minutes from
+   * starting the key over.
+   */
+  public static final long EXPIRY_SLACK_MS = 120_000L;
+
   private static final String SCOPE = "tenant";
   private static final String OWN = "own";
+  private static final String REGION = "region";
+  private static final String GLOBAL = "global";
   private static final String ZERO_TRAFFIC = "zero_traffic";
+  private static final String EXPIRED = "expired";
   private static final Signal[] SIGNALS = Signal.values();
 
   private final String runId;
@@ -51,13 +70,19 @@ public class Scorer
   private final List<SeasonalSetting> seasonal;
   private final boolean emitScores;
 
-  /** Event time without a request after which a key's state goes; not applied yet. */
+  /** Event time without a request after which a key's state goes. */
   private final Duration expiry;
 
   private transient ValueState<VolumeRing> ring;
   private transient MapState<String, AlertStateMachine> machines;
   private transient MapState<Integer, BucketHistory> history;
   private transient ValueState<HourCache> hourCache;
+
+  /** The latest minute with requests, or the first minute seen. */
+  private transient ValueState<Long> lastActive;
+
+  /** The key's one expiry timer. */
+  private transient ValueState<Long> expiryTimer;
 
   public Scorer(
       String runId,
@@ -73,8 +98,8 @@ public class Scorer
   }
 
   /**
-   * One signal of the minute against the key's baseline. median, spread and score are NaN, and
-   * source is null, when the key has no baseline for the signal.
+   * One signal of the minute against the key's own or a fallback baseline. median, spread and
+   * score are NaN, and source is null, when there is none for the signal.
    */
   private record Reading(
       Signal signal, double value, double median, double spread, double score, String source) {
@@ -83,6 +108,12 @@ public class Scorer
       return source != null;
     }
   }
+
+  /** A baseline and whose it is: {@link #OWN}, {@link #REGION} or {@link #GLOBAL}. */
+  private record Sourced(Baseline baseline, String source) {}
+
+  /** The region's and the global fallback baselines for the minute; either may be null. */
+  private record Fallbacks(PopulationBaseline region, PopulationBaseline global) {}
 
   /** What every detector sees of the minute. */
   private record Minute(MinuteAgg agg, MinuteSignals signals, double zeroExpected) {
@@ -112,6 +143,10 @@ public class Scorer
         getRuntimeContext()
             .getState(
                 new ValueStateDescriptor<>("hour-cache", TypeInformation.of(HourCache.class)));
+    lastActive =
+        getRuntimeContext().getState(new ValueStateDescriptor<>("last-active-ms", Types.LONG));
+    expiryTimer =
+        getRuntimeContext().getState(new ValueStateDescriptor<>("expiry-timer-ms", Types.LONG));
   }
 
   @Override
@@ -141,9 +176,16 @@ public class Scorer
     ring.update(r);
     MinuteSignals signals = MinuteSignals.of(a, volume);
 
+    ReadOnlyBroadcastState<String, PopulationBaseline> population =
+        ctx.getBroadcastState(POPULATION);
+    long week = HourOfWeek.week(ms);
+    Fallbacks fallbacks =
+        new Fallbacks(
+            lookup(population, a.region(), bucket, week),
+            lookup(population, PopulationBaseline.GLOBAL, bucket, week));
     Reading[] readings = new Reading[SIGNALS.length];
     for (Signal s : SIGNALS) {
-      readings[s.ordinal()] = read(s, signals, cache, r, a.count());
+      readings[s.ordinal()] = read(s, signals, cache, fallbacks, r, a.count());
     }
     double expected = r.expected();
     Minute minute =
@@ -172,7 +214,6 @@ public class Scorer
     if (h == null) {
       h = new BucketHistory();
     }
-    long week = HourOfWeek.week(ms);
     int minuteOfHour = HourOfWeek.minuteOfHour(ms);
     if (!Double.isNaN(signals.errorRate())) {
       h.put(week, minuteOfHour, Signal.ERROR_RATE, signals.errorRate());
@@ -188,44 +229,168 @@ public class Scorer
         ctx.output(SCORES, scoreEvent(a, reading));
       }
     }
+
+    // Zero-count minutes do not keep a key alive, and do not move its timer.
+    if (lastActive.value() == null || a.count() > 0) {
+      lastActive.update(ms);
+    }
+    if (expiryTimer.value() == null) {
+      long t = expiryDue();
+      ctx.timerService().registerEventTimeTimer(t);
+      expiryTimer.update(t);
+    }
   }
 
+  /**
+   * Moves the timer on to the current due time, or expires the key. Nothing happens at the final
+   * watermark: the end of a bounded replay is not a period of silence.
+   */
   @Override
-  public void processBroadcastElement(
-      PopulationBaseline b, Context ctx, Collector<AlertEvent> out) {}
+  public void onTimer(long t, OnTimerContext ctx, Collector<AlertEvent> out) throws Exception {
+    if (ctx.currentWatermark() == Long.MAX_VALUE) {
+      return;
+    }
+    long due = expiryDue();
+    if (t < due) {
+      ctx.timerService().registerEventTimeTimer(due);
+      expiryTimer.update(due);
+      return;
+    }
+    String key = ctx.getCurrentKey();
+    String[] parts = Keys.split(key);
+    for (Map.Entry<String, AlertStateMachine> e : machines.entries()) {
+      AlertStateMachine m = e.getValue();
+      if (!m.firing) {
+        continue;
+      }
+      // Machine ids are detector/setting/signal; a signal's wire name has no slash.
+      String id = e.getKey();
+      int first = id.indexOf('/');
+      int last = id.lastIndexOf('/');
+      out.collect(
+          alert(
+              id.substring(0, first),
+              id.substring(first + 1, last),
+              id.substring(last + 1),
+              key,
+              parts[0],
+              parts[1],
+              parts[2],
+              false,
+              m.startedAtMs,
+              t,
+              0.0,
+              0.0,
+              EXPIRED));
+    }
+    ring.clear();
+    machines.clear();
+    history.clear();
+    hourCache.clear();
+    lastActive.clear();
+    expiryTimer.clear();
+  }
+
+  private long expiryDue() throws Exception {
+    return lastActive.value() + expiry.toMillis() + EXPIRY_SLACK_MS;
+  }
 
   /**
-   * Error rate and latency are read against the bucket's baseline. Volume is read against the
-   * ring's expected 5-minute sum, which needs the key's baseline for all five minutes.
+   * Keeps this week's and next week's baseline of each scope and bucket. A record published again
+   * for the same week replaces the earlier one.
+   */
+  @Override
+  public void processBroadcastElement(PopulationBaseline b, Context ctx, Collector<AlertEvent> out)
+      throws Exception {
+    ctx.getBroadcastState(POPULATION).put(populationKey(b.scope(), b.bucket(), b.week()), b);
+  }
+
+  /** Weeks alternate between two keys, so a scope and bucket hold at most two records. */
+  private static String populationKey(String scope, int bucket, long week) {
+    return scope + "|" + bucket + "|" + Math.floorMod(week, 2);
+  }
+
+  /** The scope's newest record for the bucket that is not for a later week, or null. */
+  private static PopulationBaseline lookup(
+      ReadOnlyBroadcastState<String, PopulationBaseline> population,
+      String scope,
+      int bucket,
+      long week)
+      throws Exception {
+    PopulationBaseline best = null;
+    for (long w = week - 1; w <= week; w++) {
+      PopulationBaseline b = population.get(populationKey(scope, bucket, w));
+      if (b != null && b.week() <= week && (best == null || b.week() > best.week())) {
+        best = b;
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Error rate and latency are read against the bucket's baseline, or a fallback while the key is
+   * cold. Volume is read against the ring's expected 5-minute sum, which needs the key's baseline
+   * for all five minutes.
    */
   private static Reading read(
-      Signal s, MinuteSignals signals, HourCache cache, VolumeRing r, long count) {
+      Signal s,
+      MinuteSignals signals,
+      HourCache cache,
+      Fallbacks fallbacks,
+      VolumeRing r,
+      long count) {
     double value = signals.get(s);
     double median;
     double spread;
+    String source;
     if (s == Signal.VOLUME_5M) {
       median = r.expected();
       spread = r.spread();
+      source = Double.isNaN(median) ? null : OWN;
     } else {
-      Baseline b = cache.own(s);
-      if (b == null) {
+      Sourced sourced = baselineFor(s, cache, fallbacks);
+      if (sourced == null) {
         median = Double.NaN;
         spread = Double.NaN;
+        source = null;
       } else {
+        Baseline b = sourced.baseline();
         median = b.median();
         spread =
             s == Signal.ERROR_RATE
                 ? Scores.errorRateSpread(b.median(), b.scaledMad(), count)
                 : Scores.latencySpread(b.median(), b.scaledMad());
+        source = sourced.source();
       }
     }
-    String source = Double.isNaN(median) ? null : OWN;
     return new Reading(s, value, median, spread, Scores.score(s, value, median, spread), source);
   }
 
-  /** The value at which the seasonal score reaches fireK, or 0.0 without a baseline. */
+  /** The key's own baseline when warm, else the region's, else the global one; null if none. */
+  private static Sourced baselineFor(Signal s, HourCache cache, Fallbacks fallbacks) {
+    Baseline own = cache.own(s);
+    if (own != null) {
+      return new Sourced(own, OWN);
+    }
+    if (fallbacks.region() != null) {
+      return new Sourced(fallbacks.region().of(s), REGION);
+    }
+    if (fallbacks.global() != null) {
+      return new Sourced(fallbacks.global().of(s), GLOBAL);
+    }
+    return null;
+  }
+
+  /**
+   * The value at which the seasonal score reaches fireK, or 0.0 without a baseline. A count is
+   * never negative, so neither is the volume reference.
+   */
   private static double fireReference(Reading r, double fireK) {
-    return r.hasBaseline() ? Scores.fireReference(r.signal(), r.median(), r.spread(), fireK) : 0.0;
+    if (!r.hasBaseline()) {
+      return 0.0;
+    }
+    double reference = Scores.fireReference(r.signal(), r.median(), r.spread(), fireK);
+    return r.signal() == Signal.VOLUME_5M ? Math.max(0.0, reference) : reference;
   }
 
   /** Steps the detector's machine for the signal and emits an event on a transition. */
@@ -252,24 +417,62 @@ public class Scorer
     }
     boolean fire = t == AlertStateMachine.Transition.FIRE;
     out.collect(
-        new AlertEvent(
-            AlertIds.of(detector, setting, SCOPE, a.key(), s.wire(), m.startedAtMs),
-            runId,
+        alert(
             detector,
             setting,
-            SCOPE,
+            s.wire(),
             a.key(),
             a.tenant(),
             a.region(),
             a.unit(),
-            s.wire(),
-            fire ? "firing" : "resolved",
+            fire,
             m.startedAtMs,
             a.minuteMs() + 60_000L,
-            System.currentTimeMillis(),
             minute.signals().get(s),
             reference,
             fire && j != own ? ZERO_TRAFFIC : null));
+  }
+
+  /**
+   * Every AlertEvent of the Scorer is built here. A value or reference that is NaN or infinite
+   * (an error-rate reference on a minute without requests, say) is written as 0.0.
+   */
+  private AlertEvent alert(
+      String detector,
+      String setting,
+      String signal,
+      String key,
+      String tenant,
+      String region,
+      String unit,
+      boolean firing,
+      long startsAtMs,
+      long eventTimeMs,
+      double value,
+      double reference,
+      String reason) {
+    return new AlertEvent(
+        AlertIds.of(detector, setting, SCOPE, key, signal, startsAtMs),
+        runId,
+        detector,
+        setting,
+        SCOPE,
+        key,
+        tenant,
+        region,
+        unit,
+        signal,
+        firing ? "firing" : "resolved",
+        startsAtMs,
+        eventTimeMs,
+        System.currentTimeMillis(),
+        finiteOrZero(value),
+        finiteOrZero(reference),
+        reason);
+  }
+
+  private static double finiteOrZero(double v) {
+    return Double.isFinite(v) ? v : 0.0;
   }
 
   private ScoreEvent scoreEvent(MinuteAgg a, Reading r) {

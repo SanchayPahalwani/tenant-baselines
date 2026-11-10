@@ -26,19 +26,18 @@ import org.junit.jupiter.api.Test;
 
 class SeasonalScorerTest {
 
-  private static final String KEY = "a|eu|u1";
-  private static final long MINUTE_MS = 60_000L;
+  static final String KEY = "a|eu|u1";
+  static final long MINUTE_MS = 60_000L;
 
   /** Monday 00:00 of week 1, the start of bucket 0. */
-  private static final long MON = 345_600_000L;
+  static final long MON = 345_600_000L;
 
-  private static final long WEEK = 604_800_000L;
+  static final long WEEK = 604_800_000L;
 
   /** Monday 00:00 of week 3, the first week with two weeks of history behind it. */
-  private static final long W3 = MON + 2 * WEEK;
+  static final long W3 = MON + 2 * WEEK;
 
-  private static KeyedBroadcastOperatorTestHarness<
-          String, MinuteAgg, PopulationBaseline, AlertEvent>
+  static KeyedBroadcastOperatorTestHarness<String, MinuteAgg, PopulationBaseline, AlertEvent>
       harness(List<ThresholdSet> sets, boolean emitScores) throws Exception {
     Scorer scorer =
         new Scorer("run", sets, List.of(SeasonalSetting.ofK(4)), emitScores, Duration.ofDays(7));
@@ -46,19 +45,18 @@ class SeasonalScorerTest {
         scorer, MinuteAgg::key, Types.STRING, Scorer.POPULATION);
   }
 
-  private static KeyedBroadcastOperatorTestHarness<
-          String, MinuteAgg, PopulationBaseline, AlertEvent>
+  static KeyedBroadcastOperatorTestHarness<String, MinuteAgg, PopulationBaseline, AlertEvent>
       harness(boolean emitScores) throws Exception {
     return harness(List.of(), emitScores);
   }
 
-  private static List<ThresholdSet> demoThresholds() throws Exception {
+  static List<ThresholdSet> demoThresholds() throws Exception {
     try (InputStream in = SeasonalScorerTest.class.getResourceAsStream("/thresholds-demo.json")) {
       return ThresholdsFile.load(in);
     }
   }
 
-  private static void minute(
+  static void minute(
       KeyedBroadcastOperatorTestHarness<String, MinuteAgg, PopulationBaseline, AlertEvent> h,
       String key,
       long ms,
@@ -73,7 +71,7 @@ class SeasonalScorerTest {
   }
 
   /** One minute of {@link #KEY} per minute, from {@code fromMs} up to but not including toMs. */
-  private static void history(
+  static void history(
       KeyedBroadcastOperatorTestHarness<String, MinuteAgg, PopulationBaseline, AlertEvent> h,
       long fromMs,
       long toMs,
@@ -86,19 +84,19 @@ class SeasonalScorerTest {
     }
   }
 
-  private static void twoWeeks(
+  static void twoWeeks(
       KeyedBroadcastOperatorTestHarness<String, MinuteAgg, PopulationBaseline, AlertEvent> h)
       throws Exception {
     history(h, MON, W3, 100, 0, 100.0);
   }
 
-  private static List<ScoreEvent> scores(
+  static List<ScoreEvent> scores(
       KeyedBroadcastOperatorTestHarness<String, MinuteAgg, PopulationBaseline, AlertEvent> h) {
     ConcurrentLinkedQueue<StreamRecord<ScoreEvent>> q = h.getSideOutput(Scorer.SCORES);
     return q == null ? List.of() : q.stream().map(StreamRecord::getValue).toList();
   }
 
-  private static ScoreEvent scoreAt(List<ScoreEvent> scores, String key, long ms, String signal) {
+  static ScoreEvent scoreAt(List<ScoreEvent> scores, String key, long ms, String signal) {
     return scores.stream()
         .filter(s -> s.key().equals(key) && s.minuteMs() == ms && s.signal().equals(signal))
         .findFirst()
@@ -110,7 +108,7 @@ class SeasonalScorerTest {
     return h.extractOutputValues().stream().filter(e -> e.signal().equals("error_rate")).toList();
   }
 
-  private static boolean nullOrFinite(Double d) {
+  static boolean nullOrFinite(Double d) {
     return d == null || Double.isFinite(d);
   }
 
@@ -195,6 +193,25 @@ class SeasonalScorerTest {
       assertThat(e.value()).isEqualTo(400);
       assertThat(e.reference()).isCloseTo(410.557, within(0.01));
       assertThat(e.reason()).isNull();
+    }
+  }
+
+  @Test
+  void volumeFireReferenceIsNeverNegative() throws Exception {
+    try (var h = harness(false)) {
+      // Expected 15 with spread √15, so expected − 4 · spread is below zero.
+      history(h, MON, W3, 3, 0, 100.0);
+      history(h, W3, W3 + 7 * MINUTE_MS, 0, 0, 100.0);
+
+      List<AlertEvent> out = h.extractOutputValues();
+      assertThat(out).hasSize(1);
+      AlertEvent e = out.get(0);
+      assertThat(e.signal()).isEqualTo("volume_5m");
+      assertThat(e.state()).isEqualTo("firing");
+      assertThat(e.startsAtMs()).isEqualTo(W3 + 4 * MINUTE_MS);
+      assertThat(e.reason()).isEqualTo("zero_traffic");
+      assertThat(e.value()).isZero();
+      assertThat(e.reference()).isEqualTo(0.0);
     }
   }
 
