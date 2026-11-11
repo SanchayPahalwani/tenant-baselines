@@ -57,7 +57,6 @@ public class Scorer
    */
   public static final long EXPIRY_SLACK_MS = 120_000L;
 
-  private static final String SCOPE = "tenant";
   private static final String OWN = "own";
   private static final String REGION = "region";
   private static final String GLOBAL = "global";
@@ -181,8 +180,8 @@ public class Scorer
     long week = HourOfWeek.week(ms);
     Fallbacks fallbacks =
         new Fallbacks(
-            lookup(population, a.region(), bucket, week),
-            lookup(population, PopulationBaseline.GLOBAL, bucket, week));
+            PopulationLookup.find(population, a.region(), bucket, week),
+            PopulationLookup.find(population, PopulationBaseline.GLOBAL, bucket, week));
     Reading[] readings = new Reading[SIGNALS.length];
     for (Signal s : SIGNALS) {
       readings[s.ordinal()] = read(s, signals, cache, fallbacks, r, a.count());
@@ -268,15 +267,17 @@ public class Scorer
       int first = id.indexOf('/');
       int last = id.lastIndexOf('/');
       out.collect(
-          alert(
+          Alerts.of(
+              runId,
               id.substring(0, first),
               id.substring(first + 1, last),
-              id.substring(last + 1),
+              Alerts.TENANT,
               key,
               parts[0],
               parts[1],
               parts[2],
-              false,
+              id.substring(last + 1),
+              Alerts.RESOLVED,
               m.startedAtMs,
               t,
               0.0,
@@ -302,29 +303,7 @@ public class Scorer
   @Override
   public void processBroadcastElement(PopulationBaseline b, Context ctx, Collector<AlertEvent> out)
       throws Exception {
-    ctx.getBroadcastState(POPULATION).put(populationKey(b.scope(), b.bucket(), b.week()), b);
-  }
-
-  /** Weeks alternate between two keys, so a scope and bucket hold at most two records. */
-  private static String populationKey(String scope, int bucket, long week) {
-    return scope + "|" + bucket + "|" + Math.floorMod(week, 2);
-  }
-
-  /** The scope's newest record for the bucket that is not for a later week, or null. */
-  private static PopulationBaseline lookup(
-      ReadOnlyBroadcastState<String, PopulationBaseline> population,
-      String scope,
-      int bucket,
-      long week)
-      throws Exception {
-    PopulationBaseline best = null;
-    for (long w = week - 1; w <= week; w++) {
-      PopulationBaseline b = population.get(populationKey(scope, bucket, w));
-      if (b != null && b.week() <= week && (best == null || b.week() > best.week())) {
-        best = b;
-      }
-    }
-    return best;
+    ctx.getBroadcastState(POPULATION).put(PopulationLookup.key(b.scope(), b.bucket(), b.week()), b);
   }
 
   /**
@@ -417,62 +396,22 @@ public class Scorer
     }
     boolean fire = t == AlertStateMachine.Transition.FIRE;
     out.collect(
-        alert(
+        Alerts.of(
+            runId,
             detector,
             setting,
-            s.wire(),
+            Alerts.TENANT,
             a.key(),
             a.tenant(),
             a.region(),
             a.unit(),
-            fire,
+            s.wire(),
+            fire ? Alerts.FIRING : Alerts.RESOLVED,
             m.startedAtMs,
             a.minuteMs() + 60_000L,
             minute.signals().get(s),
             reference,
             fire && j != own ? ZERO_TRAFFIC : null));
-  }
-
-  /**
-   * Every AlertEvent of the Scorer is built here. A value or reference that is NaN or infinite
-   * (an error-rate reference on a minute without requests, say) is written as 0.0.
-   */
-  private AlertEvent alert(
-      String detector,
-      String setting,
-      String signal,
-      String key,
-      String tenant,
-      String region,
-      String unit,
-      boolean firing,
-      long startsAtMs,
-      long eventTimeMs,
-      double value,
-      double reference,
-      String reason) {
-    return new AlertEvent(
-        AlertIds.of(detector, setting, SCOPE, key, signal, startsAtMs),
-        runId,
-        detector,
-        setting,
-        SCOPE,
-        key,
-        tenant,
-        region,
-        unit,
-        signal,
-        firing ? "firing" : "resolved",
-        startsAtMs,
-        eventTimeMs,
-        System.currentTimeMillis(),
-        finiteOrZero(value),
-        finiteOrZero(reference),
-        reason);
-  }
-
-  private static double finiteOrZero(double v) {
-    return Double.isFinite(v) ? v : 0.0;
   }
 
   private ScoreEvent scoreEvent(MinuteAgg a, Reading r) {
