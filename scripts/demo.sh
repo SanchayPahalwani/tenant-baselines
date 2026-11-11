@@ -53,7 +53,7 @@ if [ "$with_data" -gt 0 ]; then
 fi
 
 echo "Starting the demo: three weeks of synthetic history, then live traffic." \
-  "Warm-up took 235 s in the measured run."
+  "Warm-up took 235 s in the measured run (see the README for the machine)."
 
 start=$SECONDS
 docker compose --profile demo up -d --build --no-deps generator
@@ -146,3 +146,5 @@ echo "  can page first when their alerts land a minute apart;"
 echo "  alerts decided during the history appear in the alert log but are never paged."
 echo "Page times measured from each incident's start minute, hold and watermark lag included:"
 echo "  tenant drop 389 s, error burst 390 s, regional spike 327 s."
+echo "  (measured once on an arm64 laptop, 8-CPU Docker VM, Wednesday 18:33 UTC, watermark lag"
+echo "  22.5 s median; page times vary with the hour, see the README.)"

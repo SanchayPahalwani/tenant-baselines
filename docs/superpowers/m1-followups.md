@@ -35,6 +35,7 @@ Planning material, like the rest of `docs/superpowers/`. These are review findin
   - `@Timeout` in separate-thread mode;
   - dimension fields on emitted minutes;
   - an on-time out-of-order event;
+  - `Watermarks.replay()` and `live()` factories;
   - per-key overrides and validity windows;
   - non-JSON webhook bodies.
 - **Scripts:**
