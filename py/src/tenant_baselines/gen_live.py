@@ -145,7 +145,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Generate synthetic live events into Kafka")
     ap.add_argument("--bootstrap", default="localhost:9092")
     ap.add_argument("--topic", default="live.events")
-    ap.add_argument("--world", default="demo")
+    ap.add_argument("--world", default="demo", choices=["demo"])
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--script", choices=["demo", "none"], default="demo")
     ap.add_argument("--history-days", type=int, default=21)

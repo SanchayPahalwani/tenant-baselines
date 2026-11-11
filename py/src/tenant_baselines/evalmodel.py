@@ -1,4 +1,4 @@
-"""Eval traffic model (spec 5.2): expected requests per key and minute, with nuisance terms."""
+"""Synthetic eval traffic model (spec 5.2): expected requests per key and minute, with nuisance."""
 
 from dataclasses import dataclass
 
@@ -56,12 +56,12 @@ def no_effects(n_keys: int, n_minutes: int) -> Effects:
     return Effects(np.ones(shape_), np.zeros(shape_), np.ones(shape_))
 
 
-def error_prob(load: np.ndarray, error_add: np.ndarray | float = 0.0) -> np.ndarray:
+def error_prob(load: np.ndarray, *, error_add: np.ndarray | float) -> np.ndarray:
     return np.minimum(1.0, 0.003 + 0.002 * np.asarray(load) + error_add)
 
 
 def latency_median(
-    base_ms: np.ndarray | float, load: np.ndarray, latency: np.ndarray | float = 1.0
+    base_ms: np.ndarray | float, load: np.ndarray, *, latency: np.ndarray | float
 ) -> np.ndarray:
     return base_ms * (1 + 0.6 * np.asarray(load) ** 2) * latency
 

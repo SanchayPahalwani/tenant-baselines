@@ -132,7 +132,14 @@ def test_effects_helpers():
     assert isinstance(fx, Effects)
     assert fx.volume.shape == fx.error_add.shape == fx.latency.shape == (3, 4)
     assert np.all(fx.volume == 1) and np.all(fx.error_add == 0) and np.all(fx.latency == 1)
-    assert error_prob(np.array([0.0, 1.0]), np.zeros(2)) == pytest.approx([0.003, 0.005])
-    assert error_prob(np.array([1.0]), np.array([5.0]))[0] == 1.0
-    assert latency_median(50.0, np.array([0.0, 1.0]), np.ones(2)) == pytest.approx([50, 80])
-    assert latency_median(50.0, np.array([1.0]), np.array([2.0]))[0] == pytest.approx(160)
+    assert error_prob(np.array([0.0, 1.0]), error_add=np.zeros(2)) == pytest.approx([0.003, 0.005])
+    assert error_prob(np.array([1.0]), error_add=np.array([5.0]))[0] == 1.0
+    assert latency_median(50.0, np.array([0.0, 1.0]), latency=np.ones(2)) == pytest.approx([50, 80])
+    assert latency_median(50.0, np.array([1.0]), latency=np.array([2.0]))[0] == pytest.approx(160)
+
+
+def test_effect_arguments_are_required():
+    with pytest.raises(TypeError):
+        error_prob(np.array([1.0]))  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        latency_median(50.0, np.array([1.0]))  # type: ignore[call-arg]

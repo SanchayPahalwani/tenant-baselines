@@ -1,7 +1,9 @@
+import sys
+
 import orjson
 import pytest
 
-from tenant_baselines.gen_live import DeliveryStats, LiveGenerator, next_step
+from tenant_baselines.gen_live import DeliveryStats, LiveGenerator, main, next_step
 from tenant_baselines.incidents import Incident
 from tenant_baselines.world import build_world
 
@@ -127,3 +129,11 @@ def test_tick_uses_the_key_rate():
                 counts[i] += key == k.key
     for c in counts:
         assert c / 2000 == pytest.approx(expected, rel=0.10)
+
+
+@pytest.mark.parametrize("world", ["eval", "paths"])
+def test_live_generator_rejects_non_demo_worlds(monkeypatch, world):
+    monkeypatch.setattr(sys, "argv", ["gen_live", "--world", world])
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 2
