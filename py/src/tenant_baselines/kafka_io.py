@@ -19,7 +19,7 @@ BOOTSTRAP = "localhost:9092"
 _CLIENT = {"broker.address.family": "v4"}
 _TIMEOUT_S = 30
 _FLUSH_S = 300
-_READ_IDLE_S = 30  # a read gives up after this long without a record
+READ_IDLE_S = 30  # a read gives up after this long without a record
 _BATCH = 10_000
 
 
@@ -172,7 +172,7 @@ def _read(c, topic: str, start: dict[int, int], end: dict[int, int]) -> list[dic
     while want:
         batch = c.consume(num_messages=_BATCH, timeout=1.0)
         if not batch:
-            if time.monotonic() - idle_since >= _READ_IDLE_S:
+            if time.monotonic() - idle_since >= READ_IDLE_S:
                 break
             continue
         idle_since = time.monotonic()
