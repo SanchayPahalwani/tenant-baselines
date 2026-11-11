@@ -195,3 +195,26 @@ def test_aggregates_round_trip_through_npz(setup, tmp_path):
     for f in ("first", "count", "errors"):
         assert np.array_equal(getattr(a, f), getattr(b, f))
     assert np.array_equal(a.p95, b.p95, equal_nan=True)
+
+
+def test_latencies_are_rounded_to_a_tenth_of_a_millisecond(setup):
+    world, r = setup
+    k = int(np.argmax(r.peak))
+    d = draw_key(world, r, no_effects(len(world.keys), N), SEED, k)
+    assert np.array_equal(d.latencies, np.round(d.latencies, 1))
+    assert (d.latencies != np.round(d.latencies)).any()
+
+
+@pytest.mark.parametrize("load", [0.5, 1.0])
+def test_raw_latency_median_follows_the_unit_base_and_load(load):
+    # 600 minutes at 100 or 200 requests: at least 60,000 draws. The sample median of a
+    # lognormal with sigma 0.5 has a relative standard error of 0.5 * sqrt(pi / 2) / sqrt(n),
+    # at most 0.26%, so 1% is almost four standard errors (the 0.1 ms rounding adds under 0.1%).
+    n = 600
+    world, r = one_key_world(np.full(n, 200.0 * load))
+    r = Rates(r.base, np.array([200.0]), r.start)
+    d = draw_key(world, r, no_effects(1, n), SEED, 0)
+    unit = next(u for u in world.units if u.name == world.keys[0].unit)
+    expected = unit.base_latency_ms * (1 + 0.6 * load**2)
+    assert len(d.latencies) > 50_000
+    assert abs(np.median(d.latencies) / expected - 1) < 0.01

@@ -44,7 +44,9 @@ def draw_key(world: World, rates: Rates, effects: Effects, seed: int, k: int) ->
     errors = rng.binomial(counts, error_prob(load, error_add=effects.error_add[k])).astype(np.int64)
     median = latency_median(unit.base_latency_ms, load, latency=effects.latency[k])
     mu = np.repeat(np.log(median), counts)
-    latencies = np.round(rng.lognormal(mu, _LATENCY_SIGMA), 1)
+    latencies = rng.lognormal(mu, _LATENCY_SIGMA)
+    del mu
+    np.round(latencies, 1, out=latencies)
     return KeyDraws(counts, errors, latencies)
 
 
