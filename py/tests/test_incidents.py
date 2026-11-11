@@ -115,3 +115,10 @@ def test_volume_mult_scales_volume():
 def test_negative_volume_mult_is_rejected():
     with pytest.raises(ValueError):
         Incident("volume_mult", 0, 1, -0.1)
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+@pytest.mark.parametrize("kind", ["error_spike", "volume_mult", "latency_spike"])
+def test_non_finite_magnitude_is_rejected(kind, bad):
+    with pytest.raises(ValueError):
+        Incident(kind, 0, 1, bad)

@@ -1,5 +1,7 @@
 """Pure traffic model: daily/weekly load shape, error probability, latency."""
 
+import numpy as np
+
 from tenant_baselines.world import Tenant
 
 _MS_PER_HOUR = 3_600_000
@@ -28,6 +30,20 @@ def shape(local_hour: float, weekday: int, amplitude: float = 6.0) -> float:
     if weekday == 0 and 8 <= h < 11:
         v *= 1.25
     return v
+
+
+def shape_array(local_hour: np.ndarray, weekday: np.ndarray, amplitude: float = 6.0) -> np.ndarray:
+    """`shape` on arrays of local hours (0-24) and weekdays (Monday = 0)."""
+    low = 1.0 / amplitude
+    h = np.asarray(local_hour, dtype=float)
+    v = np.select(
+        [h < 7, h < 9, h < 17, h < 20],
+        [low, low + (1 - low) * (h - 7) / 2, 1.0, 1 - (1 - low) * (h - 17) / 3],
+        default=low,
+    )
+    wd = np.asarray(weekday)
+    v = np.where(wd >= 5, v * 0.3, v)
+    return np.where((wd == 0) & (h >= 8) & (h < 11), v * 1.25, v)
 
 
 def local_time(t_ms: int, tz_offset_h: int) -> tuple[float, int]:

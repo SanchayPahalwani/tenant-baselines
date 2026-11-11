@@ -110,3 +110,20 @@ def test_next_step():
     assert next_step(120_000, 179_999) == "second"
     assert next_step(121_000, 400_000) == "second"
     assert next_step(120_000, 120_999) == "wait"
+
+
+def test_tick_uses_the_key_rate():
+    """Two keys share a tenant's rate, so each key gets about half of it."""
+    world = build_world("demo", 1)
+    keys = [k for k in world.keys if k.tenant == "t02"]
+    assert len(keys) == 2
+    gen = LiveGenerator(world, 3, [])
+    second = 1_767_182_400_000 + 3_600_000 * 2  # Wednesday 14:00 UTC
+    expected = gen.key_rate_rpm(keys[0], second) / 60.0
+    counts = [0, 0]
+    for _ in range(2000):
+        for key, _ in gen.tick(second):
+            for i, k in enumerate(keys):
+                counts[i] += key == k.key
+    for c in counts:
+        assert c / 2000 == pytest.approx(expected, rel=0.10)

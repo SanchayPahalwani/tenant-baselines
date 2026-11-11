@@ -1,8 +1,16 @@
 from datetime import UTC, datetime
 
+import numpy as np
 import pytest
 
-from tenant_baselines.traffic import error_prob, key_rate_rpm, latency_median_ms, rate_rpm, shape
+from tenant_baselines.traffic import (
+    error_prob,
+    key_rate_rpm,
+    latency_median_ms,
+    rate_rpm,
+    shape,
+    shape_array,
+)
 from tenant_baselines.world import Tenant
 
 
@@ -34,7 +42,7 @@ def test_error_and_latency():
 def test_key_rate_splits_tenant_rate():
     t = Tenant("tx", "us-east", 0, 120.0)
     wed_noon = int(datetime(2026, 11, 11, 12, tzinfo=UTC).timestamp() * 1000)
-    assert key_rate_rpm(t, 3, wed_noon) == 40.0
+    assert key_rate_rpm(t, 3, wed_noon) == pytest.approx(40.0)
 
 
 def test_steady_tenant_has_flat_load():
@@ -43,3 +51,12 @@ def test_steady_tenant_has_flat_load():
     night = int(datetime(2026, 11, 7, 19, tzinfo=UTC).timestamp() * 1000)  # Sun 03:00 local
     assert key_rate_rpm(t09, 2, noon) == 30.0
     assert key_rate_rpm(t09, 2, night) == 30.0
+
+
+@pytest.mark.parametrize("amplitude", [1.5, 6.0, 12.0])
+def test_shape_array_matches_shape(amplitude):
+    hours = np.tile(np.arange(0, 24, 0.25), 7)
+    days = np.repeat(np.arange(7), 96)
+    got = shape_array(hours, days, amplitude)
+    want = [shape(float(h), int(d), amplitude) for h, d in zip(hours, days, strict=True)]
+    assert got == pytest.approx(want)

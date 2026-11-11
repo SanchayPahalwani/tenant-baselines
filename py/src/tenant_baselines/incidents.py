@@ -1,5 +1,6 @@
 """Scripted incidents that change a key's volume, error rate or latency."""
 
+import math
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Literal
@@ -26,6 +27,8 @@ class Incident:
     key: str | None = None
 
     def __post_init__(self) -> None:
+        if not math.isfinite(self.magnitude):
+            raise ValueError(f"magnitude must be finite: {self.magnitude}")
         if self.kind == "volume_mult" and self.magnitude < 0:
             raise ValueError(f"volume_mult magnitude must not be negative: {self.magnitude}")
 
