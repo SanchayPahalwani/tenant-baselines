@@ -294,6 +294,54 @@ class RegionGrouperResolveTest {
     }
   }
 
+  /**
+   * After {@link #aAndBOfFour}, a and b resolve at 63, so the regional alert is under a quarter
+   * from minute 63; d fires for seasonal/k6 at 80.
+   */
+  private static void regionalUnderAQuarterThenAnotherSetting(
+      KeyedTwoInputStreamOperatorTestHarness<String, AlertEvent, MinuteAgg, AlertEvent> h)
+      throws Exception {
+    aAndBOfFour(h);
+    resolve(h, "a", "u1", ERROR_RATE, 63);
+    resolve(h, "b", "u1", ERROR_RATE, 63);
+    fire(h, SEASONAL, K6, "d", "u1", ERROR_RATE, 80);
+  }
+
+  @Test
+  @Timeout(value = 5, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
+  void finalWatermarkOutputDoesNotDependOnTheLastWatermark() throws Exception {
+    List<AlertEvent> straight;
+    try (var h = harness()) {
+      regionalUnderAQuarterThenAnotherSetting(h);
+      h.processBothWatermarks(new Watermark(Long.MAX_VALUE));
+      straight = released(h);
+      assertThat(h.numEventTimeTimers()).isZero();
+    }
+    List<AlertEvent> stepped = new ArrayList<>();
+    try (var h = harness()) {
+      regionalUnderAQuarterThenAnotherSetting(h);
+      stepped.addAll(wm(h, 70));
+      h.processBothWatermarks(new Watermark(Long.MAX_VALUE));
+      stepped.addAll(released(h));
+      assertThat(h.numEventTimeTimers()).isZero();
+    }
+
+    // Minutes 63 to 67 are under a quarter; d's hold ends at minute 82.
+    assertThat(stepped)
+        .extracting(
+            AlertEvent::scope,
+            AlertEvent::state,
+            AlertEvent::setting,
+            AlertEvent::tenant,
+            AlertEvent::eventTimeMs)
+        .containsExactly(
+            tuple("region", "resolved", "k4", "", min(68)),
+            tuple("tenant", "firing", "k6", "d", min(83)));
+    assertThat(straight)
+        .usingRecursiveFieldByFieldElementComparatorIgnoringFields("emittedAtMs")
+        .containsExactlyElementsOf(stepped);
+  }
+
   @Test
   void stateSurvivesSnapshotAndRestore() throws Exception {
     OperatorSubtaskState snapshot;
@@ -338,6 +386,60 @@ class RegionGrouperResolveTest {
     h.initializeState(snapshot);
     h.open();
     return h;
+  }
+
+  @Test
+  void streakSurvivesSnapshotAndRestore() throws Exception {
+    OperatorSubtaskState snapshot;
+    try (var h = harness()) {
+      aAndBOfFour(h);
+      resolve(h, "b", "u1", ERROR_RATE, 70);
+      resolve(h, "a", "u1", ERROR_RATE, 72);
+      // Minutes 72 to 74: three in a row under a quarter.
+      assertThat(wm(h, 74)).isEmpty();
+      snapshot = h.snapshot(1, 1);
+    }
+
+    try (var h = restored(snapshot)) {
+      // The timer of minute 75 came back with the snapshot.
+      assertThat(h.numEventTimeTimers()).isEqualTo(1);
+      assertThat(wm(h, 75)).isEmpty();
+      assertThat(wm(h, 76))
+          .extracting(
+              AlertEvent::scope,
+              AlertEvent::state,
+              AlertEvent::alertId,
+              AlertEvent::startsAtMs,
+              AlertEvent::eventTimeMs)
+          .containsExactly(
+              tuple("region", "resolved", regionalId(K4, ERROR_RATE, min(62)), min(62), min(77)));
+    }
+  }
+
+  @Test
+  void reheldAlertSurvivesSnapshotAndRestore() throws Exception {
+    OperatorSubtaskState snapshot;
+    try (var h = harness()) {
+      assertThat(aAloneOfNine(h))
+          .extracting(AlertEvent::scope, AlertEvent::state)
+          .containsExactly(tuple("region", "resolved"));
+      snapshot = h.snapshot(1, 1);
+    }
+
+    try (var h = restored(snapshot)) {
+      // a's fresh hold ends at minute 70; its timer came back with the snapshot.
+      assertThat(h.numEventTimeTimers()).isEqualTo(1);
+      assertThat(wm(h, 69)).isEmpty();
+      AlertEvent a = aAtSixty();
+      assertThat(wm(h, 70))
+          .extracting(
+              AlertEvent::scope,
+              AlertEvent::state,
+              AlertEvent::alertId,
+              AlertEvent::startsAtMs,
+              AlertEvent::eventTimeMs)
+          .containsExactly(tuple("tenant", "firing", a.alertId(), a.startsAtMs(), min(71)));
+    }
   }
 
   @Test

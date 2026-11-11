@@ -210,10 +210,24 @@ public class RegionGrouper
     endHolds(t, at, region, byGroup, out);
     // 5. Unit status: to come.
     // 6. The next minute's timer while a regional alert fires, so that its streak counts minutes.
-    // None at the final watermark of a bounded input, where timers would follow each other forever.
-    if (!regional.isEmpty() && timers.currentWatermark() != Long.MAX_VALUE) {
+    // At the final watermark of a bounded input that chain would never end, so there it goes on
+    // only while a streak has begun. The share changes only at the timers that apply inputs, so
+    // this gives what a watermark through every minute would: a streak resolves within
+    // RESOLVE_AFTER - 1 more minutes, or an input resets it to 0, which ends the chain.
+    boolean finalWatermark = timers.currentWatermark() == Long.MAX_VALUE;
+    if (finalWatermark ? anyStreakBegun() : !regional.isEmpty()) {
       timers.registerEventTimeTimer(t + MINUTE_MS);
     }
+  }
+
+  /** Whether a regional alert's share has been under the resolve share for a minute or more. */
+  private boolean anyStreakBegun() throws Exception {
+    for (RegionalAlert r : regional.values()) {
+      if (r.underStreak > 0) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private void applyFlips(long t) throws Exception {
