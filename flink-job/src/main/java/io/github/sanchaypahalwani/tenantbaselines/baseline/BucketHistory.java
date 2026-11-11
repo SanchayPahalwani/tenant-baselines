@@ -34,6 +34,9 @@ public class BucketHistory {
 
   public void put(long week, int minuteOfHour, Signal s, double value) {
     int slot = (int) Math.floorMod(week, (long) SLOTS);
+    if (slotWeek[slot] > week) {
+      return; // a late value for an older week must not wipe the newer week in its slot
+    }
     if (slotWeek[slot] != week) {
       for (Signal each : Signal.values()) {
         int from = index(each, slot, 0);

@@ -15,6 +15,13 @@ class HourOfWeekTest {
   }
 
   @Test
+  void negativeTimesBucketLikePositiveOnes() {
+    assertThat(HourOfWeek.hourStart(-1)).isEqualTo(-3_600_000L);
+    assertThat(HourOfWeek.bucket(-1)).isEqualTo(71);
+    assertThat(HourOfWeek.bucket(604_799_999L)).isEqualTo(71);
+  }
+
+  @Test
   void epochIsThursday() {
     assertThat(HourOfWeek.bucket(0)).isEqualTo(72);
     assertThat(HourOfWeek.bucket(-1)).isEqualTo(71);

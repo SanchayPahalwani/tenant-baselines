@@ -37,6 +37,13 @@ class VolumeRingTest {
   }
 
   @Test
+  void spreadUsesEachMinutesMad() {
+    // Median 100 each; the last two minutes (after an hour boundary) carry their own MAD.
+    var r = fiveWith(new double[] {100, 100, 100, 100, 100}, new double[] {1, 1, 1, 30, 30});
+    assertThat(r.spread()).isCloseTo(Math.sqrt(1803), within(1e-9));
+  }
+
+  @Test
   void madTermWinsWhenLarger() {
     var r = fiveWith(new double[] {4, 4, 4, 4, 4}, new double[] {5, 5, 5, 5, 5});
     assertThat(r.spread()).isCloseTo(Math.sqrt(5) * 5, within(1e-9));

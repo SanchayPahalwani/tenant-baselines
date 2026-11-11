@@ -29,6 +29,23 @@ class HourCacheTest {
     assertThat(oneWeek.own(Signal.ERROR_RATE)).isNull();
   }
 
+  /** The first millisecond of the given HourOfWeek week. */
+  private static long weekStart(long week) {
+    return week * HourOfWeek.WEEK_MS - 259_200_000L;
+  }
+
+  @Test
+  void usesTheWeekOfTheHourStart() {
+    BucketHistory h = new BucketHistory();
+    for (long week = 2; week <= 3; week++) {
+      for (int m = 0; m < 30; m++) {
+        h.put(week, m, Signal.ERROR_RATE, 1.0);
+      }
+    }
+    assertThat(HourCache.of(h, weekStart(4)).own(Signal.ERROR_RATE).median()).isEqualTo(1.0);
+    assertThat(HourCache.of(h, weekStart(3)).own(Signal.ERROR_RATE)).isNull();
+  }
+
   @Test
   void nullHistoryIsCold() {
     HourCache c = HourCache.of(null, 3_600_000L);

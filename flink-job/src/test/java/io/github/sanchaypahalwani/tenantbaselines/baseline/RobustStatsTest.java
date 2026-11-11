@@ -14,6 +14,11 @@ class RobustStatsTest {
   }
 
   @Test
+  void medianReadsOnlyTheFirstN() {
+    assertThat(RobustStats.median(new double[] {3, 1, 2, 99, 99}, 3)).isEqualTo(2.0);
+  }
+
+  @Test
   void madIgnoresOneOutlier() {
     double[] v = {1, 2, 3, 4, 100};
     double median = RobustStats.median(v, 5);

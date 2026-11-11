@@ -42,6 +42,27 @@ class ScoresTest {
   }
 
   @Test
+  void fireReferenceUpAndDown() {
+    assertThat(Scores.fireReference(Signal.ERROR_RATE, 10, 2, 4)).isEqualTo(18.0);
+    assertThat(Scores.fireReference(Signal.VOLUME_5M, 10, 2, 4)).isEqualTo(2.0);
+  }
+
+  @Test
+  void downScoreIsNegativeAboveTheReference() {
+    assertThat(Scores.score(Signal.VOLUME_5M, 14, 10, 2)).isEqualTo(-2.0);
+  }
+
+  @Test
+  void nanInputsAreUnscored() {
+    double nan = Double.NaN;
+    assertThat(Scores.score(Signal.ERROR_RATE, nan, 1, 1)).isNaN();
+    assertThat(Scores.score(Signal.ERROR_RATE, 1, nan, 1)).isNaN();
+    assertThat(Scores.score(Signal.ERROR_RATE, 1, 1, nan)).isNaN();
+    assertThat(Scores.score(Signal.ERROR_RATE, 1, 1, 0)).isNaN();
+    assertThat(Scores.judge(nan, 4, 2)).isEqualTo(Judgement.UNSCORED);
+  }
+
+  @Test
   void judgeBoundaries() {
     assertThat(Scores.judge(4.0, 4, 2)).isEqualTo(Judgement.BREACH);
     assertThat(Scores.judge(3.999, 4, 2)).isEqualTo(Judgement.NEITHER);

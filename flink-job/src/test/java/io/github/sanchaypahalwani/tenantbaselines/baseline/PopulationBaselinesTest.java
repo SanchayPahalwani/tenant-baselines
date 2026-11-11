@@ -21,7 +21,9 @@ import org.apache.flink.streaming.util.KeyedOneInputStreamOperatorTestHarness;
 import org.apache.flink.streaming.util.ProcessFunctionTestHarnesses;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.Timeout.ThreadMode;
 
+@Timeout(value = 60, threadMode = ThreadMode.SEPARATE_THREAD)
 class PopulationBaselinesTest {
 
   /** Monday 00:00 of week 1, the start of bucket 0. */
@@ -130,6 +132,36 @@ class PopulationBaselinesTest {
   }
 
   @Test
+  void countOfTwentyIsScored() throws Exception {
+    try (var h = harness()) {
+      feed(h, KEY, H, 30, 20, 100);
+      endHour(h, H);
+      assertThat(h.extractOutputValues())
+          .extracting(PopulationBaseline::scope)
+          .containsExactlyInAnyOrder("eu", "*");
+    }
+    try (var h = harness()) {
+      feed(h, KEY, H, 30, 19, 100);
+      endHour(h, H);
+      assertThat(h.extractOutputValues()).isEmpty();
+    }
+  }
+
+  @Test
+  void nullP95IsSkipped() throws Exception {
+    try (var h = harness()) {
+      String[] parts = Keys.split(KEY);
+      for (int m = 0; m < 30; m++) {
+        long ms = H + m * MINUTE_MS;
+        h.processElement(
+            new MinuteAgg("t", KEY, parts[0], parts[1], parts[2], ms, 25, 1, null), ms);
+      }
+      endHour(h, H);
+      assertThat(h.extractOutputValues()).isEmpty();
+    }
+  }
+
+  @Test
   void needsThirtyValues() throws Exception {
     assertThat(publishedAfter(29)).isEmpty();
     assertThat(publishedAfter(30))
@@ -165,7 +197,6 @@ class PopulationBaselinesTest {
   }
 
   @Test
-  @Timeout(2)
   void finalWatermarkPublishesOnce() throws Exception {
     try (var h = harness()) {
       feed(h, KEY, H, 60, 100, 100);

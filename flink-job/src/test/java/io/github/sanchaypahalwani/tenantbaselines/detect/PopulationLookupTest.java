@@ -56,6 +56,20 @@ class PopulationLookupTest {
   }
 
   @Test
+  void laterWeekTakesTheParitySlot() throws Exception {
+    MapState state = new MapState();
+    PopulationBaseline w1 = record("eu", 7, 1);
+    PopulationBaseline w2 = record("eu", 7, 2);
+    PopulationBaseline w3 = record("eu", 7, 3);
+    state.put(w1);
+    state.put(w2);
+    state.put(w3); // weeks 1 and 3 share a slot, so this replaces week 1
+    assertSame(w3, PopulationLookup.find(state, "eu", 7, 3));
+    assertSame(w2, PopulationLookup.find(state, "eu", 7, 2));
+    assertNull(PopulationLookup.find(state, "eu", 7, 1));
+  }
+
+  @Test
   void rejectsALaterWeek() throws Exception {
     MapState state = new MapState();
     state.put(record("eu", 7, 4));

@@ -294,7 +294,7 @@ class SeasonalScorerTest {
   }
 
   @Test
-  void currentWeekDoesNotMoveTheBaseline() throws Exception {
+  void scoreIsConstantWithinAnHourOfTheCurrentWeek() throws Exception {
     try (var h = harness(true)) {
       twoWeeks(h);
       history(h, W3, W3 + 40 * MINUTE_MS, 100, 50, 100.0);

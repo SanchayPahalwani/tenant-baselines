@@ -58,6 +58,32 @@ class BucketHistoryTest {
     fill(h, 10, 29, 5);
     fill(h, 11, 60, 5);
     assertThat(h.weeksWithData(S, 12)).isEqualTo(1);
+
+    BucketHistory twentyNine = new BucketHistory();
+    fill(twentyNine, 10, 29, 5);
+    assertThat(twentyNine.weeksWithData(S, 12)).isEqualTo(0);
+    BucketHistory thirty = new BucketHistory();
+    fill(thirty, 10, 30, 5);
+    assertThat(thirty.weeksWithData(S, 12)).isEqualTo(1);
+  }
+
+  @Test
+  void olderWeekDoesNotWipeANewerOne() {
+    BucketHistory h = new BucketHistory();
+    h.put(9, 0, Signal.ERROR_RATE, 0.5);
+    h.put(4, 0, Signal.ERROR_RATE, 0.9); // week 4 shares slot 4 with week 9
+    assertThat(h.baseline(Signal.ERROR_RATE, 10).median()).isEqualTo(0.5);
+  }
+
+  @Test
+  void signalsAreWipedTogether() {
+    BucketHistory h = new BucketHistory();
+    for (Signal s : Signal.values()) {
+      h.put(4, 0, s, 1.0);
+    }
+    h.put(9, 1, Signal.ERROR_RATE, 0.5);
+    assertThat(h.baseline(Signal.LATENCY_P95, 10)).isNull();
+    assertThat(h.baseline(Signal.VOLUME_5M, 10)).isNull();
   }
 
   @Test
