@@ -61,4 +61,13 @@ class KeyActivityTest {
     assertThat(k.sum).isEqualTo(12);
     assertThat(k.active).isFalse();
   }
+
+  @Test
+  void olderMinuteIsIgnored() {
+    var k = new KeyActivity();
+    k.add(min(5), 100);
+    k.add(min(3), 999);
+    assertThat(k.sum).isEqualTo(100);
+    assertThat(k.lastMinuteMs).isEqualTo(min(5));
+  }
 }

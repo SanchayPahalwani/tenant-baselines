@@ -529,6 +529,89 @@ class RegionGrouperTest {
     assertThat(summary(second)).isEqualTo(summary(first));
   }
 
+  /** One resolved and one firing candidate of the same alert family, in the given order. */
+  private static List<String> resolvedAndFiringArrivingAs(boolean resolvedFirst) throws Exception {
+    try (var h = harness()) {
+      warm(h, "a", "b", "c", "d");
+      AlertEvent resolved =
+          candidate(SEASONAL, K4, "a", "u1", ERROR_RATE, Alerts.RESOLVED, 60);
+      AlertEvent firing = candidate(SEASONAL, K4, "a", "u1", ERROR_RATE, Alerts.FIRING, 61);
+      assertThat(firing.startsAtMs()).isGreaterThan(resolved.startsAtMs());
+      long ts = min(61) + 59_999;
+      if (resolvedFirst) {
+        h.processElement1(resolved, ts);
+        h.processElement1(firing, ts);
+      } else {
+        h.processElement1(firing, ts);
+        h.processElement1(resolved, ts);
+      }
+      List<String> out = new java.util.ArrayList<>(summary(wm(h, 61)));
+      out.addAll(summary(wm(h, 62)));
+      out.addAll(summary(wm(h, 63)));
+      out.addAll(summary(wm(h, 64)));
+      return out;
+    }
+  }
+
+  @Test
+  void candidatesOfOneMinuteAreSortedBeforeTheyApply() throws Exception {
+    List<String> first = resolvedAndFiringArrivingAs(true);
+    List<String> second = resolvedAndFiringArrivingAs(false);
+
+    assertThat(second).isEqualTo(first);
+    // Sorted, the firing candidate comes before the resolved one ("firing" < "resolved"), so the
+    // resolve ends the held alert: nothing is released, not even at the hold's end (minute 63).
+    // Applied in arrival order, resolved-first would pass the resolve and release a firing alert.
+    assertThat(first).isEmpty();
+  }
+
+  @Test
+  void lastActiveKeyLeavingEmptiesTheDenominator() throws Exception {
+    // Five warm tenants; d and e are warm at minute 0 and x (d) goes silent so its hour sum
+    // drops to 0 at minute 60. a and b fire at 60: their holds end at minute 62.
+    try (var h = harness()) {
+      warm(h, "a", "b", "c");
+      warmAt(h, 0, "d", "e");
+      agg(h, "d", "u1", 60, 0);
+      fire(h, "a", "u1", ERROR_RATE, 60);
+      fire(h, "b", "u1", ERROR_RATE, 60);
+
+      List<AlertEvent> out = wm(h, 62);
+      assertThat(withScope(out, "region")).hasSize(1);
+      assertThat(withScope(out, "region").get(0).value()).isEqualTo(0.5);
+      assertThat(withScope(out, "tenant"))
+          .extracting(AlertEvent::state, AlertEvent::tenant)
+          .containsExactlyInAnyOrder(tuple("absorbed", "a"), tuple("absorbed", "b"));
+    }
+    try (var h = harness()) {
+      warm(h, "a", "b");
+      warmAt(h, 0, "c", "d", "e");
+      agg(h, "c", "u1", 60, 0);
+      agg(h, "d", "u1", 60, 0);
+      agg(h, "e", "u1", 60, 0);
+      fire(h, "a", "u1", ERROR_RATE, 60);
+      fire(h, "b", "u1", ERROR_RATE, 60);
+
+      assertThat(wm(h, 62))
+          .extracting(AlertEvent::scope, AlertEvent::state, AlertEvent::tenant)
+          .containsExactly(tuple("tenant", "firing", "a"), tuple("tenant", "firing", "b"));
+    }
+  }
+
+  @Test
+  void twoActiveKeysOfOneTenantCountOnceInTheDenominator() throws Exception {
+    try (var h = harness()) {
+      warm(h, "a", "b", "c", "d");
+      agg(h, "d", "u2", 59, 1200);
+      fire(h, "a", "u1", ERROR_RATE, 60);
+      fire(h, "b", "u1", ERROR_RATE, 60);
+
+      List<AlertEvent> out = wm(h, 62);
+      assertThat(withScope(out, "region")).hasSize(1);
+      assertThat(withScope(out, "region").get(0).value()).isEqualTo(0.5);
+    }
+  }
+
   @Test
   void activityAheadOfTheWatermarkIsNotUsedEarly() throws Exception {
     try (var h = harness()) {

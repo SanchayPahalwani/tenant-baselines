@@ -12,7 +12,10 @@ import org.apache.flink.streaming.util.ProcessFunctionTestHarnesses;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
+@Timeout(value = 60, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
 class MinuteAggregatorTest {
+
+  private static final long MON = 1_767_571_200_000L;
 
   private static Event ev(long ts, double latency, boolean ok) {
     return new Event(ts, "a", "eu", "u1", latency, ok);
@@ -110,6 +113,58 @@ class MinuteAggregatorTest {
       out = h.extractOutputValues();
       assertThat(out).hasSize(11);
       assertThat(out.get(10).count()).isEqualTo(1);
+    }
+  }
+
+  @Test
+  void lateEventIsNotAggregatedAfterALaterWatermark() throws Exception {
+    try (var h = harness()) {
+      h.processElement(ev(MON + 1_000, 100, true), MON + 1_000);
+      h.processWatermark(MON + 120_000);
+      h.processElement(ev(MON + 5_000, 100, true), MON + 5_000);
+      h.processWatermark(MON + 240_000);
+
+      List<MinuteAgg> rows =
+          h.extractOutputValues().stream().filter(m -> m.minuteMs() == MON).toList();
+      assertThat(rows).hasSize(1);
+      assertThat(rows.get(0).count()).isEqualTo(1);
+      assertThat(h.getSideOutput(MinuteAggregator.LATE)).hasSize(1);
+    }
+  }
+
+  @Test
+  void emittedMinuteCarriesTenantRegionUnit() throws Exception {
+    try (var h = harness()) {
+      h.processElement(ev(MON, 100, true), MON);
+      h.processWatermark(MON + 119_999);
+      List<MinuteAgg> out = h.extractOutputValues();
+      assertThat(out).hasSize(2);
+      assertThat(out.get(0).count()).isEqualTo(1);
+      assertThat(out.get(1).count()).isZero();
+      assertThat(out)
+          .allSatisfy(
+              m -> {
+                assertThat(m.key()).isEqualTo("a|eu|u1");
+                assertThat(m.tenant()).isEqualTo("a");
+                assertThat(m.region()).isEqualTo("eu");
+                assertThat(m.unit()).isEqualTo("u1");
+              });
+    }
+  }
+
+  @Test
+  void onTimeOutOfOrderEventIsCounted() throws Exception {
+    try (var h = harness()) {
+      h.processElement(ev(MON + 30_000, 100, true), MON + 30_000);
+      h.processElement(ev(MON + 10_000, 100, true), MON + 10_000);
+      h.processWatermark(MON + 59_998);
+      assertThat(h.extractOutputValues()).isEmpty();
+      h.processWatermark(MON + 59_999);
+
+      List<MinuteAgg> out = h.extractOutputValues();
+      assertThat(out).hasSize(1);
+      assertThat(out.get(0).count()).isEqualTo(2);
+      assertThat(h.getSideOutput(MinuteAggregator.LATE)).isNull();
     }
   }
 }
