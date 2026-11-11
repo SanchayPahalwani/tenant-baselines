@@ -150,16 +150,20 @@ def post_due(
     return len(entries)
 
 
-def main() -> None:
-    from confluent_kafka import Consumer
-
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="Forward live.alerts events to Alertmanager")
     ap.add_argument("--bootstrap", default="localhost:9092")
     ap.add_argument("--topic", default="live.alerts")
     ap.add_argument("--alertmanager", default="http://alertmanager:9093")
     ap.add_argument("--live-detector", default="seasonal")
     ap.add_argument("--live-setting", default="k4")
-    args = ap.parse_args()
+    return ap
+
+
+def main() -> None:
+    from confluent_kafka import Consumer
+
+    args = build_parser().parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
     state = ForwarderState(args.live_detector, args.live_setting)

@@ -2,7 +2,7 @@ import logging
 
 import httpx
 
-from tenant_baselines.forwarder import ForwarderState, post_due, to_am_alert
+from tenant_baselines.forwarder import ForwarderState, build_parser, post_due, to_am_alert
 
 
 def event(**over) -> dict:
@@ -213,3 +213,43 @@ def test_labels_and_rfc3339():
     assert set(a["annotations"]) == {"summary", "value", "reference"}
     assert "endsAt" not in a
     assert to_am_alert(event(scope="region", region="eu"))["labels"]["alertname"] == "RegionAnomaly"
+
+
+def test_build_parser_defaults():
+    args = build_parser().parse_args([])
+    assert args.bootstrap == "localhost:9092"
+    assert args.topic == "live.alerts"
+    assert args.alertmanager == "http://alertmanager:9093"
+    assert args.live_detector == "seasonal"
+    assert args.live_setting == "k4"
+
+
+def test_absorbed_event_is_ignored():
+    s = new_state()
+    s.apply(event(alert_id="unknown", state="absorbed", reason="regional:r1"), now_s=1000)
+    assert s.due(1000) == []
+    s.apply(event(), now_s=1000)
+    s.apply(event(state="absorbed", reason="regional:r1", event_time_ms=240_000), now_s=1001)
+    out = s.due(1001)
+    assert len(out) == 1
+    assert "endsAt" not in out[0]
+
+
+def test_regional_alert_entry():
+    e = event(
+        scope="region",
+        key="eu-central",
+        tenant="",
+        unit="",
+        region="eu-central",
+    )
+    entry = to_am_alert(e)
+    assert entry["labels"] == {
+        "alertname": "RegionAnomaly",
+        "scope": "region",
+        "region": "eu-central",
+        "signal": "error_rate",
+        "detector": "global_static",
+        "setting": "default",
+    }
+    assert entry["annotations"]["summary"] == "error_rate for eu-central / all units"

@@ -383,7 +383,7 @@ One MiniCluster test runs the full job on a tiny in-memory dataset.
 - eval matching and metrics on hand-made fixtures;
 - the forwarder's re-send, resolve, stale-skip and restart logic against a fake Alertmanager.
 
-**CI.** The GitHub Actions workflow has two jobs: `mvn verify` on Temurin 17, and `uv sync` + ruff + pytest. Nothing is pushed, so it can't run on GitHub yet. `make ci` runs the same commands locally in the same containers, and every milestone report says CI itself hasn't run. `make smoke` (a full compose run) is local only.
+**CI.** The GitHub Actions workflow has three jobs: `mvn verify` on Temurin 17, `uv sync` + ruff + pytest, and an Alertmanager config check with `amtool`. *(Amended 2026-11-11, builder's call, for milestone 3.)* Nothing is pushed, so it can't run on GitHub yet. `make ci` runs the same commands locally in the same containers, and every milestone report says CI itself hasn't run. `make smoke` (a full compose run) is local only.
 
 ## 8. Milestones
 

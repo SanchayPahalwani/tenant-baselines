@@ -9,7 +9,7 @@ CI_PY_IMAGE = tenant-baselines-ci-py
 # demo and smoke depend on their prerequisites running in order.
 .NOTPARALLEL:
 
-.PHONY: jar test-java test-py lint-py test ci up down reset submit demo smoke logs
+.PHONY: jar test-java test-py lint-py check-am test ci up down reset submit demo smoke logs
 
 jar:
 	$(MVN) clean package
@@ -23,6 +23,9 @@ test-py:
 lint-py:
 	cd py && uv run ruff check . && uv run ruff format --check .
 
+check-am:
+	scripts/check-am.sh
+
 test: test-java test-py lint-py
 
 ci:
@@ -33,6 +36,7 @@ ci:
 	docker run --rm -v "$(CURDIR)":/src:ro -v tb-uv-cache:/root/.cache/uv $(CI_PY_IMAGE) \
 		sh -c '$(CI_COPY) && cd /w/py && uv sync && uv run ruff check . \
 		&& uv run ruff format --check . && uv run pytest -q'
+	scripts/check-am.sh
 
 up:
 	docker compose up -d --build && scripts/wait-ready.sh
