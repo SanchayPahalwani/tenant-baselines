@@ -17,6 +17,7 @@ class Tenant:
     home_region: str
     tz_offset_h: int
     peak_rpm: float
+    steady: bool = False
 
 
 @dataclass(frozen=True)
@@ -57,6 +58,13 @@ _OFFSET_TENANT_TZ_H = -8
 _DEDICATED_TENANTS = (0, 1)
 # Tenants that also send traffic to the first shared unit of another region.
 _CROSS_REGION_TENANTS = (0, 3)
+# Appended after the random part, so the first eight tenants and their keys do not change.
+# Small tenants with a flat traffic profile, so the region always has 3 active tenants.
+_STEADY_REGION = "ap-southeast"
+_STEADY_TZ_H = 8
+_STEADY_PEAKS = (("t09", 60.0), ("t10", 30.0), ("t11", 30.0))
+_STEADY_DEDICATED = "t09"
+_STEADY_UNIT_LATENCY_MS = 55.0
 
 
 def build_world(name: str, seed: int) -> World:
@@ -100,4 +108,14 @@ def build_world(name: str, seed: int) -> World:
             if other.name == t.home_region:
                 other = regions[(i + 2) % len(regions)]
             keys.append(Key(t.name, other.name, f"{other.name}-s1"))
+
+    for name_, peak in _STEADY_PEAKS:
+        tenants.append(Tenant(name_, _STEADY_REGION, _STEADY_TZ_H, peak, steady=True))
+    dedicated_unit = f"{_STEADY_REGION}-d-{_STEADY_DEDICATED}"
+    units.append(Unit(dedicated_unit, _STEADY_REGION, _STEADY_DEDICATED, _STEADY_UNIT_LATENCY_MS))
+    shared = f"{_STEADY_REGION}-s1"
+    keys.append(Key("t09", _STEADY_REGION, shared))
+    keys.append(Key("t09", _STEADY_REGION, dedicated_unit))
+    keys.append(Key("t10", _STEADY_REGION, shared))
+    keys.append(Key("t11", _STEADY_REGION, shared))
     return World(regions, tuple(tenants), tuple(units), tuple(keys))

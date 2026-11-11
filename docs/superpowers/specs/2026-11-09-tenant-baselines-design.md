@@ -238,7 +238,7 @@ aggregate generator (Python, eval) ─▶ <run>.aggregates-in ─┘
 - The generator runs **one continuous timeline:** it starts 3 weeks back (enough to warm the baselines), produces at full speed until it reaches the wall clock, then slows to real time. The script shows progress and should warm up in about 3 minutes.
 - With no seam between history and live traffic, there's no fake volume drop at the switch.
 - The demo's static thresholds come from the same script run on the demo history.
-- After catch-up it injects a scripted sequence: a dedicated-unit tenant drop, then a regional error spike. It prints the URLs and what to watch for.
+- After catch-up it injects a scripted sequence: a dedicated-unit tenant drop; an error burst on one tenant's dedicated unit, which pages and drains the unit; then an error spike across that tenant's region, which forms one regional alert. It prints the URLs and what to watch for. The demo world has three small tenants with a flat traffic profile in that region, so a regional alert can form at any hour; without them no region has three active tenants on nights and weekends. *(Amended 2026-11-11, builder's call, for milestone 3.)*
 
 ## 5. Eval
 

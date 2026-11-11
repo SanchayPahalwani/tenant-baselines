@@ -38,6 +38,8 @@ def local_time(t_ms: int, tz_offset_h: int) -> tuple[float, int]:
 
 
 def load(tenant: Tenant, t_ms: int) -> float:
+    if tenant.steady:
+        return 1.0
     hour, weekday = local_time(t_ms, tenant.tz_offset_h)
     return shape(hour, weekday)
 

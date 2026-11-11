@@ -66,42 +66,45 @@ def _key_rates(world: World, t_ms: int) -> list[tuple[Key, float]]:
 
 
 def pick_drop_key(world: World, t_ms: int) -> Key:
-    """The key on a dedicated unit with the highest rate at t_ms (first in world order on a tie)."""
+    """The key of a tenant that is not steady, on a dedicated unit, with the highest rate at t_ms.
+
+    The drop shows a seasonal volume baseline, and it must not land on the burst key.
+    Ties go to the first key in world order.
+    """
     dedicated = {u.name for u in world.units if u.dedicated_for is not None}
-    candidates = [(k, r) for k, r in _key_rates(world, t_ms) if k.unit in dedicated]
+    steady = {t.name for t in world.tenants if t.steady}
+    candidates = [
+        (k, r) for k, r in _key_rates(world, t_ms) if k.unit in dedicated and k.tenant not in steady
+    ]
     return max(candidates, key=lambda kr: kr[1])[0]
 
 
-def pick_spike_region(world: World, t_ms: int) -> str:
-    """The region with the most keys at 25 requests/min or more at t_ms (first on a tie)."""
-    busy: dict[str, int] = {r.name: 0 for r in world.regions}
-    for k, r in _key_rates(world, t_ms):
-        if r >= 25:
-            busy[k.region] += 1
-    return max(busy, key=lambda name: busy[name])
+def pick_burst_key(world: World) -> Key:
+    """The first key in world order on a dedicated unit of a steady tenant."""
+    steady = {t.name for t in world.tenants if t.steady}
+    dedicated = {u.name for u in world.units if u.dedicated_for in steady}
+    return next(k for k in world.keys if k.unit in dedicated)
 
 
 def demo_script(world: World, t0_ms: int) -> list[Incident]:
-    """A traffic drop on a dedicated unit, then an error spike in one region.
+    """A tenant drop, an error burst on one steady tenant's dedicated unit, then a regional spike.
 
-    Both targets are picked for the time they start, so each is detectable
-    whenever the demo is run.
+    The burst pages as a tenant alert and drains the unit. The spike covers the burst key's
+    region, so the other tenants' alerts join it into one regional alert.
     """
-    drop_start = t0_ms + 2 * 60_000
-    spike_start = t0_ms + 14 * 60_000
+    minute = 60_000
+    drop_start = t0_ms + 2 * minute
+    burst = pick_burst_key(world)
     return [
         Incident(
             "volume_mult",
             drop_start,
-            t0_ms + 12 * 60_000,
+            t0_ms + 12 * minute,
             0.1,
             key=pick_drop_key(world, drop_start).key,
         ),
+        Incident("error_spike", t0_ms + 3 * minute, t0_ms + 21 * minute, 0.20, key=burst.key),
         Incident(
-            "error_spike",
-            spike_start,
-            t0_ms + 24 * 60_000,
-            0.20,
-            region=pick_spike_region(world, spike_start),
+            "error_spike", t0_ms + 11 * minute, t0_ms + 21 * minute, 0.20, region=burst.region
         ),
     ]

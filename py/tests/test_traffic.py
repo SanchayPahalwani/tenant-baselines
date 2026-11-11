@@ -35,3 +35,11 @@ def test_key_rate_splits_tenant_rate():
     t = Tenant("tx", "us-east", 0, 120.0)
     wed_noon = int(datetime(2026, 11, 11, 12, tzinfo=UTC).timestamp() * 1000)
     assert key_rate_rpm(t, 3, wed_noon) == 40.0
+
+
+def test_steady_tenant_has_flat_load():
+    t09 = Tenant("t09", "ap-southeast", 8, 60.0, steady=True)
+    noon = int(datetime(2026, 11, 10, 4, tzinfo=UTC).timestamp() * 1000)  # Tue 12:00 local
+    night = int(datetime(2026, 11, 7, 19, tzinfo=UTC).timestamp() * 1000)  # Sun 03:00 local
+    assert key_rate_rpm(t09, 2, noon) == 30.0
+    assert key_rate_rpm(t09, 2, night) == 30.0

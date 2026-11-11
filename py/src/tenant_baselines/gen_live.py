@@ -199,15 +199,18 @@ def main() -> None:
                 if args.script == "demo":
                     script = demo_script(world, next_ms)
                     gen.set_incidents(script)
-                    drop, spike = script
+                    drop, burst, spike = script
                     log.info(
                         "caught up after %.0f s, %d events; demo script: volume x0.1 on %s "
-                        "%s-%s UTC, error spike in %s %s-%s UTC",
+                        "%s-%s UTC, error burst on %s %s-%s UTC, error spike in %s %s-%s UTC",
                         time.monotonic() - history_start,
                         history_events,
                         drop.key,
                         _fmt_utc(drop.start_ms),
                         _fmt_utc(drop.end_ms),
+                        burst.key,
+                        _fmt_utc(burst.start_ms),
+                        _fmt_utc(burst.end_ms),
                         spike.region,
                         _fmt_utc(spike.start_ms),
                         _fmt_utc(spike.end_ms),
