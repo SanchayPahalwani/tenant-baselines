@@ -142,6 +142,7 @@ def test_detected_any_and_expected():
     assert r.false_pages == 0 and r.matched_pages == 1
     assert r.scenarios[0]["delay_min"] is None
     assert r.scenarios[0]["delay_any_min"] == 0.0
+    assert r.median_delay_min is None and r.delays_by_type == {}
 
 
 def test_delay_uses_event_time():
@@ -248,9 +249,8 @@ def test_nearest_rank():
 
 
 def test_summarise_end_to_end():
-    s = scen()
     rows = [
-        row(),
+        *_bursts(4, "k4")[1],
         row(
             alert_id="b",
             starts_at_ms=W5 + M,
@@ -268,7 +268,7 @@ def test_summarise_end_to_end():
         ),  # fmt: skip
         row(alert_id="late", event_time_ms=W5_END + 1),
     ]
-    out = summarise(rows, [s], {"replay_end_ms": W5_END})
+    out = summarise(rows, TEN, {"replay_end_ms": W5_END})
     assert out["synthetic"] is True
     assert out["normalise"] == {"duplicates": 0, "clipped": 1}
     assert out["open_alerts"] == 1
@@ -278,3 +278,156 @@ def test_summarise_end_to_end():
     assert out["selection"]["seasonal"]["branch"] == "highest_recall"
     sel = out["selection"]["seasonal"]["setting"]
     assert out["selected_week5"]["seasonal"]["setting"] == sel
+
+
+def _bursts(week, hit_setting):
+    start, _ = week_range(week)
+    out, rows = [], []
+    for i in range(10):
+        key = f"t{i}|us-east|s1"
+        s0 = start + (100 + 200 * i) * MINUTE_MS
+        out.append(
+            Scenario(
+                f"w{week}-{i}",
+                "error_burst",
+                week,
+                s0,
+                s0 + 20 * M,
+                (key,),
+                None,
+                "error_rate",
+                True,
+                True,
+                "",
+            )
+        )
+        if i == 0:
+            rows.append(
+                row(
+                    alert_id=f"{week}{i}",
+                    setting=hit_setting,
+                    key=key,
+                    starts_at_ms=s0,
+                    event_time_ms=s0,
+                )
+            )
+    return out, rows
+
+
+TEN = _bursts(4, "k4")[0] + _bursts(5, "k4")[0]
+
+
+def test_open_alerts_only_resolved_closes():
+    def n(rows):
+        return summarise(rows, TEN, {"replay_end_ms": W5_END})["open_alerts"]
+
+    t = START
+    assert (
+        n(
+            [
+                row(alert_id="x", state="absorbed", event_time_ms=t),
+                row(alert_id="x", event_time_ms=t + M),
+            ]
+        )
+        == 1
+    )
+    assert n([row(alert_id="x"), row(alert_id="x", state="resolved", event_time_ms=t + M)]) == 0
+    assert n([row(alert_id="x", state="absorbed")]) == 0
+    assert n([row(alert_id="x"), row(alert_id="x", state="absorbed", event_time_ms=t + M)]) == 0
+
+
+def test_selection_is_made_on_week_4():
+    s4, r4 = _bursts(4, "k3")
+    s5, r5 = _bursts(5, "k6")
+    out = summarise(r4 + r5, s4 + s5, {"replay_end_ms": W5_END})
+    assert out["selection"]["seasonal"] == {"setting": "k3", "branch": "highest_recall"}
+    assert out["selected_week5"]["seasonal"]["setting"] == "k3"
+    assert out["selected_week5"]["seasonal"]["detected_expected"] == 0
+    assert out["weeks"]["5"]["seasonal"]["k6"]["detected_expected"] == 1
+
+
+def test_matched_page_in_overlapping_scenarios_is_not_false():
+    burst = scen(id="burst")
+    other = scen(
+        id="lat",
+        type="offhours_latency",
+        keys=(B,),
+        signal="latency_p95",
+        start=START + 5 * M,
+        end=START + 25 * M,
+    )
+    monday = scen(
+        id="mon",
+        type="monday_peak",
+        keys=(A, B),
+        should=False,
+        start=START - 60 * M,
+        end=START + 180 * M,
+    )
+    rows = [
+        row(alert_id="1"),
+        row(alert_id="2", key=B, event_time_ms=START + 50 * M, starts_at_ms=START + 50 * M),
+        row(
+            alert_id="3",
+            scope="region",
+            key="us-east",
+            tenant="",
+            unit="",
+            event_time_ms=START + 10 * M,
+            starts_at_ms=START + 10 * M,
+        ),
+        row(
+            alert_id="4",
+            key=C,
+            region="eu-central",
+            event_time_ms=START + 7 * M,
+            starts_at_ms=START + 7 * M,
+        ),
+        row(alert_id="1", state="resolved", event_time_ms=START + 40 * M),
+        row(alert_id="3", state="resolved", event_time_ms=START + 50 * M),
+        row(alert_id="9", state="absorbed", key=B),
+    ]
+    got = pages(rows, W4, W4_END)
+    r = score(got, [burst, other, monday], "seasonal", "k4", 4)
+    assert (r.pages, r.matched_pages, r.false_pages) == (4, 2, 2)
+    by_id = {e["id"]: e for e in r.scenarios}
+    assert by_id["mon"]["false_pages_during"] == 1  # only the page on B at +50 min
+    assert by_id["mon"]["pages"] == 3
+    assert by_id["burst"]["pages"] == 2 and by_id["lat"]["pages"] == 1
+    assert by_id["lat"]["detected_any"] and not by_id["lat"]["detected_expected"]
+    assert r.refires == 0 and by_id["mon"]["refires"] == 0
+
+
+def test_other_signal_on_same_key_is_not_a_refire():
+    ps = [page(), page(signal="latency_p95", event_time_ms=START + M, alert_id="2")]
+    assert score(ps, [scen()], "seasonal", "k4", 4).refires == 0
+    ps = [page(), page(event_time_ms=START + M, alert_id="2")]
+    assert score(ps, [scen()], "seasonal", "k4", 4).refires == 1
+
+
+def test_clip_boundary_is_inclusive():
+    out, counts = normalise(
+        [row(event_time_ms=W5_END), row(alert_id="b", event_time_ms=W5_END + 1)], W5_END
+    )
+    assert [r["alert_id"] for r in out] == ["a1"] and counts["clipped"] == 1
+
+
+def test_regional_page_during_a_dip_is_regional_formed():
+    dip = scen(id="d", type="holiday_dip", should=False)
+    r = score([page(scope="region", key="us-east")], [dip], "seasonal", "k4", 4)
+    assert r.scenarios[0]["regional_formed"] is True
+
+
+def test_select_validates_its_input():
+    k = FAMILIES["seasonal"]
+    good = [sc(s, 8, 1.0, 6) for s in k]
+    other_week = sc(k[0], 8, 1.0, 6)
+    other_week.week = 5
+    with pytest.raises(ValueError):
+        select([other_week, *good[1:]])
+    with pytest.raises(ValueError):
+        select([sc(k[0], 8, 1.0, 6, detector="per_key_static"), *good[1:]])
+    short = sc(k[0], 8, 1.0, 6)
+    short.n_should_page = 9
+    with pytest.raises(ValueError):
+        select([short, *good[1:]])

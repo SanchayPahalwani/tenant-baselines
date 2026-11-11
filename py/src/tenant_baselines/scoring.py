@@ -23,7 +23,6 @@ _DAYS = 7
 _Z = 1.959963984540054
 _DROPPED = ("emitted_at_ms", "run_id")
 _ORDER = ("event_time_ms", "region", "detector", "setting", "signal", "key", "state", "alert_id")
-_CLOSED = ("resolved", "absorbed")
 
 
 def normalise(rows: Iterable[dict], replay_end_ms: int) -> tuple[list[dict], dict]:
@@ -128,7 +127,9 @@ class SettingScore:
     matched_pages: int
     false_pages: int
     false_pages_per_day: float
-    refires: int
+    refires: (
+        int  # scenario-page pairs: a regional re-fire inside two overlapping scenarios counts twice
+    )
     pages_per_detected: float | None
     median_delay_min: float | None
     delays_by_type: dict[str, list[float]] = field(default_factory=dict)
@@ -172,6 +173,7 @@ def score(
                     "pages": len(hits),
                     "regional_formed": any(p.scope == "region" for p in hits),
                     "false_pages_during": sum(1 for i in false_idx if matches(ps[i], s)),
+                    "refires": 0,
                 }
             )
             continue
@@ -230,10 +232,15 @@ class Selection:
 
 
 _TARGET = 8
+_SHOULD_PAGE = 10
 
 
 def select(scores: list[SettingScore]) -> Selection:
     """Spec 5.6 on one family's week-4 scores, by expected-signal recall."""
+    if len({s.detector for s in scores}) != 1 or len({s.week for s in scores}) != 1:
+        raise ValueError("select needs scores of one detector and one week")
+    if any(s.n_should_page != _SHOULD_PAGE for s in scores):
+        raise ValueError(f"select needs {_SHOULD_PAGE} should-page scenarios in each score")
     order = FAMILIES[scores[0].detector]
 
     def tie_key(s: SettingScore):
@@ -248,9 +255,10 @@ def select(scores: list[SettingScore]) -> Selection:
 
 
 def _open_alerts(rows: list[dict]) -> int:
-    fired = {r["alert_id"] for r in rows if r["state"] == "firing"}
-    closed = {r["alert_id"] for r in rows if r["state"] in _CLOSED}
-    return len(fired - closed)
+    """Alerts whose last row, in normal-form order, is `firing`. Only `resolved` closes one:
+    an absorbed alert is held again and can fire later under the same id."""
+    last = {r["alert_id"]: r["state"] for r in rows}
+    return sum(1 for state in last.values() if state == "firing")
 
 
 def summarise(rows: Iterable[dict], scenarios: list[Scenario], meta: dict) -> dict:
