@@ -58,7 +58,7 @@ class PipelineTest {
   }
 
   private static List<ThresholdSet> thresholds() throws Exception {
-    try (InputStream in = PipelineTest.class.getResourceAsStream("/thresholds-demo.json")) {
+    try (InputStream in = PipelineTest.class.getResourceAsStream("/thresholds-test.json")) {
       return ThresholdsFile.load(in);
     }
   }

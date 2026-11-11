@@ -11,7 +11,10 @@ public final class EventJson {
 
   private EventJson() {}
 
-  /** Returns null for malformed JSON, missing fields or wrong types; never throws. */
+  /**
+   * Returns null for malformed JSON, missing fields, wrong types or a '|' in tn, rg or un (the
+   * key separator); never throws.
+   */
   public static Event parse(byte[] json) {
     try {
       JsonNode n = MAPPER.readTree(json);
@@ -30,6 +33,11 @@ public final class EventJson {
           || un == null || !un.isTextual()
           || lat == null || !lat.isNumber()
           || ok == null || !ok.isBoolean()) {
+        return null;
+      }
+      if (tn.asText().indexOf('|') >= 0
+          || rg.asText().indexOf('|') >= 0
+          || un.asText().indexOf('|') >= 0) {
         return null;
       }
       return new Event(

@@ -33,4 +33,15 @@ class EventJsonTest {
   void returnsNullOnBadInput(String json) {
     assertThat(EventJson.parse(json.getBytes(StandardCharsets.UTF_8))).isNull();
   }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "{\"ts\":1,\"tn\":\"a|b\",\"rg\":\"r\",\"un\":\"u\",\"lat\":1.0,\"ok\":true}",
+        "{\"ts\":1,\"tn\":\"t\",\"rg\":\"e|u\",\"un\":\"u\",\"lat\":1.0,\"ok\":true}",
+        "{\"ts\":1,\"tn\":\"t\",\"rg\":\"r\",\"un\":\"u|1\",\"lat\":1.0,\"ok\":true}"
+      })
+  void rejectsPipeInDimensions(String json) {
+    assertThat(EventJson.parse(json.getBytes(StandardCharsets.UTF_8))).isNull();
+  }
 }

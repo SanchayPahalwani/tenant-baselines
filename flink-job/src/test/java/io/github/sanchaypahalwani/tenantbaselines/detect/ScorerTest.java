@@ -20,7 +20,7 @@ class ScorerTest {
   private static final String KEY = "a|eu|u1";
 
   private static List<ThresholdSet> thresholds() throws Exception {
-    try (InputStream in = ScorerTest.class.getResourceAsStream("/thresholds-demo.json")) {
+    try (InputStream in = ScorerTest.class.getResourceAsStream("/thresholds-test.json")) {
       return ThresholdsFile.load(in);
     }
   }

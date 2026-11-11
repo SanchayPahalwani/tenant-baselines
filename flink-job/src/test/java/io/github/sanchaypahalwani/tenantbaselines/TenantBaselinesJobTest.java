@@ -15,7 +15,7 @@ class TenantBaselinesJobTest {
 
   private static List<ThresholdSet> thresholds() throws Exception {
     try (InputStream in =
-        TenantBaselinesJobTest.class.getResourceAsStream("/thresholds-demo.json")) {
+        TenantBaselinesJobTest.class.getResourceAsStream("/thresholds-test.json")) {
       return ThresholdsFile.load(in);
     }
   }

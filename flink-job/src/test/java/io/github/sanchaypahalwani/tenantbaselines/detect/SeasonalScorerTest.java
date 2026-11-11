@@ -51,7 +51,7 @@ class SeasonalScorerTest {
   }
 
   static List<ThresholdSet> demoThresholds() throws Exception {
-    try (InputStream in = SeasonalScorerTest.class.getResourceAsStream("/thresholds-demo.json")) {
+    try (InputStream in = SeasonalScorerTest.class.getResourceAsStream("/thresholds-test.json")) {
       return ThresholdsFile.load(in);
     }
   }

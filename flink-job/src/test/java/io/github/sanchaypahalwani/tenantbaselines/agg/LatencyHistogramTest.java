@@ -47,4 +47,24 @@ class LatencyHistogramTest {
   void p95OfEmptyIsNull() {
     assertThat(LatencyHistogram.p95(new int[LatencyHistogram.BUCKETS], 0)).isNull();
   }
+
+  @Test
+  void policyForOddInputs() {
+    assertThat(LatencyHistogram.bucketOf(-1.0)).isZero();
+    assertThat(LatencyHistogram.bucketOf(Double.NaN)).isZero();
+    int[] counts = new int[LatencyHistogram.BUCKETS];
+    counts[10] = 5;
+    assertThat(LatencyHistogram.p95(counts, 100))
+        .isEqualTo(LatencyHistogram.representative(LatencyHistogram.BUCKETS - 1));
+  }
+
+  @Test
+  void rankIsTheCeilingOfNinetyFivePercent() {
+    int[] counts = new int[LatencyHistogram.BUCKETS];
+    counts[10] = 19;
+    counts[50] = 1;
+    assertThat(LatencyHistogram.p95(counts, 20)).isEqualTo(LatencyHistogram.representative(10));
+    counts[50] = 2;
+    assertThat(LatencyHistogram.p95(counts, 21)).isEqualTo(LatencyHistogram.representative(50));
+  }
 }
