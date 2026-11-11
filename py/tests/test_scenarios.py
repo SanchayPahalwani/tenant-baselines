@@ -77,6 +77,29 @@ def test_ten_should_page_scenarios_per_scored_week():
         assert others == {"launch_surge", "holiday_dip", "monday_peak"}
 
 
+# Copied from the brief's table: (expected_signal, should_page).
+LABELS = {
+    "regional_outage": ("error_rate", True),
+    "drop_work": ("volume_5m", True),
+    "drop_night": ("volume_5m", True),
+    "latency_creep": ("latency_p95", True),
+    "offhours_latency": ("latency_p95", True),
+    "error_burst": ("error_rate", True),
+    "cold_start_burst": ("error_rate", True),
+    "launch_surge": (None, False),
+    "holiday_dip": (None, False),
+    "monday_peak": (None, False),
+}
+
+
+def test_label_fields_are_the_tables():
+    sc = placed()
+    assert {s.type for s in sc} == set(LABELS)
+    for s in sc:
+        assert (s.expected_signal, s.should_page) == LABELS[s.type], s.id
+        assert s.scored == (week_of(s) in (4, 5)), s.id
+
+
 def test_fit_weeks_have_two_labelled_incidents_each():
     for week in (1, 2, 3):
         mine = [s for s in placed() if week_of(s) == week]
@@ -278,7 +301,12 @@ def test_placement_succeeds_on_twenty_seeds_at_every_amplitude(amplitude):
     for seed in range(900_000, 900_020):
         world = build_world("eval", seed)
         r = rates(world, TrafficParams(amplitude=amplitude), seed)
-        assert len(place(world, r, seed)) > 0
+        sc = place(world, r, seed)
+        for week in (4, 5):
+            pages = [s for s in sc if s.week == week and s.should_page]
+            assert len(pages) == 10
+            counts = {t: sum(1 for s in pages if s.type == t) for t in SHOULD_PAGE_COUNTS}
+            assert counts == SHOULD_PAGE_COUNTS, (seed, amplitude, week)
 
 
 def test_placement_succeeds_on_twenty_seeds_in_the_paths_world():
@@ -293,3 +321,21 @@ def test_effects_shape():
     eff = apply([], world, 100)
     assert eff.volume.shape == (len(world.keys), 100)
     assert np.all(eff.volume == 1.0) and np.all(eff.error_add == 0.0)
+
+
+def test_write_labels_marks_synthetic_and_requires_meta(tmp_path):
+    meta = {
+        "seed": 1,
+        "amplitude": 6.0,
+        "world": "eval",
+        "epoch_ms": EPOCH_MS,
+        "replay_end_ms": EPOCH_MS + 1,
+    }
+    path = tmp_path / "l.json"
+    write_labels(path, placed(), meta)
+    assert read_labels(path)[1]["data"] == "synthetic"
+    for key in meta:
+        with pytest.raises(ValueError, match=key):
+            write_labels(path, placed(), {k: v for k, v in meta.items() if k != key})
+    with pytest.raises(ValueError, match="synthetic"):
+        write_labels(path, placed(), {**meta, "data": "real"})

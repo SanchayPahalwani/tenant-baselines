@@ -384,9 +384,17 @@ def _apply_one(eff: Effects, kind: str, r: int, a: int, b: int) -> None:
         eff.volume[r, a:b] *= _HOLIDAY
 
 
+_META_KEYS = ("seed", "amplitude", "world", "epoch_ms", "replay_end_ms")
+
+
 def write_labels(path, scenarios: list[Scenario], meta: dict) -> None:
     """Write the labels as JSON. The meta always carries the text "synthetic" under "data"."""
-    meta = {"data": "synthetic", **meta}
+    missing = [k for k in _META_KEYS if k not in meta]
+    if missing:
+        raise ValueError(f"labels meta is missing {missing}")
+    if meta.get("data", "synthetic") != "synthetic":
+        raise ValueError(f"labels meta data must be 'synthetic': {meta['data']!r}")
+    meta = {**meta, "data": "synthetic"}
     doc = {"meta": meta, "scenarios": [asdict(s) for s in scenarios]}
     with open(path, "wb") as f:
         f.write(orjson.dumps(doc, option=orjson.OPT_INDENT_2))
