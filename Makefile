@@ -9,7 +9,12 @@ CI_PY_IMAGE = tenant-baselines-ci-py
 # demo and smoke depend on their prerequisites running in order.
 .NOTPARALLEL:
 
-.PHONY: jar test-java test-py lint-py thresholds-demo check-am test ci up down reset submit demo smoke logs
+.PHONY: jar test-java test-py lint-py thresholds-demo check-am test ci up down reset submit demo smoke logs \
+	eval-dev
+
+# The dev seed and amplitude of `make eval-dev`.
+SEED ?= 7
+AMP ?= 6
 
 jar:
 	$(MVN) clean package
@@ -42,8 +47,9 @@ ci:
 		&& uv run ruff format --check . && uv run pytest -q'
 	scripts/check-am.sh
 
+# data/ is the jobmanager's read-only eval mount; created here so Docker does not create it.
 up:
-	docker compose up -d --build && scripts/wait-ready.sh
+	mkdir -p data && docker compose up -d --build && scripts/wait-ready.sh
 
 # The demo profile is included so the generator container goes too.
 down:
@@ -66,3 +72,7 @@ smoke: demo
 
 logs:
 	docker compose --profile demo logs -f --tail=100
+
+# One dev run end to end (synthetic data): data/eval/<run_id>/summary.json.
+eval-dev: jar up
+	cd py && uv run python -m tenant_baselines.eval_run --kind dev --seed $(SEED) --amplitude $(AMP)

@@ -1,6 +1,7 @@
 # Local stack for the tenant-baselines demo. Memory limits total 8576m and fit a
-# 10 GB Docker VM. Data lives in named volumes; only config, scripts and the job
-# project are bind-mounted, read-only. Published ports listen on loopback only.
+# 10 GB Docker VM. Data lives in named volumes; only config, scripts, the job
+# project and the eval runs' input files (data/) are bind-mounted, read-only.
+# Published ports listen on loopback only.
 
 # Three retained checkpoints, 30 s apart: the oldest is at least 60 s old, which
 # scripts/submit-job.sh --from-checkpoint relies on.
@@ -95,6 +96,9 @@ services:
       - ./flink-job:/opt/tb-job:ro
       - ./infra/flink:/opt/tb-config:ro
       - ./scripts:/opt/tb-scripts:ro
+      # The eval runs' files (thresholds) from the host; `make up` creates data/ first, so
+      # Docker does not create it.
+      - ./data:/opt/tb-data:ro
     depends_on:
       flink-data-init:
         condition: service_completed_successfully
