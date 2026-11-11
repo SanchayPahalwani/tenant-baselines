@@ -80,6 +80,11 @@ class ScorerTest {
     return ThresholdsFile.load(new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8)));
   }
 
+  /** Two global_static/p99 sets with a gap: [0, MON + 10 min) and [MON + 12 min, open). */
+  private static List<ThresholdSet> setsWithAGap() throws Exception {
+    return load(errorRateSet(0, ms(MON_MINUTE + 10)), errorRateSet(ms(MON_MINUTE + 12), null));
+  }
+
   /** The start of minute number m. */
   private static long ms(int m) {
     return m * 60_000L;
@@ -211,6 +216,47 @@ class ScorerTest {
       assertThat(h.extractOutputValues())
           .extracting(AlertEvent::setting, AlertEvent::signal, AlertEvent::state)
           .containsExactly(tuple("p99", "error_rate", "firing"));
+    }
+  }
+
+  @Test
+  void streakDoesNotCrossAGapBetweenSets() throws Exception {
+    try (var h = harness(setsWithAGap())) {
+      feed(h, MON_MINUTE, MON_MINUTE + 7, 100, 0);
+      // Two breaches end the first set. Nothing judges the gap's minutes.
+      feed(h, MON_MINUTE + 8, MON_MINUTE + 13, 100, 20);
+      assertThat(h.extractOutputValues()).isEmpty();
+
+      // The second set's third breach (FIRE_AFTER is 3) fires, at MON + 14 min.
+      feed(h, MON_MINUTE + 14, MON_MINUTE + 14, 100, 20);
+      assertThat(h.extractOutputValues())
+          .extracting(AlertEvent::state, AlertEvent::startsAtMs, AlertEvent::eventTimeMs)
+          .containsExactly(tuple("firing", ms(MON_MINUTE + 12), ms(MON_MINUTE + 15)));
+    }
+  }
+
+  @Test
+  void alertInTheSetAfterAGapIsANewAlert() throws Exception {
+    try (var h = harness(setsWithAGap())) {
+      feed(h, MON_MINUTE, MON_MINUTE + 16, 100, 20);
+
+      List<AlertEvent> out = h.extractOutputValues();
+      assertThat(out)
+          .extracting(
+              AlertEvent::state,
+              AlertEvent::startsAtMs,
+              AlertEvent::eventTimeMs,
+              AlertEvent::reason)
+          .containsExactly(
+              tuple("firing", ms(MON_MINUTE), ms(MON_MINUTE + 3), null),
+              tuple("resolved", ms(MON_MINUTE), ms(MON_MINUTE + 11), "thresholds_expired"),
+              tuple("firing", ms(MON_MINUTE + 12), ms(MON_MINUTE + 15), null));
+      assertThat(out.get(1).alertId()).isEqualTo(out.get(0).alertId());
+      assertThat(out.get(2).alertId())
+          .isEqualTo(
+              AlertIds.of(
+                  "global_static", "p99", "tenant", KEY, "error_rate", ms(MON_MINUTE + 12)))
+          .isNotEqualTo(out.get(0).alertId());
     }
   }
 

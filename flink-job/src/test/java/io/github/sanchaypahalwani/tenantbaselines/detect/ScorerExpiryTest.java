@@ -218,6 +218,20 @@ class ScorerExpiryTest {
   }
 
   @Test
+  void expiresAtTheFinalWatermarkWhenDueIsTheReplayEnd() throws Exception {
+    try (var h = harness(EXPIRES_MS)) {
+      errorSpike(h);
+
+      h.watermark(EXPIRES_MS - 1);
+      h.watermark(Long.MAX_VALUE);
+
+      assertThat(expired(h))
+          .extracting(AlertEvent::state, AlertEvent::eventTimeMs)
+          .containsExactly(tuple("resolved", EXPIRES_MS));
+    }
+  }
+
+  @Test
   void doesNotExpireAtFinalWatermarkPastReplayEnd() throws Exception {
     try (var h = harness(EXPIRES_MS - 1)) {
       errorSpike(h);

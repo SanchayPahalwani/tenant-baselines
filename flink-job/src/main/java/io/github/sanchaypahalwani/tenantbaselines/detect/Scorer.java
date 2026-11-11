@@ -40,7 +40,8 @@ import org.apache.flink.util.OutputTag;
  * firing alerts first gets a resolved event with reason "expired".
  *
  * <p>When a threshold set's range ends and no set of the same detector and setting takes over,
- * each of its firing alerts gets a resolved event with reason "thresholds_expired".
+ * each of its firing alerts gets a resolved event with reason "thresholds_expired", and the set's
+ * machines are dropped.
  */
 public class Scorer
     extends KeyedBroadcastProcessFunction<String, MinuteAgg, PopulationBaseline, AlertEvent> {
@@ -233,7 +234,7 @@ public class Scorer
     }
     for (ThresholdSet set : sets) {
       if (endedWithoutSuccessor(set, ms)) {
-        closeFiring(set, a, out);
+        closeEnded(set, a, out);
       }
     }
 
@@ -466,13 +467,20 @@ public class Scorer
     return true;
   }
 
-  /** Resolves each firing alert of the ended set at the end of minute a, and drops its machine. */
-  private void closeFiring(ThresholdSet set, MinuteAgg a, Collector<AlertEvent> out)
+  /**
+   * Resolves each firing alert of the ended set at the end of minute a, and drops the set's
+   * machines. A later set of the same detector and setting then starts with no streak.
+   */
+  private void closeEnded(ThresholdSet set, MinuteAgg a, Collector<AlertEvent> out)
       throws Exception {
     for (Signal s : SIGNALS) {
       String id = machineId(set.detector(), set.setting(), s);
       AlertStateMachine m = machines.get(id);
-      if (m == null || !m.firing) {
+      if (m == null) {
+        continue;
+      }
+      machines.remove(id);
+      if (!m.firing) {
         continue;
       }
       out.collect(
@@ -492,7 +500,6 @@ public class Scorer
               0.0,
               0.0,
               THRESHOLDS_EXPIRED));
-      machines.remove(id);
     }
   }
 
