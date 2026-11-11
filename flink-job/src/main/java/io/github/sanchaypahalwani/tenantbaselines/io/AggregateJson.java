@@ -1,7 +1,11 @@
 package io.github.sanchaypahalwani.tenantbaselines.io;
 
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.json.JsonMapper;
 import io.github.sanchaypahalwani.tenantbaselines.model.Keys;
 import io.github.sanchaypahalwani.tenantbaselines.model.MinuteAgg;
 import java.io.IOException;
@@ -14,7 +18,16 @@ import java.nio.charset.StandardCharsets;
  */
 public final class AggregateJson {
 
-  private static final ObjectMapper MAPPER = new ObjectMapper();
+  /**
+   * Strict about what a lenient parser would drop without a word: content after the object, and
+   * a field given twice, of which only one value would be kept.
+   */
+  private static final ObjectMapper MAPPER =
+      JsonMapper.builder()
+          .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+          .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
+          .build();
+
   private static final long MINUTE_MS = 60_000L;
 
   /** How much of a bad row its error message quotes. */
@@ -26,15 +39,18 @@ public final class AggregateJson {
    * Returns the row as a {@link MinuteAgg} of {@code runId}.
    *
    * @throws IllegalArgumentException naming the fault and quoting the row's first 200 characters:
-   *     not JSON or not an object; a field missing or of the wrong type; {@code minute_ms} not a
-   *     whole minute; {@code count} negative; {@code errors} outside 0..count; {@code key} not
-   *     {@code tenant|region|unit}, or a '|' in one of those; {@code p95_latency_ms} null with
-   *     requests, present without, or not finite
+   *     not JSON, content after the object, or a field given twice; not an object; a field
+   *     missing or of the wrong type; {@code minute_ms} not a whole minute; {@code count}
+   *     negative; {@code errors} outside 0..count; {@code key} not {@code tenant|region|unit}, or
+   *     a '|' in one of those; {@code p95_latency_ms} null with requests, present without, or not
+   *     finite
    */
   public static MinuteAgg parse(byte[] json, String runId) {
     JsonNode n;
     try {
       n = MAPPER.readTree(json);
+    } catch (JsonProcessingException e) {
+      throw bad("not JSON (" + e.getOriginalMessage() + ")", json);
     } catch (IOException e) {
       throw bad("not JSON", json);
     }

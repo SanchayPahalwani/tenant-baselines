@@ -50,6 +50,12 @@ class AggregateJsonTest {
   @Test
   void rejectsBadRows() {
     rejects("not json", "not JSON");
+    // A lenient parser would read the first object and drop the rest, or keep one of two values.
+    rejects(ROW + "x", "not JSON (Unrecognized token 'x'");
+    rejects(ROW + ROW, "not JSON (Trailing token");
+    rejects(
+        ROW.replace("\"count\":40", "\"count\":40,\"count\":4"),
+        "not JSON (Duplicate field 'count'");
     rejects("[1,2]", "not an object");
     rejects(ROW.replace(",\"unit\":\"u1\"", ""), "unit is missing");
     rejects(ROW.replace("\"tenant\":\"a\"", "\"tenant\":1"), "tenant is not a string");

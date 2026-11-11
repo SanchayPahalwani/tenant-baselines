@@ -12,6 +12,7 @@ import io.github.sanchaypahalwani.tenantbaselines.model.Keys;
 import io.github.sanchaypahalwani.tenantbaselines.model.MinuteAgg;
 import io.github.sanchaypahalwani.tenantbaselines.model.ScoreEvent;
 import io.github.sanchaypahalwani.tenantbaselines.model.Signal;
+import io.github.sanchaypahalwani.tenantbaselines.model.UnitStatusEvent;
 import io.github.sanchaypahalwani.tenantbaselines.time.Watermarks;
 import java.io.InputStream;
 import java.util.ArrayList;
@@ -51,12 +52,14 @@ class PipelineTest {
               .setNumberSlotsPerTaskManager(2)
               .build());
 
-  private static JobConfig config(long replayEndMs) {
-    return JobConfig.parse(
-        new String[] {
-          "--run-id", "test", "--mode", "replay", "--replay-end-ms", "" + replayEndMs,
-          "--scores", "true"
-        });
+  private static JobConfig config(long replayEndMs, String... extraArgs) {
+    List<String> args =
+        new ArrayList<>(
+            List.of(
+                "--run-id", "test", "--mode", "replay", "--replay-end-ms", "" + replayEndMs,
+                "--scores", "true"));
+    args.addAll(List.of(extraArgs));
+    return JobConfig.parse(args.toArray(String[]::new));
   }
 
   private static List<ThresholdSet> thresholds() throws Exception {
@@ -103,12 +106,13 @@ class PipelineTest {
    * The seasonal input, generated rather than held in a list: about half a million events. A
    * single source split keeps them in time order; each subtask after it still sees them in order.
    */
-  private static Pipeline.Outputs buildSeasonal() throws Exception {
+  private static Pipeline.Outputs buildSeasonal(String... extraArgs) throws Exception {
     StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
     long n = (SEASONAL_END_MS - MON) / MINUTE_MS * SEASONAL_RPM;
     DataStream<Event> events =
         env.fromSequence(0, n - 1).setParallelism(1).map(PipelineTest::seasonalEvent);
-    return Pipeline.build(withTimestamps(events), config(SEASONAL_END_MS), thresholds());
+    return Pipeline.build(
+        withTimestamps(events), config(SEASONAL_END_MS, extraArgs), thresholds());
   }
 
   private static <T> List<T> drain(CloseableIterator<T> it) throws Exception {
@@ -209,7 +213,7 @@ class PipelineTest {
 
   /**
    * The eval reads pre-built aggregates instead of events. Fed the events run's own aggregates in
-   * (minute, key) order, the detection chain must write the same alert log.
+   * (minute, key) order, the detection chain must write the same alert log and the same scores.
    */
   @Test
   void aggregatesModeGivesTheEventsModeAlertLog() throws Exception {
@@ -221,9 +225,11 @@ class PipelineTest {
             thresholds());
     CloseableIterator<MinuteAgg> aggregatesOut = fromEvents.aggregates().collectAsync();
     CloseableIterator<AlertEvent> eventsAlertsOut = fromEvents.alerts().collectAsync();
+    CloseableIterator<ScoreEvent> eventsScoresOut = fromEvents.scores().collectAsync();
     eventsEnv.executeAsync();
     List<MinuteAgg> aggregates = drain(aggregatesOut);
     List<AlertEvent> eventsAlerts = drain(eventsAlertsOut);
+    List<ScoreEvent> eventsScores = drain(eventsScoresOut);
     assertThat(aggregates).hasSize(4 * 75);
 
     List<MinuteAgg> inOrder =
@@ -243,13 +249,30 @@ class PipelineTest {
             regionalConfig("--mode", "aggregates", "--input-topic", "test.aggregates-in"),
             thresholds());
     assertThat(fromAggregates.late()).isNull();
-    List<AlertEvent> aggregatesAlerts = collect(fromAggregates.alerts());
+    CloseableIterator<AlertEvent> aggregatesAlertsOut = fromAggregates.alerts().collectAsync();
+    CloseableIterator<ScoreEvent> aggregatesScoresOut = fromAggregates.scores().collectAsync();
+    aggregatesEnv.executeAsync();
+    List<AlertEvent> aggregatesAlerts = drain(aggregatesAlertsOut);
+    List<ScoreEvent> aggregatesScores = drain(aggregatesScoresOut);
 
     List<AlertEvent> expected = normalForm(eventsAlerts);
     assertThat(expected)
         .filteredOn(a -> a.scope().equals("region") && a.state().equals("firing"))
         .isNotEmpty();
     assertThat(normalForm(aggregatesAlerts)).containsExactlyElementsOf(expected);
+    // One score per key, minute and signal; a score has no wall-clock field.
+    List<ScoreEvent> expectedScores = inScoreOrder(eventsScores);
+    assertThat(expectedScores).hasSize(4 * 75 * Signal.values().length);
+    assertThat(inScoreOrder(aggregatesScores)).containsExactlyElementsOf(expectedScores);
+  }
+
+  private static List<ScoreEvent> inScoreOrder(List<ScoreEvent> scores) {
+    return scores.stream()
+        .sorted(
+            Comparator.comparingLong(ScoreEvent::minuteMs)
+                .thenComparing(ScoreEvent::key)
+                .thenComparing(ScoreEvent::signal))
+        .toList();
   }
 
   @Test
@@ -295,5 +318,34 @@ class PipelineTest {
               assertThat(a.key()).isEqualTo(KEY);
               assertThat(a.startsAtMs()).isEqualTo(ERRORS_FROM_MS);
             });
+  }
+
+  /**
+   * Unit status follows --live-setting, not the first seasonal setting. The seasonal input's k4
+   * alert is sent for the only tenant of its unit, so it drains the unit when k4 is the live
+   * setting. With k1000 live the same alert is sent and drains nothing.
+   */
+  @Test
+  void unitStatusFollowsTheLiveSetting() throws Exception {
+    Pipeline.Outputs k4Live = buildSeasonal("--seasonal-k", "4,1000", "--live-setting", "k4");
+    assertThat(collect(k4Live.unitStatus()))
+        .extracting(
+            UnitStatusEvent::status,
+            UnitStatusEvent::unit,
+            UnitStatusEvent::signal,
+            UnitStatusEvent::reason)
+        .containsExactly(
+            tuple(UnitStatusEvent.DRAIN, "checkout", "error_rate", UnitStatusEvent.DEDICATED));
+
+    Pipeline.Outputs k1000Live =
+        buildSeasonal("--seasonal-k", "4,1000", "--live-setting", "k1000");
+    CloseableIterator<AlertEvent> alerts = k1000Live.alerts().collectAsync();
+    CloseableIterator<UnitStatusEvent> unitStatus = k1000Live.unitStatus().collectAsync();
+    k1000Live.alerts().getExecutionEnvironment().executeAsync();
+    assertThat(drain(alerts))
+        .filteredOn(a -> a.detector().equals("seasonal") && a.state().equals("firing"))
+        .extracting(AlertEvent::scope, AlertEvent::setting, AlertEvent::signal)
+        .containsExactly(tuple("tenant", "k4", "error_rate"));
+    assertThat(drain(unitStatus)).isEmpty();
   }
 }
