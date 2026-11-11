@@ -50,6 +50,12 @@
     </dependency>
     <dependency>
       <groupId>org.apache.flink</groupId>
+      <artifactId>flink-connector-datagen</artifactId>
+      <version>${flink.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.flink</groupId>
       <artifactId>flink-connector-kafka</artifactId>
       <version>${flink.kafka.version}</version>
     </dependency>
@@ -137,6 +143,7 @@
                   <exclude>org.apache.flink:flink-annotations</exclude>
                   <exclude>org.apache.flink:flink-metrics-core</exclude>
                   <exclude>org.apache.flink:flink-connector-base</exclude>
+                  <exclude>org.apache.flink:flink-connector-datagen</exclude>
                 </excludes>
               </artifactSet>
               <filters>

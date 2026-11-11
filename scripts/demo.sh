@@ -57,9 +57,9 @@ echo "Starting the demo: three weeks of synthetic history, then live traffic." \
 start=$SECONDS
 docker compose --profile demo up -d --build --no-deps generator
 
-# The job must not start before every partition has data: the live watermark leaves out a split
-# that is still empty after 60 s, and that split's history would then arrive behind the
-# watermark and be dropped as late.
+# The job must not start before every partition has data. A partition with no event for 60 s
+# goes idle and is left out of the live watermark, so history written to it later would arrive
+# behind the watermark and be dropped as late.
 deadline=$((SECONDS + PARTITIONS_TIMEOUT_S))
 until all_partitions_have_data; do
   if [ "$SECONDS" -ge "$deadline" ]; then

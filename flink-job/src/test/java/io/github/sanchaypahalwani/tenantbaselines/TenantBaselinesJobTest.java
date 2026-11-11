@@ -48,11 +48,19 @@ class TenantBaselinesJobTest {
     assertThat(uids(graph))
         .contains(
             "events-source",
+            "ticks-source",
+            "drop-ticks",
             "minute-aggregator",
             "population-baselines",
             "scorer",
             "scores-sink",
             "late-events");
+  }
+
+  @Test
+  void replayJobHasNoTicks() throws Exception {
+    assertThat(uids(graph("--ns", "eval", "--mode", "replay")))
+        .doesNotContain("ticks-source", "drop-ticks");
   }
 
   @Test

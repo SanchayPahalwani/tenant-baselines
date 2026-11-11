@@ -4,8 +4,14 @@ import io.github.sanchaypahalwani.tenantbaselines.model.Event;
 import java.time.Duration;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 
-/** Watermark strategies for replayed (bounded) and live input. */
+/** Watermark strategies for replayed (bounded) and live input, and for the live ticks. */
 public final class Watermarks {
+
+    /** Bounded out-of-orderness of the live events and of the ticks. */
+    public static final Duration BOUND = Duration.ofSeconds(20);
+
+    /** A live partition without an event for this long is idle: left out of the watermark. */
+    public static final Duration LIVE_IDLENESS = Duration.ofSeconds(60);
 
     private Watermarks() {}
 
@@ -18,24 +24,23 @@ public final class Watermarks {
     }
 
     /**
-     * Wall-clock-following generator for live input.
-     *
-     * <p>A split that has seen an event never goes idle. Once it is within the 60 s catch-up
-     * window of the wall clock, it follows the wall clock, so minutes keep closing when every
-     * producer goes silent.
-     *
-     * <p>An output that has never seen an event marks itself idle after the catch-up window
-     * instead of emitting the wall clock. Flink 2.2.1 also runs a generator on the source
-     * reader's main output, which never sees Kafka records. If it latched to the wall clock, it
-     * would override the slowest split and drop the backlog as late.
-     *
-     * <p>Limitation: if the job restores, or a task fails over, while every partition is silent,
-     * the watermark stays put until the first event arrives. The zero-traffic rule cannot page
-     * for that outage.
+     * Plain event time per Kafka partition, for live input. The live job unions {@link Ticks}
+     * into this stream, so minutes keep closing once every partition is idle.
      */
     public static WatermarkStrategy<Event> live() {
-        return WatermarkStrategy.<Event>forGenerator(
-                        ctx -> new LiveWatermarkGenerator(System::currentTimeMillis, 20_000, 60_000))
+        return events(BOUND, LIVE_IDLENESS);
+    }
+
+    /** Bounded out-of-orderness; a split without an event for {@code idleness} goes idle. */
+    public static WatermarkStrategy<Event> events(Duration bound, Duration idleness) {
+        return WatermarkStrategy.<Event>forBoundedOutOfOrderness(bound)
+                .withIdleness(idleness)
+                .withTimestampAssigner((e, t) -> e.ts());
+    }
+
+    /** Bounded out-of-orderness without idleness, for the tick source. */
+    public static WatermarkStrategy<Event> ticks(Duration bound) {
+        return WatermarkStrategy.<Event>forBoundedOutOfOrderness(bound)
                 .withTimestampAssigner((e, t) -> e.ts());
     }
 }

@@ -7,6 +7,7 @@ import io.github.sanchaypahalwani.tenantbaselines.io.JsonSerialization;
 import io.github.sanchaypahalwani.tenantbaselines.model.AlertEvent;
 import io.github.sanchaypahalwani.tenantbaselines.model.Event;
 import io.github.sanchaypahalwani.tenantbaselines.model.MinuteAgg;
+import io.github.sanchaypahalwani.tenantbaselines.time.Ticks;
 import io.github.sanchaypahalwani.tenantbaselines.time.Watermarks;
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -45,18 +46,18 @@ public final class TenantBaselinesJob {
   }
 
   /**
-   * Adds the job's source, operators and sinks to {@code env}. Each has a uid, so checkpoints
-   * still restore after operators are added elsewhere in the graph.
+   * Adds the job's sources, operators and sinks to {@code env}. Each has a uid, so checkpoints
+   * still restore after operators are added elsewhere in the graph. A live job also unions in
+   * the wall-clock ticks, so minutes keep closing when every producer is silent.
    */
   static void addTo(StreamExecutionEnvironment env, JobConfig cfg, List<ThresholdSet> sets) {
+    boolean live = cfg.mode().equals("live");
     DataStream<Event> events =
-        env.fromSource(
-                eventSource(cfg),
-                cfg.mode().equals("live") ? Watermarks.live() : Watermarks.replay(),
-                "events")
+        env.fromSource(eventSource(cfg), live ? Watermarks.live() : Watermarks.replay(), "events")
             .uid("events-source");
 
-    Pipeline.Outputs out = Pipeline.build(events, cfg, sets);
+    Pipeline.Outputs out =
+        Pipeline.build(live ? Ticks.withTicks(events, Ticks.source(env)) : events, cfg, sets);
 
     out.aggregates().sinkTo(sink(cfg.bootstrap(), cfg.aggregatesTopic(), JsonSerialization.aggKey()))
         .uid("aggregates-sink")

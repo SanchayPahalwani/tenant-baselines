@@ -54,6 +54,7 @@ The owner has to be able to explain and defend every choice. Every choice is wri
 
 - **Pinned versions** (Maven Central and Docker Hub checked 2026-11-09):
   - Flink **2.2.1** (`flink:2.2.1-java17`) with `flink-connector-kafka` **5.0.0-2.2**. Flink 2.3.0 is out, but the newest Kafka connector targets 2.2.
+  - flink-connector-datagen **2.2.1** for the live tick source; it ships inside the Flink distribution. *(Added 2026-11-11.)*
   - Java **17**, Flink 2.x's recommended runtime. Maven build.
   - Kafka **4.4.0** (`apache/kafka`), a single node in KRaft combined mode, with `auto.create.topics.enable=false`.
   - ClickHouse **26.8**, Alertmanager **v0.34.2**, Grafana **13.2.5** with the official ClickHouse data-source plugin. Full patch tags and the plugin version are pinned at build time.
@@ -96,7 +97,13 @@ aggregate generator (Python, eval) ─▶ <run>.aggregates-in ─┘
 
 **Watermarks.**
 - **Replay** (events read from the past): pure event time. Bounded out-of-orderness of 20 s, idle partitions marked idle after 30 s, and Kafka-source watermark alignment, so no partition runs far ahead. The generator writes **in time order per partition**. This is a hard requirement: out-of-order writes would be silently dropped as late.
-- **Live:** a custom watermark generator. While the source is caught up (its newest event time is within 1 minute of the wall clock), the watermark follows `max(newest event time, wall clock) − 20 s`. So it keeps moving even if every producer goes silent. That matters, because a total outage is exactly when minutes must keep closing. While the source is behind (backfill), it is pure event time.
+- **Live:** the events source uses plain event time per partition: bounded out-of-orderness of 20 s, and a partition is marked idle after 60 s without an event. A second source emits one tick a second, stamped with the wall clock, with the same 20 s bound. The two streams are unioned and the ticks are filtered out before `MinuteAggregator`, so its watermark is the lower of the two.
+  - While the source is behind (backfill, or a backlog after a restore), that is pure event time.
+  - Once it has caught up, the watermark is the wall clock − 20 s, held back by the newest event of the slowest partition that is not idle: about a second more when every partition carries traffic, at most 60 s more when one is sparse (21 s to 80 s behind the wall clock in all).
+  - When every producer goes silent, the partitions go idle after 60 s and the ticks carry the wall clock − 20 s. This also holds after a restore or a failover during the silence. That matters, because a total outage is exactly when minutes must keep closing.
+  - After a start, a restore or a failover, no minute closes until every partition has delivered an event or has been silent for 60 s. A partition that has been silent for 60 s is left out until its next event; events written to it later with timestamps behind the watermark are dropped as late. `make demo` submits the job only after every partition has data.
+
+  *(Amended 2026-11-11 by the owner: this replaces the custom generator that latched to the wall clock. That one could not advance after a restore during a total outage, and it could hand over to the wall clock while a partition still had unread events.)*
 
 **Late events.** Events behind the watermark go to a side output that is counted and exposed as a metric. They are not re-aggregated.
 
@@ -356,7 +363,7 @@ data/        generated datasets (git-ignored)
 - the zero-traffic rule;
 - hour-of-week bucketing;
 - MinuteAggregator: zero-fill, late events, **no re-registration at `Long.MAX_VALUE`**;
-- the live watermark generator, caught-up vs backfill;
+- the live watermark: ticks close minutes when events stop, and never outrun a backlog;
 - the state machine, including the pause rule;
 - cold-start fallback;
 - loading the thresholds file and its validity windows;
