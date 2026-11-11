@@ -1,5 +1,4 @@
 import json
-import re
 
 import pytest
 
@@ -189,7 +188,6 @@ def test_recall_is_never_a_bare_percentage(summaries):
     t = text(summaries)
     assert "14/20" in t
     assert "%" not in t
-    assert not re.search(r"\d+/\d+\s*\([^)]*\)\s*%", t)
 
 
 def test_statement_and_label_are_present(summaries):
@@ -247,7 +245,7 @@ def test_missing_amplitude_and_freeze_render_without_error(summaries):
 
 def test_method_notes_keep_the_ruled_figures(summaries):
     t = text(summaries)
-    for needle in ("1.1 to 2.0", "FLINK-39728", "5.1.0", "5.0.0-2.2", "48 keys", "42"):
+    for needle in ("FLINK-39728", "5.1.0", "5.0.0-2.2", "48 keys", "42"):
         assert needle in t
 
 
@@ -275,10 +273,6 @@ def test_load_run_log_reads_lines_and_tolerates_absence(tmp_path):
     assert [e["what"] for e in load_run_log(p)] == ["a", "b"]
 
 
-def test_module_has_no_stale_names():
-    assert eval_report.MAIN_AMPLITUDE == 6.0
-
-
 def test_latest_per_cell_keeps_the_newest_rerun():
     old = summary(7, 6.0, 5, 5) | {"run_id": "dev-s7-a6-20261111T100000"}
     new = summary(7, 6.0, 8, 9) | {"run_id": "dev-s7-a6-20261111T230000"}
@@ -292,3 +286,91 @@ def test_latest_per_cell_keeps_the_newest_rerun():
 
 def test_false_pages_per_day_are_two_decimals(summaries):
     assert "2.00 (2.00–2.00)" in text(summaries)
+
+
+def test_headline_median_of_an_even_count_is_the_midpoint():
+    h = headline([summary(7, 6.0, 8, 9), summary(11, 6.0, 5, 6)], 6.0)["seasonal"]
+    assert h["detected_expected"]["median"] == 6.5
+
+
+def test_outage_hour_wraps_across_the_week(summaries):
+    s = summaries[2]
+    # Sunday 23:30 UTC in ap-southeast (+8) is Monday 07:30 local.
+    s["_labels"] = {
+        "w5-regional_outage-1": {
+            "start_ms": EPOCH + 4 * 604_800_000 + 6 * 86_400_000 + 23 * 3_600_000 + 30 * 60_000,
+            "keys": ["t01|ap-southeast|ap-southeast-s1"],
+        }
+    }
+    row = outage_rows(summaries, 6.0)[0]
+    assert row["utc"] == "Sun 23:30" and row["local"] == "Mon 07:30"
+
+
+def test_by_scenario_type_with_no_expected_signal_delays():
+    s = summary(7, 6.0, 8, 9)
+    for fam in FAMILIES:
+        for e in s["selected_week5"][fam]["scenarios"]:
+            if e["type"] == "error_burst":
+                e["detected_expected"] = False
+                e["delay_min"] = None
+    row = next(r for r in by_scenario_type([s], 6.0) if r["type"] == "error_burst")
+    assert (row["delay_n"], row["p50"], row["p95"]) == (0, None, None)
+    assert "none (n=0)" in render([s], [], CHECK, FREEZE, MACHINE)
+
+
+def test_plural_n_a_and_seed_count_of_scenarios(summaries):
+    t = text(summaries)
+    assert "(should not page; 2 scenarios)" in t
+    one = summary(7, 6.0, 8, 9)
+    assert "(should not page; 1 scenario)" in render([one], [], CHECK, FREEZE, MACHINE)
+    assert "n/a" in t and " of 10" in t
+
+
+def test_method_notes_derive_events_time_and_carry_no_typed_dev_figure(summaries):
+    t = text(summaries, check=CHECK | {"seconds": {"events_job": 1802.1}})
+    assert "about 30 minutes" in t
+    assert "about 5 minutes" in text(summaries, check=CHECK | {"seconds": {"events_job": 300}})
+    assert "times the nominal" not in t
+
+
+def _official(seed, amp, rid):
+    s = summary(seed, amp, 8, 9)
+    s["meta"]["kind"] = "off"
+    s["run_id"] = rid
+    return s
+
+
+def test_check_official_rejects_duplicates_and_dev_runs():
+    eval_report.check_official([_official(1, 6.0, "off-s1-a6-x"), _official(2, 6.0, "off-s2-a6-x")])
+    with pytest.raises(ValueError, match="appears twice"):
+        eval_report.check_official(
+            [_official(1, 6.0, "off-s1-a6-x"), _official(1, 6.0, "off-s1-a6-y")]
+        )
+    with pytest.raises(ValueError, match="not an official run"):
+        eval_report.check_official([summary(7, 6.0, 8, 9)])
+    with pytest.raises(ValueError, match="not an official run"):
+        eval_report.check_official([_official(1, 6.0, "dev-s1-a6-x")])
+
+
+def test_dedupe_dev_names_dropped_runs_and_warns_on_a_difference():
+    old = summary(7, 6.0, 5, 5) | {"run_id": "dev-s7-a6-1"}
+    new = summary(7, 6.0, 8, 9) | {"run_id": "dev-s7-a6-2"}
+    kept, notes = eval_report.dedupe_dev([old, new])
+    assert [s["run_id"] for s in kept] == ["dev-s7-a6-2"]
+    assert "dropped dev-s7-a6-1 (kept dev-s7-a6-2)" in notes
+    assert any(n.startswith("WARNING") for n in notes)
+    same = new | {"run_id": "dev-s7-a6-0"}
+    assert not any(n.startswith("WARNING") for n in eval_report.dedupe_dev([same, new])[1])
+
+
+def test_main_dev_writes_the_dev_render(tmp_path, capsys):
+    for rid, e in (("dev-s7-a6-1", 8), ("dev-s7-a6-2", 9)):
+        d = tmp_path / rid
+        d.mkdir()
+        (d / "summary.json").write_text(json.dumps(summary(7, 6.0, e, 9) | {"run_id": rid}))
+    eval_report.main(["--dev", str(tmp_path)])
+    out = (tmp_path / "dev-results.md").read_text()
+    assert out.startswith("DEV SEEDS, not results\n")
+    assert STATEMENT in out
+    printed = capsys.readouterr().out
+    assert "dropped dev-s7-a6-1" in printed and "WARNING" in printed

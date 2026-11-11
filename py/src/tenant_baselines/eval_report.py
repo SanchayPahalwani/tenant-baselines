@@ -5,9 +5,11 @@ text out. `main` reads the files and measures the machine.
 """
 
 import argparse
+import importlib.metadata
 import json
 import statistics
 import subprocess
+import sys
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -39,16 +41,23 @@ _TYPES = (
     ("launch_surge", False),
     ("holiday_dip", False),
 )
-_VERSIONS = (
+_FIXED_VERSIONS = (
     ("Flink", "2.2.1 (Java 17)"),
     ("Flink Kafka connector", "5.0.0-2.2"),
     ("Kafka", "4.4.0"),
     ("ClickHouse", "26.8"),
     ("Grafana", "13.2.5"),
     ("Alertmanager", "v0.34.2"),
-    ("Python", "3.12"),
-    ("numpy", "2.5.4"),
 )
+
+
+def _versions() -> tuple[tuple[str, str], ...]:
+    v = sys.version_info
+    return (
+        *_FIXED_VERSIONS,
+        ("Python", f"{v.major}.{v.minor}.{v.micro}"),
+        ("numpy", importlib.metadata.version("numpy")),
+    )
 
 
 # ---------------------------------------------------------------- loading
@@ -128,6 +137,7 @@ def headline(summaries: list[dict], amplitude: float) -> dict:
         w5 = [s["selected_week5"][fam] for s in runs]
         n_seeds = len(runs)
         out[fam] = {
+            "per_seed_n": w5[0]["n_should_page"],
             "seeds": [
                 {"seed": s["meta"]["seed"], "setting": a["setting"], "branch": a["branch"]}
                 for s, a in zip(runs, sel, strict=True)
@@ -285,7 +295,7 @@ def _headline_section(summaries: list[dict], amplitude: float) -> list[str]:
     rows = [
         [
             _fam(f),
-            _spread_text(v["detected_expected"]) + " of 10",
+            _spread_text(v["detected_expected"]) + f" of {v['per_seed_n']}",
             _recall(v["detected_expected"]),
             _recall(v["detected_any"]),
             _spread_text(v["false_per_day"], 2),
@@ -411,19 +421,20 @@ def _type_section(summaries: list[dict]) -> list[str]:
                     _num(r["pages_per_detected"]),
                     str(r["refires"]),
                     f"{r['regional_formed']}/{r['scenarios']}",
-                    "",
+                    "n/a",
                 ]
             )
         else:
             rows.append(
                 [
                     _fam(r["family"]),
-                    f"{r['type']} (should not page; {r['scenarios']} scenarios)",
-                    "",
-                    "",
-                    "",
-                    "",
-                    "",
+                    f"{r['type']} (should not page; {r['scenarios']}"
+                    f" {'scenario' if r['scenarios'] == 1 else 'scenarios'})",
+                    "n/a",
+                    "n/a",
+                    "n/a",
+                    "n/a",
+                    "n/a",
                     f"{r['regional_formed']}/{r['scenarios']}",
                     str(r["false_during"]),
                 ]
@@ -516,7 +527,14 @@ def _check_section(cp: dict | None) -> list[str]:
     ]
 
 
-def _method_section(summaries: list[dict], freeze: dict | None, machine: dict) -> list[str]:
+def _events_minutes(cp: dict | None) -> str:
+    secs = (cp or {}).get("seconds", {}).get("events_job")
+    return "an unmeasured time" if secs is None else f"about {round(secs / 60)} minutes"
+
+
+def _method_section(
+    summaries: list[dict], freeze: dict | None, machine: dict, check_paths: dict | None
+) -> list[str]:
     seeds = sorted({s["meta"]["seed"] for s in summaries})
     kinds = sorted({s["meta"]["kind"] for s in summaries})
     clipped = sum(s["normalise"]["clipped"] for s in summaries)
@@ -532,8 +550,10 @@ def _method_section(summaries: list[dict], freeze: dict | None, machine: dict) -
         frozen = "No freeze file exists, so nothing here is frozen."
     changes = machine.get("changes") or []
     lines = [
-        f"- **Seeds.** Dev seeds are 7, 11 and 13; every setting was looked at on those only."
-        f" Official seeds: {official}. Each official seed runs once. {frozen}"
+        "- **Seeds.** The code enforces the seed protocol. A dev run refuses any seed outside 7,"
+        " 11 and 13. An official run needs the freeze file, uses only the seeds listed in it,"
+        " and refuses a seed and amplitude that already has an official run."
+        f" Official seeds: {official}. {frozen}"
         f" This render holds runs of kind {', '.join(kinds) or 'none'} at seeds"
         f" {', '.join(str(s) for s in seeds) or 'none'}.",
         "- **The world.** 3 regions, 24 tenants (8 per region) and 48 keys: 6 shared units"
@@ -557,9 +577,8 @@ def _method_section(summaries: list[dict], freeze: dict | None, machine: dict) -
         "- **Inclusive fire comparison.** The shared state machine fires at or past the fire"
         " level (spec 4.5). The values are discrete (bucketed p95, error counts over request"
         " counts, whole 5-minute sums), so a static threshold is breached on calibration"
-        " minutes more often than its percentile says. On dev seed 7, week 4, the per-key median"
-        " was 1.1 to 2.0 times the nominal rate. The static detectors' false pages are somewhat"
-        " higher than the percentile alone suggests. The comparison was not changed.",
+        " minutes more often than its nominal percentile. Static false pages therefore run"
+        " somewhat higher than the percentile alone suggests. The comparison was not changed.",
         "- **What check-paths shows.** It shows that the events path and the aggregates path give"
         " the same alert log. It does not show that the detectors are right: both paths share the"
         " thresholds, every operator from the minute aggregates on, and the random draws.",
@@ -569,8 +588,8 @@ def _method_section(summaries: list[dict], freeze: dict | None, machine: dict) -
         " no output, so no wrong result is possible, and check-paths can be run again. The"
         " official runs use aggregates mode. It has one partition and no alignment, so it cannot"
         " hit the race.",
-        "- **Events-path speed.** The events path of check-paths is bound by the alignment:"
-        " about 30 minutes for five weeks. The alignment drift was not changed.",
+        f"- **Events-path speed.** The events path of check-paths is bound by the alignment:"
+        f" {_events_minutes(check_paths)} for five weeks. The alignment drift was not changed.",
         "- **Single-key creeps.** A latency creep is placed on one unit. A dedicated unit is a"
         " unit, so a creep can land on a unit with a single key.",
         "- **No Monday holiday in two regions.** eu-central and ap-southeast never get a holiday"
@@ -624,7 +643,7 @@ def _setup_section(machine: dict) -> list[str]:
         f"- Date: {machine.get('date', 'not measured')}",
         f"- Machine: {host}",
         f"- Docker VM: {vm}",
-        "- Versions: " + "; ".join(f"{k} {v}" for k, v in _VERSIONS),
+        "- Versions: " + "; ".join(f"{k} {v}" for k, v in _versions()),
         "",
     ]
     return lines
@@ -664,7 +683,7 @@ def render(
         *_check_section(check_paths),
         "## Method notes",
         "",
-        *_method_section(summaries, freeze, machine),
+        *_method_section(summaries, freeze, machine, check_paths),
         "## Run log",
         "",
         *_log_section(run_log),
@@ -705,23 +724,59 @@ def _load_json(path: Path) -> dict | None:
     return json.loads(path.read_text()) if path.is_file() else None
 
 
-def main() -> None:
+def check_official(summaries: list[dict]) -> None:
+    """Official renders take official runs only, one per (seed, amplitude)."""
+    seen: dict[tuple, str] = {}
+    for s in summaries:
+        m, rid = s["meta"], s.get("run_id", "")
+        if m["kind"] != "off" or (rid and not rid.startswith("off-")):
+            raise ValueError(f"run {rid or '?'} is not an official run (kind {m['kind']!r})")
+        cell = (m["seed"], m["amplitude"])
+        if cell in seen:
+            raise ValueError(
+                f"seed {cell[0]} at amplitude {cell[1]:g} appears twice: {seen[cell]} and {rid}"
+            )
+        seen[cell] = rid
+
+
+def dedupe_dev(summaries: list[dict]) -> tuple[list[dict], list[str]]:
+    """The newest run per cell, and a line for each dropped run (a warning if it differs)."""
+    kept = latest_per_cell(summaries)
+    by_cell = {(s["meta"]["seed"], s["meta"]["amplitude"]): s for s in kept}
+    notes = []
+    for s in summaries:
+        k = by_cell[(s["meta"]["seed"], s["meta"]["amplitude"])]
+        if s is k:
+            continue
+        notes.append(f"dropped {s.get('run_id', '?')} (kept {k.get('run_id', '?')})")
+        if s["selected_week5"] != k["selected_week5"]:
+            notes.append(
+                f"WARNING: {s.get('run_id', '?')} and {k.get('run_id', '?')} differ in"
+                " selected_week5; the same seed should give the same result"
+            )
+    return kept, notes
+
+
+def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="Render docs/results.md from run summaries")
     ap.add_argument("--summaries", default=str(REPO / "docs/results/summaries"))
     ap.add_argument("--out", default=str(REPO / "docs/results.md"))
     ap.add_argument("--dev", metavar="DIR", help="render the dev summaries under DIR instead")
     ap.add_argument("--change", action="append", default=[], help="a job or mechanics change")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     machine = measure_machine() | {"changes": args.change}
     check = _load_json(REPO / "docs/results/check-paths.json")
     if args.dev:
         dev = [s for s in load_summaries(args.dev) if s["meta"]["kind"] == "dev"]
-        summaries = latest_per_cell(dev)
+        summaries, notes = dedupe_dev(dev)
+        for n in notes:
+            print(f"eval-report: {n}")
         # Dev summaries sit one level down, in data/eval/dev-*/summary.json.
         text = DEV_LINE + "\n\n" + render(summaries, [], check, None, machine)
         out = Path(args.dev) / "dev-results.md"
     else:
         summaries = load_summaries(args.summaries)
+        check_official(summaries)
         run_log = load_run_log(REPO / "docs/results/run-log.jsonl")
         freeze = _load_json(REPO / "eval/freeze.json")
         text = render(summaries, run_log, check, freeze, machine)
