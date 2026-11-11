@@ -1,0 +1,18 @@
+{
+  "commit": "0d93f8b5bfcc00cc2b9e0d71bf55a2f2dc781afb",
+  "date_utc": "2026-11-11T23:19:33Z",
+  "world": "paths (synthetic)",
+  "events": 25780861,
+  "aggregate_rows": 443520,
+  "alert_rows": 2583,
+  "region_firing_rows": 62,
+  "alerts_identical": true,
+  "aggregates_identical": true,
+  "seconds": {
+    "generate": 2.3,
+    "produce": 42.4,
+    "events_job": 1802.1,
+    "aggregates_job": 26.5,
+    "total": 1890.1
+  }
+}
