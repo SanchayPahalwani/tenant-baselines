@@ -219,7 +219,8 @@ public class RegionGrouper
     boolean was = k.active;
     k.add(m.minuteMs(), m.count());
     if (k.active != was) {
-      // From the minute, not ctx.timestamp(): aggregates read back may carry no record timestamp.
+      // From the minute, not ctx.timestamp(): a Kafka record always has a timestamp, but it is the
+      // produce time unless an assigner replaces it, which would put the timer at the wrong minute.
       long t = minuteEnd(m.minuteMs());
       append(pendingFlips, t, new ActivityFlip(m.tenant(), k.active ? 1 : -1));
       ctx.timerService().registerEventTimeTimer(t);

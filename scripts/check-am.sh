@@ -17,7 +17,7 @@ fail() {
 
 out=$(amtool check-config /cfg/alertmanager.yml 2>&1) || { echo "$out" >&2; fail "check-config rejects alertmanager.yml"; }
 echo "$out"
-grep -q '1 inhibit rules' <<<"$out" || fail "check-config does not report '1 inhibit rules'"
+grep -qw '1 inhibit rules' <<<"$out" || fail "check-config does not report '1 inhibit rules'"
 
 amtool config routes test --config.file=/cfg/alertmanager.yml --verify.receivers=regional-pager \
   alertname=RegionAnomaly scope=region region=ap-southeast signal=error_rate \

@@ -112,6 +112,42 @@ class UnitStatusTest {
   }
 
   @Test
+  void dedicatedUnitDrainsOnASentLatencyAlert() throws Exception {
+    try (var h = harness()) {
+      warm(h, "b", "c", "d");
+      dedicatedUnitFor(h, "a");
+      fire(h, "a", "u-d", LATENCY, 60);
+
+      assertThat(wm(h, 61)).isEmpty();
+      assertThat(status(h)).isEmpty();
+
+      assertThat(wm(h, 62))
+          .extracting(AlertEvent::scope, AlertEvent::state, AlertEvent::tenant, AlertEvent::signal)
+          .containsExactly(tuple("tenant", "firing", "a", LATENCY));
+      assertThat(status(h))
+          .extracting(UnitStatusTest::row)
+          .containsExactly(tuple("r", "u-d", "eu", "drain", "latency_p95", min(63), "dedicated"));
+    }
+  }
+
+  @Test
+  void errorRateWinsWhenBothSignalsQualifyInTheSameMinute() throws Exception {
+    try (var h = harness()) {
+      warm(h, "b", "c", "d");
+      dedicatedUnitFor(h, "a");
+      fire(h, "a", "u-d", LATENCY, 60);
+      fire(h, "a", "u-d", ERROR_RATE, 60);
+
+      assertThat(wm(h, 62))
+          .extracting(AlertEvent::scope, AlertEvent::state, AlertEvent::tenant)
+          .containsOnly(tuple("tenant", "firing", "a"));
+      assertThat(status(h))
+          .extracting(UnitStatusTest::row)
+          .containsExactly(tuple("r", "u-d", "eu", "drain", "error_rate", min(63), "dedicated"));
+    }
+  }
+
+  @Test
   void sharedUnitNeedsTwoTenantsOnTheSameSignal() throws Exception {
     try (var h = harness()) {
       warm(h, "a", "b", "c", "d", "e");

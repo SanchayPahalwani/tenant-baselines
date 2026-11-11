@@ -6,7 +6,7 @@
 # spike, from about 17 to 26 minutes after the generator catches up. Checks 9-12 then run once,
 # in order. Check 11 restores the job from its oldest retained checkpoint and checks that this
 # restore re-emitted output and that it collapses to one row each. Check 12 stops the generator,
-# restores the job during the total outage and waits for it to page; it leaves the generator
+# restores the job during the total outage and waits for it to raise an alert; it leaves the generator
 # stopped.
 #
 # CHECKS, a space-separated list of check numbers, runs only those, and only they count; unset or
@@ -172,7 +172,7 @@ names=(
   "9 tb.ingest_errors is empty"
   "10 the job dropped no events as late"
   "11 a job restored from its oldest checkpoint re-emits output that collapses to one row each"
-  "12 a total outage across a restore closes zero-count minutes and pages a volume_5m alert"
+  "12 a total outage across a restore closes zero-count minutes and raises a volume_5m alert"
 )
 checks=("" check_aggregates check_drop_alert check_regional_alert check_absorbed check_inhibit
   check_pagers check_scores check_unit_status)

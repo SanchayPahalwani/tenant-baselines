@@ -127,4 +127,28 @@ class TicksTest {
         .containsExactly(
             tuple(MON, 60L), tuple(MON + MINUTE_MS, 60L), tuple(MON + 2 * MINUTE_MS, 60L));
   }
+
+  /** The filter drops ticks: a pass-through would aggregate a tick's null key. */
+  @Test
+  void withTicksDropsTheTicks() {
+    StreamExecutionEnvironment env = env();
+    Event a = event(1_000);
+    Event b = event(2_000);
+    DataStream<Event> out =
+        Ticks.withTicks(env.fromData(a, b), env.fromData(Event.tick(2_000), Event.tick(3_000)));
+
+    List<Event> got =
+        assertTimeoutPreemptively(
+            Duration.ofSeconds(60),
+            () -> {
+              List<Event> collected = new ArrayList<>();
+              try (var it = out.executeAndCollect()) {
+                it.forEachRemaining(collected::add);
+              }
+              return collected;
+            });
+
+    assertThat(got).containsExactlyInAnyOrder(a, b);
+    assertThat(got).noneMatch(Event::isTick);
+  }
 }

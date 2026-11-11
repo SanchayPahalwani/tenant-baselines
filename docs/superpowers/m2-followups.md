@@ -16,9 +16,6 @@ Planning material, like the rest of `docs/superpowers/`. These are review findin
 
 ## Milestone 5
 
-- The union adds one local channel hop per event. Measure it in the benchmark.
-- The fixed-rate benchmark keeps every partition busy, so its delay figures see a watermark lag of about 21 s. The write-up must say that a sparse partition adds up to 60 s.
-- A tenant alert absorbed by two regional alerts keeps only the later `absorbed` row in `tb.alert_log`.
 - Stale week-4 histogram entries leak in `PopulationBaselines` when a bucket's hour gets no scored minute for a week. Sweep weeks below `w - 4` on each timer.
 - No test drives the generator's minute-to-second seam loop.
 

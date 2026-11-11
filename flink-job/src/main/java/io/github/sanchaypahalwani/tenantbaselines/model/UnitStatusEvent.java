@@ -19,7 +19,7 @@ public record UnitStatusEvent(
   public static final String DRAIN = "drain";
   public static final String UNDRAIN = "undrain";
 
-  /** One tenant sent the unit a request in the last seven days, and its alert was sent. */
+  /** One tenant sent the unit a request in the expiry period, and its alert was sent. */
   public static final String DEDICATED = "dedicated";
 
   /** Two or more tenants of the unit have a sent alert on the same signal. */

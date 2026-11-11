@@ -5,7 +5,7 @@ Planning material, like the rest of `docs/superpowers/`. These are review findin
 ## Before milestone 4 runs a second job on the cluster
 
 - `scripts/submit-job.sh` restores from the newest checkpoint of *any* job. Scope checkpoint directories per namespace (for example `-Dexecution.checkpointing.dir=file:///flink-data/checkpoints/<ns>`).
-- `ThresholdsFile`: reject unknown signal names and missing fields with a message that names the set, check fire vs resolve order per direction, and reject duplicate active detector/setting pairs. Close a firing alert when its set's `valid_to` passes.
+- `ThresholdsFile`: reject unknown signal names and missing fields with a message that names the set, check fire vs resolve order per direction, and reject duplicate active detector/setting pairs. Close a firing alert when its set's `valid_to` passes. Also reject a `/` in a detector name (see `m3-followups.md`, milestone 4).
 - `EventJson`: reject a tenant, region or unit containing `|`, so keys stay unambiguous for per-key threshold maps.
 - `LatencyHistogram`: choose a policy for `p95` when counts sum below `n`, and for NaN or negative latencies. The Python aggregator in the milestone 4 equivalence check must match it.
 
