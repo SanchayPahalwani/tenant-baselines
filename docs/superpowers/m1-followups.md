@@ -12,7 +12,6 @@ Planning material, like the rest of `docs/superpowers/`. These are review findin
 ## Milestone 5
 
 - Measure pipeline delay from `min(emitted_at)` on the non-`FINAL` alert log. Re-emitted alerts carry a later `emitted_at`, and `FINAL` keeps the later row.
-- Watch `lateEvents` across restarts. After a restore, the live watermark can latch before an unread backlog is consumed.
 - Delete retained checkpoints of cancelled jobs.
 - Revisit the TaskManager memory (2560m) for benchmark state sizes.
 - Scorer writes machine state every minute even when nothing changed; measure before optimising.
@@ -36,8 +35,6 @@ Planning material, like the rest of `docs/superpowers/`. These are review findin
   - `@Timeout` in separate-thread mode;
   - dimension fields on emitted minutes;
   - an on-time out-of-order event;
-  - watermark latch boundaries;
-  - `Watermarks` factories;
   - per-key overrides and validity windows;
   - non-JSON webhook bodies.
 - **Scripts:**

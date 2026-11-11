@@ -2,23 +2,6 @@
 
 Planning material, like the rest of `docs/superpowers/`. These are review findings from milestone 2 that were deferred on purpose, grouped by the milestone where each should land. None blocked the merge.
 
-## For the owner, at the start of milestone 3
-
-- **Watermark limitation.** If the job restores, or a task fails over, while every partition is silent, the watermark stays put until the first event arrives. The zero-traffic rule cannot page for that outage.
-- **Hand-over gap in the latch.** The latch can hand over to the wall clock while a split still has unread events between `now - 60 s` and `now - 20 s`. At demo rates this is invisible (`lateEvents` is 0 across the seam). At benchmark rates that tail would be dropped as late and look like a volume drop.
-- **Proposed redesign.** It needs an owner decision and a spec amendment:
-  - a Kafka source with plain per-split event time, `forBoundedOutOfOrderness(20 s).withIdleness(60 s)`;
-  - a 1/s tick stream from `DataGeneratorSource` (`flink-connector-datagen`), stamped with the wall clock and a 20 s bound;
-  - `union` the two and filter the ticks out before the minute aggregator.
-- Settle this no later than before milestone 5 publishes delay numbers.
-
-## Milestone 3
-
-- The smoke restore check cannot fail on its stated property: `count() - uniqExact(dedup key)` over `FINAL` is 0 by construction for one run. Compare against `uniqExact(detector, setting, key, signal, starts_at, state)`.
-- `Scorer.java` is large. Split out the lookup helpers and `alert()`.
-- Add a regression test for `finiteOrZero`.
-- The forwarder's argparse defaults are untested. Extract `build_parser`.
-
 ## Milestone 4
 
 - Guard against a NaN magnitude in the incident code.
@@ -33,6 +16,9 @@ Planning material, like the rest of `docs/superpowers/`. These are review findin
 
 ## Milestone 5
 
+- The union adds one local channel hop per event. Measure it in the benchmark.
+- The fixed-rate benchmark keeps every partition busy, so its delay figures see a watermark lag of about 21 s. The write-up must say that a sparse partition adds up to 60 s.
+- A tenant alert absorbed by two regional alerts keeps only the later `absorbed` row in `tb.alert_log`.
 - Stale week-4 histogram entries leak in `PopulationBaselines` when a bucket's hour gets no scored minute for a week. Sweep weeks below `w - 4` on each timer.
 - No test drives the generator's minute-to-second seam loop.
 
