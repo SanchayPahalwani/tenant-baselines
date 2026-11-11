@@ -9,14 +9,18 @@ import static io.github.sanchaypahalwani.tenantbaselines.detect.SeasonalScorerTe
 import static io.github.sanchaypahalwani.tenantbaselines.detect.SeasonalScorerTest.scores;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
 import io.github.sanchaypahalwani.tenantbaselines.baseline.HourOfWeek;
 import io.github.sanchaypahalwani.tenantbaselines.baseline.PopulationBaseline;
 import io.github.sanchaypahalwani.tenantbaselines.model.AlertEvent;
 import io.github.sanchaypahalwani.tenantbaselines.model.MinuteAgg;
 import io.github.sanchaypahalwani.tenantbaselines.model.ScoreEvent;
+import java.time.Duration;
 import java.util.List;
+import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.streaming.util.KeyedBroadcastOperatorTestHarness;
+import org.apache.flink.streaming.util.ProcessFunctionTestHarnesses;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
@@ -31,6 +35,22 @@ class ScorerExpiryTest {
           String, MinuteAgg, PopulationBaseline, AlertEvent>
       harness() throws Exception {
     return SeasonalScorerTest.harness(demoThresholds(), true);
+  }
+
+  /** A harness whose Scorer knows the replay's end. */
+  private static KeyedBroadcastOperatorTestHarness<
+          String, MinuteAgg, PopulationBaseline, AlertEvent>
+      harness(long replayEndMs) throws Exception {
+    Scorer scorer =
+        new Scorer(
+            "run",
+            demoThresholds(),
+            List.of(SeasonalSetting.ofK(4)),
+            true,
+            Duration.ofDays(7),
+            replayEndMs);
+    return ProcessFunctionTestHarnesses.forKeyedBroadcastProcessFunction(
+        scorer, MinuteAgg::key, Types.STRING, Scorer.POPULATION);
   }
 
   /** Minutes 0, 1 and 2 at a 10 % error rate, which fires the static error-rate alert. */
@@ -175,6 +195,58 @@ class ScorerExpiryTest {
 
       assertThat(h.extractOutputValues()).extracting(AlertEvent::state).containsExactly("firing");
     }
+  }
+
+  @Test
+  void expiresAtTheFinalWatermarkWhenDueBeforeReplayEnd() throws Exception {
+    try (var h = harness(EXPIRES_MS + 60_000L)) {
+      AlertEvent fire = errorSpike(h);
+
+      // The last real watermark stops 1 ms short of the due time; the final one reaches it.
+      h.watermark(EXPIRES_MS - 1);
+      assertThat(expired(h)).isEmpty();
+      h.watermark(Long.MAX_VALUE);
+
+      List<AlertEvent> out = h.extractOutputValues();
+      assertThat(out)
+          .extracting(AlertEvent::state, AlertEvent::reason)
+          .containsExactly(tuple("firing", null), tuple("resolved", "expired"));
+      AlertEvent e = out.get(1);
+      assertThat(e.eventTimeMs()).isEqualTo(EXPIRES_MS);
+      assertThat(e.alertId()).isEqualTo(fire.alertId());
+    }
+  }
+
+  @Test
+  void doesNotExpireAtFinalWatermarkPastReplayEnd() throws Exception {
+    try (var h = harness(EXPIRES_MS - 1)) {
+      errorSpike(h);
+
+      h.watermark(EXPIRES_MS - 1);
+      h.watermark(Long.MAX_VALUE);
+
+      assertThat(h.extractOutputValues()).extracting(AlertEvent::state).containsExactly("firing");
+    }
+  }
+
+  @Test
+  void finalWatermarkTerminates() {
+    assertTimeoutPreemptively(
+        Duration.ofSeconds(10),
+        () -> {
+          try (var h = harness(EXPIRES_MS + 60_000L)) {
+            // The timer was set at minute 0; minutes 1 and 2 moved the due time on to EXPIRES_MS.
+            // So the final watermark finds the timer early, sets a new one at the due time and
+            // fires that one too.
+            errorSpike(h);
+
+            h.watermark(Long.MAX_VALUE);
+
+            assertThat(expired(h))
+                .extracting(AlertEvent::state, AlertEvent::eventTimeMs)
+                .containsExactly(tuple("resolved", EXPIRES_MS));
+          }
+        });
   }
 
   @Test

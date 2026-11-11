@@ -1,12 +1,15 @@
 package io.github.sanchaypahalwani.tenantbaselines.detect;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 
 import io.github.sanchaypahalwani.tenantbaselines.baseline.PopulationBaseline;
 import io.github.sanchaypahalwani.tenantbaselines.model.AlertEvent;
 import io.github.sanchaypahalwani.tenantbaselines.model.MinuteAgg;
 import io.github.sanchaypahalwani.tenantbaselines.model.Signal;
+import java.io.ByteArrayInputStream;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -18,6 +21,9 @@ import org.junit.jupiter.api.Test;
 class ScorerTest {
 
   private static final String KEY = "a|eu|u1";
+
+  /** Monday 00:00 of week 1, as a minute number for {@link #feed}. */
+  private static final int MON_MINUTE = (int) (SeasonalScorerTest.MON / 60_000L);
 
   private static List<ThresholdSet> thresholds() throws Exception {
     try (InputStream in = ScorerTest.class.getResourceAsStream("/thresholds-test.json")) {
@@ -58,6 +64,25 @@ class ScorerTest {
       var agg = new MinuteAgg("run", KEY, "a", "eu", "u1", ts, count, errors, count == 0 ? null : 100.0);
       h.processElement(agg, ts);
     }
+  }
+
+  /** One global_static/p99 set for [fromMs, toMs) with an error-rate level only; null is open. */
+  private static String errorRateSet(long fromMs, Long toMs) {
+    return """
+        {"detector": "global_static", "setting": "p99", "valid_from_ms": %d, "valid_to_ms": %s,
+         "global": {"error_rate": {"fire": 0.05, "resolve": 0.025}}, "per_key": {}}"""
+        .formatted(fromMs, toMs);
+  }
+
+  /** The sets, read through the loader so that they pass its checks. */
+  private static List<ThresholdSet> load(String... sets) throws Exception {
+    String json = "{\"sets\": [" + String.join(", ", sets) + "]}";
+    return ThresholdsFile.load(new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8)));
+  }
+
+  /** The start of minute number m. */
+  private static long ms(int m) {
+    return m * 60_000L;
   }
 
   @Test
@@ -127,6 +152,65 @@ class ScorerTest {
       assertThat(e.reason()).isEqualTo("zero_traffic");
       assertThat(e.value()).isZero();
       assertThat(e.reference()).isEqualTo(0.0);
+    }
+  }
+
+  @Test
+  void firingAlertClosesWhenItsSetEnds() throws Exception {
+    try (var h = harness(load(errorRateSet(0, ms(MON_MINUTE + 10))))) {
+      feed(h, MON_MINUTE, MON_MINUTE + 9, 100, 20);
+      assertThat(h.extractOutputValues()).extracting(AlertEvent::state).containsExactly("firing");
+
+      // The set's last minute is MON + 9 min, so the minute MON + 10 min closes the alert.
+      feed(h, MON_MINUTE + 10, MON_MINUTE + 10, 100, 20);
+      List<AlertEvent> out = h.extractOutputValues();
+      assertThat(out).hasSize(2);
+      AlertEvent fire = out.get(0);
+      assertThat(fire.state()).isEqualTo("firing");
+      assertThat(fire.startsAtMs()).isEqualTo(ms(MON_MINUTE));
+      AlertEvent closed = out.get(1);
+      assertThat(closed.state()).isEqualTo("resolved");
+      assertThat(closed.reason()).isEqualTo("thresholds_expired");
+      assertThat(closed.eventTimeMs()).isEqualTo(ms(MON_MINUTE + 11));
+      assertThat(closed.alertId()).isEqualTo(fire.alertId());
+      assertThat(closed.startsAtMs()).isEqualTo(fire.startsAtMs());
+      assertThat(closed)
+          .extracting(
+              AlertEvent::detector,
+              AlertEvent::setting,
+              AlertEvent::scope,
+              AlertEvent::signal,
+              AlertEvent::key,
+              AlertEvent::tenant,
+              AlertEvent::region,
+              AlertEvent::unit)
+          .containsExactly(
+              fire.detector(),
+              fire.setting(),
+              fire.scope(),
+              fire.signal(),
+              fire.key(),
+              fire.tenant(),
+              fire.region(),
+              fire.unit());
+      assertThat(closed.value()).isEqualTo(0.0);
+      assertThat(closed.reference()).isEqualTo(0.0);
+
+      feed(h, MON_MINUTE + 11, MON_MINUTE + 12, 100, 20);
+      assertThat(h.extractOutputValues()).hasSize(2);
+    }
+  }
+
+  @Test
+  void alertCarriesIntoTheNextSetOfTheSamePair() throws Exception {
+    List<ThresholdSet> sets =
+        load(errorRateSet(0, ms(MON_MINUTE + 10)), errorRateSet(ms(MON_MINUTE + 10), null));
+    try (var h = harness(sets)) {
+      feed(h, MON_MINUTE, MON_MINUTE + 12, 100, 20);
+
+      assertThat(h.extractOutputValues())
+          .extracting(AlertEvent::setting, AlertEvent::signal, AlertEvent::state)
+          .containsExactly(tuple("p99", "error_rate", "firing"));
     }
   }
 

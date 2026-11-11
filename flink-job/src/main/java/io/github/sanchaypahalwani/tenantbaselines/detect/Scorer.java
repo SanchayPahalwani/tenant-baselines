@@ -38,6 +38,9 @@ import org.apache.flink.util.OutputTag;
  *
  * <p>A key without a request for the expiry period of event time loses its state; each of its
  * firing alerts first gets a resolved event with reason "expired".
+ *
+ * <p>When a threshold set's range ends and no set of the same detector and setting takes over,
+ * each of its firing alerts gets a resolved event with reason "thresholds_expired".
  */
 public class Scorer
     extends KeyedBroadcastProcessFunction<String, MinuteAgg, PopulationBaseline, AlertEvent> {
@@ -62,6 +65,7 @@ public class Scorer
   private static final String GLOBAL = "global";
   private static final String ZERO_TRAFFIC = "zero_traffic";
   private static final String EXPIRED = "expired";
+  private static final String THRESHOLDS_EXPIRED = "thresholds_expired";
   private static final Signal[] SIGNALS = Signal.values();
 
   private final String runId;
@@ -71,6 +75,9 @@ public class Scorer
 
   /** Event time without a request after which a key's state goes. */
   private final Duration expiry;
+
+  /** The end of the replayed data, or {@code Long.MIN_VALUE} when there is none. */
+  private final long replayEndMs;
 
   private transient ValueState<VolumeRing> ring;
   private transient MapState<String, AlertStateMachine> machines;
@@ -83,17 +90,33 @@ public class Scorer
   /** The key's one expiry timer. */
   private transient ValueState<Long> expiryTimer;
 
+  /** A Scorer for an input without a replay end. */
   public Scorer(
       String runId,
       List<ThresholdSet> sets,
       List<SeasonalSetting> seasonal,
       boolean emitScores,
       Duration expiry) {
+    this(runId, sets, seasonal, emitScores, expiry, Long.MIN_VALUE);
+  }
+
+  /**
+   * @param replayEndMs end of the replayed data; at the final watermark, keys expire only up to
+   *     it. {@code Long.MIN_VALUE} means there is none.
+   */
+  public Scorer(
+      String runId,
+      List<ThresholdSet> sets,
+      List<SeasonalSetting> seasonal,
+      boolean emitScores,
+      Duration expiry,
+      long replayEndMs) {
     this.runId = runId;
     this.sets = sets;
     this.seasonal = seasonal;
     this.emitScores = emitScores;
     this.expiry = expiry;
+    this.replayEndMs = replayEndMs;
   }
 
   /**
@@ -208,6 +231,11 @@ public class Scorer
         decide(set.detector(), set.setting(), s, j, reference, minute, out);
       }
     }
+    for (ThresholdSet set : sets) {
+      if (endedWithoutSuccessor(set, ms)) {
+        closeFiring(set, a, out);
+      }
+    }
 
     // Every minute feeds the baseline, firing or not.
     if (h == null) {
@@ -241,18 +269,23 @@ public class Scorer
   }
 
   /**
-   * Moves the timer on to the current due time, or expires the key. Nothing happens at the final
-   * watermark: the end of a bounded replay is not a period of silence.
+   * Moves the timer on to the current due time, or expires the key. At the final watermark a key
+   * expires only if there is a replay end and the key is due at or before it: the time after the
+   * replayed data is not a period of silence. Up to the replay end, the expiry must not depend on
+   * how far the last real watermark got, which differs between the input modes.
    */
   @Override
   public void onTimer(long t, OnTimerContext ctx, Collector<AlertEvent> out) throws Exception {
-    if (ctx.currentWatermark() == Long.MAX_VALUE) {
+    boolean fin = ctx.currentWatermark() == Long.MAX_VALUE;
+    if (fin && (replayEndMs == Long.MIN_VALUE || t > replayEndMs)) {
       return;
     }
     long due = expiryDue();
     if (t < due) {
-      ctx.timerService().registerEventTimeTimer(due);
-      expiryTimer.update(due);
+      if (!(fin && due > replayEndMs)) {
+        ctx.timerService().registerEventTimeTimer(due);
+        expiryTimer.update(due);
+      }
       return;
     }
     String key = ctx.getCurrentKey();
@@ -384,7 +417,7 @@ public class Scorer
       throws Exception {
     MinuteAgg a = minute.agg();
     Judgement j = minute.withZeroTraffic(s, own);
-    String id = detector + "/" + setting + "/" + s.wire();
+    String id = machineId(detector, setting, s);
     AlertStateMachine m = machines.get(id);
     if (m == null) {
       m = new AlertStateMachine();
@@ -412,6 +445,60 @@ public class Scorer
             minute.signals().get(s),
             reference,
             fire && j != own ? ZERO_TRAFFIC : null));
+  }
+
+  /**
+   * Whether the set's range ended in the minute up to ms, with no set of the same detector and
+   * setting active at ms. For each key and set, that holds at one minute only.
+   */
+  private boolean endedWithoutSuccessor(ThresholdSet set, long ms) {
+    long end = set.validToMs();
+    if (end <= ms - 60_000L || end > ms) {
+      return false;
+    }
+    for (ThresholdSet next : sets) {
+      if (next.detector().equals(set.detector())
+          && next.setting().equals(set.setting())
+          && next.activeAt(ms)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /** Resolves each firing alert of the ended set at the end of minute a, and drops its machine. */
+  private void closeFiring(ThresholdSet set, MinuteAgg a, Collector<AlertEvent> out)
+      throws Exception {
+    for (Signal s : SIGNALS) {
+      String id = machineId(set.detector(), set.setting(), s);
+      AlertStateMachine m = machines.get(id);
+      if (m == null || !m.firing) {
+        continue;
+      }
+      out.collect(
+          Alerts.of(
+              runId,
+              set.detector(),
+              set.setting(),
+              Alerts.TENANT,
+              a.key(),
+              a.tenant(),
+              a.region(),
+              a.unit(),
+              s.wire(),
+              Alerts.RESOLVED,
+              m.startedAtMs,
+              a.minuteMs() + 60_000L,
+              0.0,
+              0.0,
+              THRESHOLDS_EXPIRED));
+      machines.remove(id);
+    }
+  }
+
+  /** A machine's id: detector/setting/signal. */
+  private static String machineId(String detector, String setting, Signal s) {
+    return detector + "/" + setting + "/" + s.wire();
   }
 
   private ScoreEvent scoreEvent(MinuteAgg a, Reading r) {

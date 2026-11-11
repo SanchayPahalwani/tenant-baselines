@@ -54,7 +54,9 @@ public final class Pipeline {
             .uid("population-baselines")
             .name("population-baselines");
 
-    Scorer scorer = new Scorer(cfg.runId(), sets, cfg.seasonal(), cfg.emitScores(), KEY_EXPIRY);
+    Scorer scorer =
+        new Scorer(
+            cfg.runId(), sets, cfg.seasonal(), cfg.emitScores(), KEY_EXPIRY, cfg.replayEndMs());
     SingleOutputStreamOperator<AlertEvent> candidates =
         aggregates
             .keyBy(MinuteAgg::key)
