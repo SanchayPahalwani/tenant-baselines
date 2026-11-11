@@ -10,7 +10,7 @@ CI_PY_IMAGE = tenant-baselines-ci-py
 .NOTPARALLEL:
 
 .PHONY: jar test-java test-py lint-py thresholds-demo check-am test ci up down reset submit demo smoke logs \
-	eval-dev
+	eval-dev check-paths
 
 # The dev seed and amplitude of `make eval-dev`.
 SEED ?= 7
@@ -76,3 +76,8 @@ logs:
 # One dev run end to end (synthetic data): data/eval/<run_id>/summary.json.
 eval-dev: jar up
 	cd py && uv run python -m tenant_baselines.eval_run --kind dev --seed $(SEED) --amplitude $(AMP)
+
+# The event-path equivalence check (spec 5.7, synthetic data): the paths world through the job as
+# events and as aggregates; writes docs/results/check-paths.json.
+check-paths: jar up
+	cd py && uv run python -m tenant_baselines.check_paths
