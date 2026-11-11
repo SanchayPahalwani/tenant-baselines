@@ -3,8 +3,8 @@
 # start unless the stack is empty (`make reset`). Checks 1-6 are polled every 15 s for up to
 # 30 minutes: the demo script's tenant drop and regional error spike start 2 and 14 minutes
 # after the generator catches up. Checks 7 and 8 run once after them. Check 9 restores the job
-# from a checkpoint, checks that it re-emitted minute rows to Kafka, and that ClickHouse collapses them
-# to one row each. Prints PASS or FAIL per check and exits 1 if any failed.
+# from a checkpoint, checks that it re-emitted minute rows to Kafka, and that ClickHouse collapses
+# them to one row each. Prints PASS or FAIL per check and exits 1 if any failed.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."

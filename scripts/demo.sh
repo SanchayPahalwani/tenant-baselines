@@ -52,7 +52,7 @@ if [ "$with_data" -gt 0 ]; then
 fi
 
 echo "Starting the demo: three weeks of synthetic history, then live traffic." \
-  "Warm-up takes about 3 to 4 minutes."
+  "Warm-up takes about 1.5 to 3.5 minutes."
 
 start=$SECONDS
 docker compose --profile demo up -d --build --no-deps generator
@@ -113,7 +113,9 @@ for _ in 1 2 3 4 5 6; do
   sleep 5
 done
 echo "events dropped as late: $late"
-if [ "$late" != 0 ]; then
+if [ "$late" = unknown ]; then
+  echo "Could not read the late-events count; see http://localhost:8081 for the job's state." >&2
+elif [ "$late" != 0 ]; then
   echo "The history arrived behind the watermark, so the baselines are incomplete." \
     'Run "make reset && make demo" with the machine awake to start clean.' >&2
 fi
