@@ -5,8 +5,8 @@
 #
 # By default it cancels any running or restarting tenant-baselines-live job (checkpoints are
 # retained on cancel) and submits a new one restored from the newest retained checkpoint of any
-# job, so alerts that are firing carry over and get their resolved events. Only when there is no
-# checkpoint does it start with empty state, from the consumer group's committed offsets. It
+# live job, so alerts that are firing carry over and get their resolved events. Only when there is
+# no checkpoint does it start with empty state, from the consumer group's committed offsets. It
 # prints which of the two it did.
 #
 # --from-checkpoint waits until the running job has completed 3 checkpoints, cancels it
@@ -19,7 +19,7 @@ set -euo pipefail
 
 JOB_NAME=tenant-baselines-live
 JAR=/opt/tb-job/target/tenant-baselines-job.jar
-CHECKPOINT_DIR=/flink-data/checkpoints
+CHECKPOINT_DIR=/flink-data/checkpoints/live
 REST=http://localhost:8081
 RETAINED=3
 TIMEOUT="${TIMEOUT:-180}"
@@ -90,7 +90,7 @@ retained_checkpoints() {
   done | sort -n | cut -d' ' -f2
 }
 
-# The newest chk-N directory with its _metadata file, of any job; nothing if there is none.
+# The newest chk-N directory with its _metadata file, of any live job; nothing if there is none.
 newest_checkpoint() {
   [ -d "$CHECKPOINT_DIR" ] || return 0
   find "$CHECKPOINT_DIR" -mindepth 3 -maxdepth 3 -path '*/chk-*/_metadata' -printf '%T@ %h\n' \
@@ -98,7 +98,7 @@ newest_checkpoint() {
 }
 
 submit() {
-  flink run -d "$@" "$JAR" \
+  flink run -d -Dexecution.checkpointing.dir=file:///flink-data/checkpoints/live "$@" "$JAR" \
     --bootstrap kafka:19092 --ns live --run-id live --mode live \
     --thresholds /opt/tb-config/thresholds-demo.json
 }

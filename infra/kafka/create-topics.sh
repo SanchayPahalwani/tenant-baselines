@@ -16,11 +16,17 @@ create() {
 }
 
 for ns in live eval bench; do
+  # The job's sink stamps records with event time, and a replay's event time is months old, so
+  # retention would delete eval and bench output before it is read. Append time avoids that.
+  stamp=()
+  if [ "$ns" != live ]; then
+    stamp=(--config message.timestamp.type=LogAppendTime)
+  fi
   create "$ns.events" 8 --config retention.ms=86400000
-  create "$ns.aggregates" 4
-  create "$ns.scores" 4
-  create "$ns.alerts" 1
-  create "$ns.unit-status" 1 --config cleanup.policy=compact
+  create "$ns.aggregates" 4 ${stamp[@]+"${stamp[@]}"}
+  create "$ns.scores" 4 ${stamp[@]+"${stamp[@]}"}
+  create "$ns.alerts" 1 ${stamp[@]+"${stamp[@]}"}
+  create "$ns.unit-status" 1 --config cleanup.policy=compact ${stamp[@]+"${stamp[@]}"}
 done
 
 echo "topics:"
