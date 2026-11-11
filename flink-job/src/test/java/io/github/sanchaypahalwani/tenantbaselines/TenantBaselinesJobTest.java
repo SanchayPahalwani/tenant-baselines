@@ -66,6 +66,25 @@ class TenantBaselinesJobTest {
   }
 
   @Test
+  void aggregatesJobSkipsTheAggregator() throws Exception {
+    StreamGraph graph =
+        graph(
+            "--ns", "eval", "--mode", "aggregates", "--input-topic", "x.aggregates-in",
+            "--replay-end-ms", "600000");
+
+    assertThat(uids(graph))
+        .doesNotContainNull()
+        .contains("aggregates-source", "population-baselines", "scorer", "region-grouper")
+        .contains("alerts-sink")
+        .doesNotContain("events-source", "minute-aggregator", "aggregates-sink", "late-events");
+    // The topic has one partition: a second source subtask would have no split.
+    assertThat(graph.getStreamNodes())
+        .filteredOn(node -> "aggregates-source".equals(node.getTransformationUID()))
+        .singleElement()
+        .satisfies(node -> assertThat(node.getParallelism()).isEqualTo(1));
+  }
+
+  @Test
   void scoresAreSunkOnlyWhenEmitted() throws Exception {
     assertThat(uids(graph("--ns", "eval", "--mode", "replay"))).doesNotContain("scores-sink");
     assertThat(uids(graph("--ns", "eval", "--mode", "replay", "--scores", "true")))

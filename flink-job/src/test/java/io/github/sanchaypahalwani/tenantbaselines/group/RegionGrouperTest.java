@@ -30,6 +30,9 @@ class RegionGrouperTest {
   static final String ERROR_RATE = "error_rate";
   static final String LATENCY = "latency_p95";
 
+  /** 1970-01-05 00:00 UTC, a Monday. */
+  private static final long MON = 345_600_000L;
+
   static long min(long n) {
     return n * 60_000L;
   }
@@ -626,6 +629,41 @@ class RegionGrouperTest {
               AlertEvent::scope, AlertEvent::state, AlertEvent::tenant, AlertEvent::eventTimeMs)
           .containsExactly(
               tuple("tenant", "firing", "a", min(63)), tuple("tenant", "firing", "b", min(63)));
+    }
+  }
+
+  /**
+   * A candidate is applied at the end of the minute its record timestamp falls in. Both modes stamp
+   * a minute's records with its last millisecond, so the candidate of minute MON is held from the
+   * timer at MON + 59_999. A record stamped one millisecond later, as an assigner that took the
+   * next minute's start would stamp it, is applied a minute later, and so is its release.
+   */
+  @Test
+  void candidateStampedInsideItsMinuteAppliesAtThatMinutesEnd() throws Exception {
+    long n = MON / 60_000L;
+    try (var h = harness()) {
+      h.processElement1(
+          candidate(SEASONAL, K4, "a", "u1", ERROR_RATE, Alerts.FIRING, n), MON + 59_999);
+
+      h.processBothWatermarks(new Watermark(MON + 59_998));
+      assertThat(released(h)).isEmpty();
+      h.processBothWatermarks(new Watermark(MON + 59_999 + RegionGrouper.HOLD_MS - 1));
+      assertThat(released(h)).isEmpty();
+      h.processBothWatermarks(new Watermark(MON + 59_999 + RegionGrouper.HOLD_MS));
+      assertThat(released(h))
+          .extracting(AlertEvent::scope, AlertEvent::state, AlertEvent::eventTimeMs)
+          .containsExactly(tuple("tenant", "firing", MON + 60_000 + RegionGrouper.HOLD_MS));
+    }
+    try (var h = harness()) {
+      h.processElement1(
+          candidate(SEASONAL, K4, "a", "u1", ERROR_RATE, Alerts.FIRING, n), MON + 60_000);
+
+      h.processBothWatermarks(new Watermark(MON + 119_999 + RegionGrouper.HOLD_MS - 1));
+      assertThat(released(h)).isEmpty();
+      h.processBothWatermarks(new Watermark(MON + 119_999 + RegionGrouper.HOLD_MS));
+      assertThat(released(h))
+          .extracting(AlertEvent::scope, AlertEvent::state, AlertEvent::eventTimeMs)
+          .containsExactly(tuple("tenant", "firing", MON + 120_000 + RegionGrouper.HOLD_MS));
     }
   }
 

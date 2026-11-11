@@ -12,8 +12,10 @@ import io.github.sanchaypahalwani.tenantbaselines.model.Keys;
 import io.github.sanchaypahalwani.tenantbaselines.model.MinuteAgg;
 import io.github.sanchaypahalwani.tenantbaselines.model.ScoreEvent;
 import io.github.sanchaypahalwani.tenantbaselines.model.Signal;
+import io.github.sanchaypahalwani.tenantbaselines.time.Watermarks;
 import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.runtime.testutils.MiniClusterResourceConfiguration;
@@ -109,12 +111,16 @@ class PipelineTest {
     return Pipeline.build(withTimestamps(events), config(SEASONAL_END_MS), thresholds());
   }
 
-  private static <T> List<T> collect(DataStream<T> stream) throws Exception {
+  private static <T> List<T> drain(CloseableIterator<T> it) throws Exception {
     List<T> out = new ArrayList<>();
-    try (CloseableIterator<T> it = stream.executeAndCollect()) {
+    try (it) {
       it.forEachRemaining(out::add);
     }
     return out;
+  }
+
+  private static <T> List<T> collect(DataStream<T> stream) throws Exception {
+    return drain(stream.executeAndCollect());
   }
 
   @Test
@@ -164,6 +170,86 @@ class PipelineTest {
     assertThat(staticAlerts)
         .filteredOn(a -> a.scope().equals("tenant") && a.state().equals("firing"))
         .isEmpty();
+  }
+
+  /** The regional input's config in one mode: both modes share the settings and replay end. */
+  private static JobConfig regionalConfig(String... modeArgs) {
+    List<String> args =
+        new ArrayList<>(
+            List.of(
+                "--run-id", "test", "--replay-end-ms", "" + 75 * MINUTE_MS,
+                "--seasonal-k", "3,4", "--live-setting", "k4"));
+    args.addAll(List.of(modeArgs));
+    return JobConfig.parse(args.toArray(String[]::new));
+  }
+
+  /**
+   * The alerts with emittedAtMs, the wall clock, zeroed, sorted by event time, region, detector,
+   * setting, signal, key, state and alert id.
+   */
+  private static List<AlertEvent> normalForm(List<AlertEvent> alerts) {
+    return alerts.stream()
+        .map(
+            a ->
+                new AlertEvent(
+                    a.alertId(), a.runId(), a.detector(), a.setting(), a.scope(), a.key(),
+                    a.tenant(), a.region(), a.unit(), a.signal(), a.state(), a.startsAtMs(),
+                    a.eventTimeMs(), 0L, a.value(), a.reference(), a.reason()))
+        .sorted(
+            Comparator.comparingLong(AlertEvent::eventTimeMs)
+                .thenComparing(AlertEvent::region)
+                .thenComparing(AlertEvent::detector)
+                .thenComparing(AlertEvent::setting)
+                .thenComparing(AlertEvent::signal)
+                .thenComparing(AlertEvent::key)
+                .thenComparing(AlertEvent::state)
+                .thenComparing(AlertEvent::alertId))
+        .toList();
+  }
+
+  /**
+   * The eval reads pre-built aggregates instead of events. Fed the events run's own aggregates in
+   * (minute, key) order, the detection chain must write the same alert log.
+   */
+  @Test
+  void aggregatesModeGivesTheEventsModeAlertLog() throws Exception {
+    StreamExecutionEnvironment eventsEnv = StreamExecutionEnvironment.getExecutionEnvironment();
+    Pipeline.Outputs fromEvents =
+        Pipeline.build(
+            withTimestamps(eventsEnv.fromData(regionalEvents())),
+            regionalConfig("--mode", "replay"),
+            thresholds());
+    CloseableIterator<MinuteAgg> aggregatesOut = fromEvents.aggregates().collectAsync();
+    CloseableIterator<AlertEvent> eventsAlertsOut = fromEvents.alerts().collectAsync();
+    eventsEnv.executeAsync();
+    List<MinuteAgg> aggregates = drain(aggregatesOut);
+    List<AlertEvent> eventsAlerts = drain(eventsAlertsOut);
+    assertThat(aggregates).hasSize(4 * 75);
+
+    List<MinuteAgg> inOrder =
+        aggregates.stream()
+            .sorted(Comparator.comparingLong(MinuteAgg::minuteMs).thenComparing(MinuteAgg::key))
+            .toList();
+    StreamExecutionEnvironment aggregatesEnv = StreamExecutionEnvironment.getExecutionEnvironment();
+    DataStream<MinuteAgg> read =
+        aggregatesEnv.fromData(inOrder)
+            .setParallelism(1)
+            .assignTimestampsAndWatermarks(Watermarks.aggregates())
+            .setParallelism(1);
+    Pipeline.Outputs fromAggregates =
+        Pipeline.detect(
+            read,
+            null,
+            regionalConfig("--mode", "aggregates", "--input-topic", "test.aggregates-in"),
+            thresholds());
+    assertThat(fromAggregates.late()).isNull();
+    List<AlertEvent> aggregatesAlerts = collect(fromAggregates.alerts());
+
+    List<AlertEvent> expected = normalForm(eventsAlerts);
+    assertThat(expected)
+        .filteredOn(a -> a.scope().equals("region") && a.state().equals("firing"))
+        .isNotEmpty();
+    assertThat(normalForm(aggregatesAlerts)).containsExactlyElementsOf(expected);
   }
 
   @Test

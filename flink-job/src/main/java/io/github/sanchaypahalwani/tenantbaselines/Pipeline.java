@@ -17,7 +17,7 @@ import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 
-/** Aggregation and scoring topology, independent of where events come from and go to. */
+/** Aggregation and scoring topology, independent of where its input comes from and goes to. */
 public final class Pipeline {
 
   /**
@@ -46,6 +46,22 @@ public final class Pipeline {
             .uid("minute-aggregator")
             .name("minute-aggregator");
 
+    return detect(aggregates, aggregates.getSideOutput(MinuteAggregator.LATE), cfg, sets);
+  }
+
+  /**
+   * Baselines, scoring and grouping of minute aggregates, built from events or read pre-built.
+   *
+   * @param aggregates each key's minutes in order, each stamped with the last millisecond of its
+   *     minute
+   * @param late the events that came after their minute closed; null for pre-built aggregates,
+   *     and {@link Outputs#late()} is then null
+   */
+  public static Outputs detect(
+      DataStream<MinuteAgg> aggregates,
+      DataStream<Event> late,
+      JobConfig cfg,
+      List<ThresholdSet> sets) {
     SingleOutputStreamOperator<PopulationBaseline> population =
         aggregates
             .keyBy(a -> PopulationBaselines.SINGLE_KEY, Types.STRING)
@@ -69,9 +85,7 @@ public final class Pipeline {
         candidates
             .keyBy(AlertEvent::region)
             .connect(aggregates.keyBy(MinuteAgg::region))
-            .process(
-                new RegionGrouper(
-                    cfg.runId(), Scorer.SEASONAL, cfg.seasonal().get(0).setting(), KEY_EXPIRY))
+            .process(new RegionGrouper(cfg.runId(), Scorer.SEASONAL, cfg.liveSetting(), KEY_EXPIRY))
             .uid("region-grouper")
             .name("region-grouper");
 
@@ -80,6 +94,6 @@ public final class Pipeline {
         grouped,
         candidates.getSideOutput(Scorer.SCORES),
         grouped.getSideOutput(RegionGrouper.UNIT_STATUS),
-        aggregates.getSideOutput(MinuteAggregator.LATE));
+        late);
   }
 }
