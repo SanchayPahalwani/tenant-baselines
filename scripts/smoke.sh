@@ -1,17 +1,52 @@
 #!/usr/bin/env bash
-# End-to-end smoke test of the demo; `make smoke` runs it after `make demo`, which refuses to
-# start unless the stack is empty (`make reset`). Checks 1-6 are polled every 15 s for up to
-# 30 minutes: the demo script's tenant drop and regional error spike start 2 and 14 minutes
-# after the generator catches up. Checks 7 and 8 run once after them. Check 9 restores the job
-# from a checkpoint, checks that it re-emitted minute rows to Kafka, and that ClickHouse collapses
-# them to one row each. Prints PASS or FAIL per check and exits 1 if any failed.
+# End-to-end smoke test of the grouped demo; `make smoke` runs it after `make demo`, which refuses
+# to start unless the stack is empty (`make reset`). Checks 1-8 are polled every 15 s for up to
+# 30 minutes: the demo script's tenant drop, error burst and regional error spike start 2, 3 and
+# 11 minutes after the generator catches up. Check 5 can be observed only during the scripted
+# spike, from about 17 to 26 minutes after catch-up, so it cannot be rerun later on the same stack.
+# Checks 9-12 then run once, in order. Check 11 restores the job from its oldest retained
+# checkpoint and checks that the re-emitted output collapses to one row each. Check 12 stops the
+# generator, restores the job during the total outage and waits for it to page; it leaves the
+# generator stopped.
+#
+# CHECKS, a space-separated list of check numbers, runs only those (default: all), and only they
+# count. CHECKS="11 12" scripts/smoke.sh reruns the restore and outage checks on a live demo
+# stack; check 12 needs the generator running again: `docker compose --profile demo start
+# generator`, then wait two minutes.
+#
+# Prints PASS or FAIL per check and exits 1 if any failed.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+ALL_CHECKS="1 2 3 4 5 6 7 8 9 10 11 12"
+CHECKS="${CHECKS:-$ALL_CHECKS}"
 POLL_S=15
 LIMIT_S="${LIMIT_S:-1800}"
-SETTLE_S=60
+# After a restore no minute closes until every partition has delivered an event or been silent
+# for 60 s, so the restored job's output needs about two minutes.
+RESTORE_SETTLE_S=120
+# Every partition goes idle after 60 s without an event.
+OUTAGE_SILENCE_S=90
+OUTAGE_LIMIT_S=900
+
+selected=" "
+for c in $CHECKS; do
+  case " $ALL_CHECKS " in
+    *" $c "*) selected+="$c " ;;
+    *)
+      echo "smoke: CHECKS has '$c'; use check numbers from 1 to 12" >&2
+      exit 2
+      ;;
+  esac
+done
+
+wanted() {
+  case "$selected" in
+    *" $1 "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 # Local demo credential, not a secret.
 ch() {
@@ -26,7 +61,7 @@ ch_positive() {
 
 # An alert decided within 10 minutes of its event time was decided live, not in the history
 # (the forwarder's stale rule).
-DECIDED_LIVE="dateDiff('second', event_time, emitted_at) < 600"
+LIVE="dateDiff('second', event_time, emitted_at) < 600"
 
 # Live minute rows, and the history reaches back three weeks.
 check_aggregates() {
@@ -35,24 +70,59 @@ check_aggregates() {
 }
 
 check_drop_alert() {
-  ch_positive "SELECT count() FROM tb.alert_log FINAL WHERE ns='live' AND state='firing'
-    AND detector='seasonal' AND signal='volume_5m' AND unit LIKE '%-d-%' AND $DECIDED_LIVE"
+  ch_positive "SELECT count() FROM tb.alert_log FINAL WHERE ns='live' AND scope='tenant'
+    AND state='firing' AND detector='seasonal' AND signal='volume_5m' AND unit LIKE '%-d-%'
+    AND $LIVE"
 }
 
-check_spike_alert() {
-  ch_positive "SELECT count() FROM tb.alert_log FINAL WHERE ns='live' AND state='firing'
-    AND detector='seasonal' AND signal='error_rate' AND $DECIDED_LIVE"
+check_regional_alert() {
+  ch_positive "SELECT count() FROM tb.alert_log FINAL WHERE ns='live' AND scope='region'
+    AND state='firing' AND detector='seasonal' AND signal='error_rate' AND $LIVE"
 }
 
-check_alertmanager() {
-  local body
-  body=$(curl -sf 'http://localhost:9093/api/v2/alerts?filter=detector%3D%22seasonal%22') \
-    && [ -n "$body" ] && [ "$body" != "[]" ]
+check_absorbed() {
+  ch_positive "SELECT count() FROM tb.alert_log FINAL WHERE ns='live' AND state='absorbed'
+    AND detector='seasonal' AND signal='error_rate' AND reason LIKE 'regional:%' AND $LIVE"
+}
+
+# An error_rate tenant alert that Alertmanager reports as inhibited.
+check_inhibit() {
+  curl -sf http://localhost:9093/api/v2/alerts | python3 -c '
+import json
+import sys
+
+alerts = json.load(sys.stdin)
+sys.exit(0 if any(
+    a["labels"].get("scope") == "tenant"
+    and a["labels"].get("signal") == "error_rate"
+    and a["status"].get("inhibitedBy")
+    for a in alerts
+) else 1)'
+}
+
+# True if pager-sink logged a notification to the given webhook path.
+paged() {
+  docker compose exec -T pager-sink grep -qF "\"receiver\": \"$1\"" /data/notifications.jsonl \
+    2> /dev/null
+}
+
+check_pagers() {
+  paged /regional && paged /tenant
 }
 
 check_scores() {
   ch_positive "SELECT uniqExact(signal) = 3 FROM tb.scores FINAL
     WHERE ns='live' AND median IS NOT NULL"
+}
+
+# A dedicated unit with a live drain and an undrain at a later time.
+check_unit_status() {
+  ch_positive "SELECT count() FROM (
+      SELECT unit FROM tb.unit_status FINAL
+      WHERE ns='live' AND unit LIKE '%-d-%' AND dateDiff('second', at, emitted_at) < 600
+      GROUP BY unit
+      HAVING countIf(status = 'drain') > 0
+        AND minIf(at, status = 'drain') < maxIf(at, status = 'undrain'))"
 }
 
 # (key, minute) pairs written to live.aggregates more than once. MinuteAgg JSON has "key"
@@ -64,102 +134,193 @@ reemitted_minutes() {
     | sort | uniq -d | wc -l | tr -d ' '
 }
 
-check_pager() {
-  local n
-  n=$(docker compose exec -T pager-sink wc -l /data/notifications.jsonl 2> /dev/null \
-    | awk '{ print $1 }') && [ -n "$n" ] && [ "$n" -ge 1 ]
+# A zero-count minute that starts at least 5 minutes after the given epoch second.
+outage_zero_minute() {
+  ch_positive "SELECT count() FROM tb.aggregates WHERE ns='live' AND count = 0
+    AND minute >= toDateTime($1, 'UTC') + INTERVAL 5 MINUTE"
+}
+
+# A live seasonal volume_5m alert, tenant or regional, whose event time is after the given
+# epoch second.
+outage_alert() {
+  ch_positive "SELECT count() FROM tb.alert_log FINAL WHERE ns='live' AND state='firing'
+    AND detector='seasonal' AND signal='volume_5m' AND event_time > toDateTime($1, 'UTC')
+    AND $LIVE"
 }
 
 names=(
   ""
   "1 tb.aggregates has live rows reaching back 20 days"
-  "2 tb.alert_log has a seasonal volume_5m alert on a dedicated unit, decided live"
-  "3 tb.alert_log has a seasonal error_rate alert, decided live"
-  "4 Alertmanager has seasonal alerts"
-  "5 pager-sink logged a notification"
-  "6 tb.scores has a median for each of the three signals"
-  "7 tb.ingest_errors is empty"
-  "8 the job dropped no events as late"
-  "9 restored job's re-emitted output collapses to one row each in aggregates, scores and alert_log"
+  "2 tb.alert_log has a seasonal volume_5m tenant alert on a dedicated unit, decided live"
+  "3 tb.alert_log has a seasonal error_rate regional alert, decided live"
+  "4 tb.alert_log has seasonal error_rate tenant alerts absorbed by a regional alert, decided live"
+  "5 Alertmanager inhibits an error_rate tenant alert"
+  "6 pager-sink logged notifications to the /regional and the /tenant receiver"
+  "7 tb.scores has a median for each of the three signals"
+  "8 tb.unit_status has a live drain of a dedicated unit and a later undrain"
+  "9 tb.ingest_errors is empty"
+  "10 the job dropped no events as late"
+  "11 a job restored from its oldest checkpoint re-emits output that collapses to one row each"
+  "12 a total outage across a restore closes zero-count minutes and pages a volume_5m alert"
 )
-polled=(1 2 3 4 5 6)
-checks=("" check_aggregates check_drop_alert check_spike_alert check_alertmanager check_pager check_scores)
-passed=("" false false false false false false)
+checks=("" check_aggregates check_drop_alert check_regional_alert check_absorbed check_inhibit
+  check_pagers check_scores check_unit_status)
+passed=("" false false false false false false false false)
+polled=()
+for i in 1 2 3 4 5 6 7 8; do
+  if wanted "$i"; then
+    polled+=("$i")
+  fi
+done
+ran=0
 failures=0
 
-pass() { echo "PASS $1"; }
+pass() {
+  echo "PASS $1"
+  ran=$((ran + 1))
+}
 fail() {
   echo "FAIL $1"
+  ran=$((ran + 1))
   failures=$((failures + 1))
 }
 
-start=$SECONDS
-deadline=$((start + LIMIT_S))
-polls=0
-while :; do
-  waiting=()
-  for i in "${polled[@]}"; do
-    "${passed[i]}" && continue
-    if "${checks[i]}"; then
-      passed[i]=true
-      pass "${names[i]} (after $((SECONDS - start)) s)"
-    else
-      waiting+=("$i")
+poll_checks() {
+  local start=$SECONDS
+  local deadline=$((start + LIMIT_S))
+  local polls=0 i waiting
+  while :; do
+    waiting=()
+    for i in "${polled[@]}"; do
+      "${passed[i]}" && continue
+      if "${checks[i]}"; then
+        passed[i]=true
+        pass "${names[i]} (after $((SECONDS - start)) s)"
+      else
+        waiting+=("$i")
+      fi
+    done
+    [ "${#waiting[@]}" -eq 0 ] && break
+    [ "$SECONDS" -lt "$deadline" ] || break
+    polls=$((polls + 1))
+    if [ $((polls % 4)) -eq 0 ]; then
+      echo "waiting for check ${waiting[*]} ($((SECONDS - start)) s of ${LIMIT_S} s)"
     fi
+    sleep "$POLL_S"
   done
-  [ "${#waiting[@]}" -eq 0 ] && break
-  [ "$SECONDS" -lt "$deadline" ] || break
-  polls=$((polls + 1))
-  if [ $((polls % 4)) -eq 0 ]; then
-    echo "waiting for check ${waiting[*]} ($((SECONDS - start)) s of ${LIMIT_S} s)"
+  for i in "${polled[@]}"; do
+    "${passed[i]}" || fail "${names[i]} (not seen within ${LIMIT_S} s)"
+  done
+}
+
+check_ingest_errors() {
+  local errors
+  errors=$(ch "SELECT count() FROM tb.ingest_errors") || errors=unknown
+  if [ "$errors" = 0 ]; then
+    pass "${names[9]}"
+  else
+    fail "${names[9]} ($errors rows)"
   fi
-  sleep "$POLL_S"
-done
-for i in "${polled[@]}"; do
-  "${passed[i]}" || fail "${names[i]} (not seen within ${LIMIT_S} s)"
-done
+}
 
-errors=$(ch "SELECT count() FROM tb.ingest_errors") || errors=unknown
-if [ "$errors" = 0 ]; then
-  pass "${names[7]}"
-else
-  fail "${names[7]} ($errors rows)"
-fi
+check_late() {
+  local late
+  late=$(scripts/late-events.sh) || late=unknown
+  if [ "$late" = 0 ]; then
+    pass "${names[10]} (lateEvents $late)"
+  else
+    fail "${names[10]} (lateEvents $late)"
+  fi
+}
 
-late=$(scripts/late-events.sh) || late=unknown
-if [ "$late" = 0 ]; then
-  pass "${names[8]} (lateEvents $late)"
-else
-  fail "${names[8]} (lateEvents $late)"
-fi
-
-echo "restoring the job from a checkpoint"
-if docker compose exec -T jobmanager bash /opt/tb-scripts/submit-job.sh --from-checkpoint; then
-  echo "waiting ${SETTLE_S} s for the restored job's output"
-  sleep "$SETTLE_S"
+check_restore() {
+  local reemitted agg_extra scores_extra alert_extra late detail
+  echo "restoring the job from its oldest retained checkpoint"
+  if ! docker compose exec -T jobmanager bash /opt/tb-scripts/submit-job.sh --from-checkpoint; then
+    fail "${names[11]} (resubmit failed)"
+    return
+  fi
+  echo "waiting ${RESTORE_SETTLE_S} s for the restored job's output"
+  sleep "$RESTORE_SETTLE_S"
   reemitted=$(reemitted_minutes) || reemitted=unknown
   agg_extra=$(ch "SELECT count() - uniqExact(key, minute) FROM tb.aggregates FINAL WHERE ns='live'") \
     || agg_extra=unknown
-  scores_extra=$(ch "SELECT count() - uniqExact(key, signal, minute) FROM tb.scores FINAL WHERE ns='live'") \
-    || scores_extra=unknown
-  alert_extra=$(ch "SELECT count() - uniqExact(alert_id, state) FROM tb.alert_log FINAL WHERE ns='live'") \
-    || alert_extra=unknown
-  detail="re-emitted minute rows $reemitted; extra rows: aggregates $agg_extra, scores $scores_extra, alert_log $alert_extra"
+  scores_extra=$(ch "SELECT count() - uniqExact(key, signal, minute) FROM tb.scores FINAL
+    WHERE ns='live'") || scores_extra=unknown
+  # Business columns, not the dedup key alert_id, so an alert re-emitted with another id counts.
+  alert_extra=$(ch "SELECT count() - uniqExact(detector, setting, scope, key, signal, starts_at, state)
+    FROM tb.alert_log FINAL WHERE ns='live'") || alert_extra=unknown
+  # The restored job starts on a backlog at least 60 s deep while traffic is live.
+  late=$(scripts/late-events.sh) || late=unknown
+  detail="re-emitted minute rows $reemitted; extra rows: aggregates $agg_extra, scores $scores_extra,"
+  detail+=" alert_log $alert_extra; restored job's lateEvents $late"
   if [ "$reemitted" = unknown ]; then
-    fail "${names[9]} (could not read live.aggregates; $detail)"
+    fail "${names[11]} (could not read live.aggregates; $detail)"
   elif [ "$reemitted" -eq 0 ]; then
-    fail "${names[9]} (nothing was re-emitted, so nothing was tested; $detail)"
-  elif [ "$agg_extra" = 0 ] && [ "$scores_extra" = 0 ] && [ "$alert_extra" = 0 ]; then
-    pass "${names[9]} ($detail)"
+    fail "${names[11]} (nothing was re-emitted, so nothing was tested; $detail)"
+  elif [ "$agg_extra" = 0 ] && [ "$scores_extra" = 0 ] && [ "$alert_extra" = 0 ] \
+    && [ "$late" = 0 ]; then
+    pass "${names[11]} ($detail)"
   else
-    fail "${names[9]} ($detail)"
+    fail "${names[11]} ($detail)"
   fi
-else
-  fail "${names[9]} (resubmit failed)"
+}
+
+# "after <n> s", or "not seen" when n is empty.
+seen_after() {
+  if [ -n "$1" ]; then
+    echo "after $1 s"
+  else
+    echo "not seen"
+  fi
+}
+
+check_outage() {
+  local stop deadline zero_s="" alert_s="" detail
+  echo "stopping the generator: a total outage"
+  if ! docker compose --profile demo stop generator; then
+    fail "${names[12]} (could not stop the generator)"
+    return
+  fi
+  stop=$(date +%s)
+  echo "waiting ${OUTAGE_SILENCE_S} s so every partition is silent"
+  sleep "$OUTAGE_SILENCE_S"
+  echo "restoring the job from its newest checkpoint during the outage"
+  if ! docker compose exec -T jobmanager bash /opt/tb-scripts/submit-job.sh; then
+    fail "${names[12]} (resubmit failed)"
+    return
+  fi
+  deadline=$((SECONDS + OUTAGE_LIMIT_S))
+  while :; do
+    if [ -z "$zero_s" ] && outage_zero_minute "$stop"; then
+      zero_s=$(($(date +%s) - stop))
+    fi
+    if [ -z "$alert_s" ] && outage_alert "$stop"; then
+      alert_s=$(($(date +%s) - stop))
+    fi
+    [ -n "$zero_s" ] && [ -n "$alert_s" ] && break
+    [ "$SECONDS" -lt "$deadline" ] || break
+    sleep "$POLL_S"
+  done
+  detail="from the generator stop: zero-count minute $(seen_after "$zero_s"),"
+  detail+=" volume_5m alert $(seen_after "$alert_s")"
+  if [ -n "$zero_s" ] && [ -n "$alert_s" ]; then
+    pass "${names[12]} ($detail)"
+  else
+    fail "${names[12]} ($detail; polled ${OUTAGE_LIMIT_S} s after the restore)"
+  fi
+}
+
+if [ "${#polled[@]}" -gt 0 ]; then
+  poll_checks
 fi
+if wanted 9; then check_ingest_errors; fi
+if wanted 10; then check_late; fi
+if wanted 11; then check_restore; fi
+if wanted 12; then check_outage; fi
 
 if [ "$failures" -gt 0 ]; then
-  echo "smoke: $failures of 9 checks failed"
+  echo "smoke: $failures of $ran checks failed"
   exit 1
 fi
-echo "smoke: all 9 checks passed"
+echo "smoke: all $ran checks passed"

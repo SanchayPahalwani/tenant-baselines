@@ -10,10 +10,15 @@ FLINK="${FLINK_URL:-http://localhost:8081}"
 exec python3 - "$FLINK" << 'PY'
 import json
 import sys
+import time
 import urllib.parse
 import urllib.request
 
 base = sys.argv[1]
+# The REST API answers from a metric cache. A request more than 10 s after the last refresh
+# starts a new one but is answered from the old cache, which can be minutes old or older than
+# the job. The script starts a refresh and waits this long before it reads.
+REFRESH_WAIT_S = 5
 
 
 def get(path):
@@ -31,8 +36,11 @@ try:
     if not jobs:
         die("no running job")
     jid = jobs[0]["jid"]
+    vertices = get(f"/jobs/{jid}")["vertices"]
+    get(f"/jobs/{jid}/vertices/{vertices[0]['id']}/metrics")
+    time.sleep(REFRESH_WAIT_S)
     ids = []
-    for v in get(f"/jobs/{jid}")["vertices"]:
+    for v in vertices:
         found = [m["id"] for m in get(f"/jobs/{jid}/vertices/{v['id']}/metrics")
                  if m["id"].endswith(".late-events.lateEvents")]
         if found:

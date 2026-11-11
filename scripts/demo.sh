@@ -15,8 +15,9 @@ TOPIC=live.events
 PARTITIONS_TIMEOUT_S=120
 WARMUP_TIMEOUT_S=900
 POLL_S=5
-# Caught up when the newest closed minute starts at most this long before now.
-CAUGHT_UP_S=120
+# Caught up when the newest closed minute starts at most this long before now. That minute can
+# start up to 60 s + 80 s of watermark lag before now, so 120 passes at quiet hours only by luck.
+CAUGHT_UP_S=180
 
 # Local demo credential, not a secret.
 ch() {
@@ -134,7 +135,12 @@ fi
 echo "Alertmanager http://localhost:9093"
 echo "Flink http://localhost:8081"
 echo
-echo "What to watch:"
-echo "  the tenant drop (UTC times above) pages about 4 to 5 minutes after it starts;"
-echo "  the regional error spike pages about 3 to 4 minutes after it starts;"
+echo "What to watch (UTC times above):"
+echo "  every tenant alert is held for 2 minutes before it pages;"
+echo "  the tenant drop pages as a tenant alert once its hold ends;"
+echo "  the error burst on one tenant's dedicated unit pages as a tenant alert and drains the unit;"
+echo "  the error spike across that tenant's region forms one regional alert at the end of a hold,"
+echo "  undrains the unit and mutes the burst's tenant page in Alertmanager;"
+echo "  the regional alert usually absorbs the other tenants' alerts in the region; one of them"
+echo "  can page first when their alerts land a minute apart;"
 echo "  alerts decided during the history appear in the alert log but are never paged."
