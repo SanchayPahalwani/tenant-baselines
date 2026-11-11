@@ -7,6 +7,7 @@ import io.github.sanchaypahalwani.tenantbaselines.model.MinuteAgg;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
@@ -32,12 +33,17 @@ import org.apache.flink.util.Collector;
  * while one of its keys in the region has {@link KeyActivity#ACTIVE_REQUESTS} requests in the last
  * hour.
  *
+ * <p>A regional alert resolves once its share has been under {@link #RESOLVE_SHARE} for {@link
+ * #RESOLVE_AFTER} minutes in a row. The tenant alerts it absorbed that still fire are then held
+ * again, and that hold ends like any other.
+ *
  * <p>The two inputs and the many keys of a region arrive in no order between two watermarks. So
  * both inputs are only stored here, and everything is applied in {@link #onTimer}, which Flink
  * fires in timestamp order. Every timer sits on the last millisecond of a minute, and a decision
- * at a minute sees the candidates and the activity up to that minute and nothing later. Within one
- * timer the candidates, groups and alerts are walked in sorted order, so the events of a minute
- * come out in the same order on every run.
+ * at a minute sees the candidates and the activity up to that minute and nothing later. While a
+ * regional alert fires there is a timer every minute. Within one timer the candidates, groups and
+ * alerts are walked in sorted order, so the events of a minute come out in the same order on every
+ * run.
  */
 public class RegionGrouper
     extends KeyedCoProcessFunction<String, AlertEvent, MinuteAgg, AlertEvent> {
@@ -95,6 +101,18 @@ public class RegionGrouper
 
   /** How many tenants count and the share of them that alert. */
   private record Share(int tenants, double share) {}
+
+  /** A group's detector, setting and signal, read back from its key. */
+  private record Group(String detector, String setting, String signal) {
+
+    /** Splits at the first and last slash: detector and signal names have none. */
+    static Group of(String key) {
+      int first = key.indexOf('/');
+      int last = key.lastIndexOf('/');
+      return new Group(
+          key.substring(0, first), key.substring(first + 1, last), key.substring(last + 1));
+    }
+  }
 
   @Override
   public void open(OpenContext openContext) {
@@ -178,15 +196,24 @@ public class RegionGrouper
   public void onTimer(long t, OnTimerContext ctx, Collector<AlertEvent> out) throws Exception {
     long at = t + 1;
     String region = ctx.getCurrentKey();
+    TimerService timers = ctx.timerService();
     // 1. The minute's activity changes.
     applyFlips(t);
     // 2. The minute's candidates, in a fixed order.
-    applyCandidates(t, region, ctx.timerService(), out);
-    // 3. Regional resolve: to come.
+    applyCandidates(t, region, timers, out);
+    // Steps 3 and 4 change the alerts' status in this map and in state alike, so step 4 sees the
+    // holds that step 3 starts.
+    SortedMap<String, SortedMap<String, TenantAlert>> byGroup = alertsByGroup();
+    // 3. Regional alerts under a quarter for five minutes resolve.
+    resolveRegional(t, at, region, byGroup, timers, out);
     // 4. Holds that end now: promote or release.
-    endHolds(t, at, region, out);
+    endHolds(t, at, region, byGroup, out);
     // 5. Unit status: to come.
-    // 6. The next minute's timer while a regional alert fires: to come.
+    // 6. The next minute's timer while a regional alert fires, so that its streak counts minutes.
+    // None at the final watermark of a bounded input, where timers would follow each other forever.
+    if (!regional.isEmpty() && timers.currentWatermark() != Long.MAX_VALUE) {
+      timers.registerEventTimeTimer(t + MINUTE_MS);
+    }
   }
 
   private void applyFlips(long t) throws Exception {
@@ -256,12 +283,75 @@ public class RegionGrouper
   }
 
   /**
+   * Counts, for each regional alert, the minutes in a row its share has been under {@link
+   * #RESOLVE_SHARE}. After {@link #RESOLVE_AFTER} it resolves, and each tenant alert it absorbed,
+   * all of which still fire, is held again.
+   */
+  private void resolveRegional(
+      long t,
+      long at,
+      String region,
+      SortedMap<String, SortedMap<String, TenantAlert>> byGroup,
+      TimerService timers,
+      Collector<AlertEvent> out)
+      throws Exception {
+    SortedMap<String, RegionalAlert> firing = new TreeMap<>();
+    for (Map.Entry<String, RegionalAlert> e : regional.entries()) {
+      firing.put(e.getKey(), e.getValue());
+    }
+    for (Map.Entry<String, RegionalAlert> g : firing.entrySet()) {
+      RegionalAlert r = g.getValue();
+      SortedMap<String, TenantAlert> groupAlerts =
+          byGroup.getOrDefault(g.getKey(), Collections.emptySortedMap());
+      Share s = share(groupAlerts.values());
+      r.underStreak = s.share() < RESOLVE_SHARE ? r.underStreak + 1 : 0;
+      if (r.underStreak < RESOLVE_AFTER) {
+        regional.put(g.getKey(), r);
+        continue;
+      }
+      Group group = Group.of(g.getKey());
+      out.collect(
+          Alerts.of(
+              runId,
+              group.detector(),
+              group.setting(),
+              Alerts.REGION,
+              region,
+              "",
+              region,
+              "",
+              group.signal(),
+              Alerts.RESOLVED,
+              r.startedAtMs,
+              at,
+              s.share(),
+              RESOLVE_SHARE,
+              null));
+      regional.remove(g.getKey());
+      for (Map.Entry<String, TenantAlert> e : groupAlerts.entrySet()) {
+        TenantAlert a = e.getValue();
+        if (TenantAlert.ABSORBED.equals(a.status)) {
+          a.status = TenantAlert.HELD;
+          a.heldUntilMs = t + HOLD_MS;
+          alerts.put(e.getKey(), a);
+          timers.registerEventTimeTimer(a.heldUntilMs);
+        }
+      }
+    }
+  }
+
+  /**
    * For each group with a hold that ends by t: promote to a regional alert, which absorbs every
    * held alert of the group, or release the alerts whose hold ended.
    */
-  private void endHolds(long t, long at, String region, Collector<AlertEvent> out)
+  private void endHolds(
+      long t,
+      long at,
+      String region,
+      SortedMap<String, SortedMap<String, TenantAlert>> byGroup,
+      Collector<AlertEvent> out)
       throws Exception {
-    for (Map.Entry<String, SortedMap<String, TenantAlert>> g : alertsByGroup().entrySet()) {
+    for (Map.Entry<String, SortedMap<String, TenantAlert>> g : byGroup.entrySet()) {
       SortedMap<String, TenantAlert> groupAlerts = g.getValue();
       if (groupAlerts.values().stream().noneMatch(a -> due(a, t))) {
         continue;
