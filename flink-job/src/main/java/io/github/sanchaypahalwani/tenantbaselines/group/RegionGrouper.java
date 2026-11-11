@@ -4,6 +4,8 @@ import io.github.sanchaypahalwani.tenantbaselines.detect.AlertIds;
 import io.github.sanchaypahalwani.tenantbaselines.detect.Alerts;
 import io.github.sanchaypahalwani.tenantbaselines.model.AlertEvent;
 import io.github.sanchaypahalwani.tenantbaselines.model.MinuteAgg;
+import io.github.sanchaypahalwani.tenantbaselines.model.Signal;
+import io.github.sanchaypahalwani.tenantbaselines.model.UnitStatusEvent;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -23,6 +25,7 @@ import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.streaming.api.TimerService;
 import org.apache.flink.streaming.api.functions.co.KeyedCoProcessFunction;
 import org.apache.flink.util.Collector;
+import org.apache.flink.util.OutputTag;
 
 /**
  * Groups the tenant alert candidates of one region, keyed by region on both inputs. A firing
@@ -36,6 +39,13 @@ import org.apache.flink.util.Collector;
  * <p>A regional alert resolves once its share has been under {@link #RESOLVE_SHARE} for {@link
  * #RESOLVE_AFTER} minutes in a row. The tenant alerts it absorbed that still fire are then held
  * again, and that hold ends like any other.
+ *
+ * <p>Units drain on the sent tenant alerts of one setting, the live one. The drain and undrain
+ * events go to {@link #UNIT_STATUS}, and nothing acts on them. A unit drains while its keys show a
+ * sent error-rate or latency alert. On a dedicated unit, which only one tenant sent a request in
+ * the expiry period, that tenant's alert is enough. On a shared unit, two tenants must alert on the
+ * same signal. A unit never drains on volume, and no unit of the region is drained while the live
+ * setting has a regional alert on any signal.
  *
  * <p>The two inputs and the many keys of a region arrive in no order between two watermarks. So
  * both inputs are only stored here, and everything is applied in {@link #onTimer}, which Flink
@@ -54,8 +64,18 @@ public class RegionGrouper
   public static final int RESOLVE_AFTER = 5;
   public static final int MIN_ACTIVE_TENANTS = 3;
 
+  /** Unit drain and undrain events, published only. */
+  public static final OutputTag<UnitStatusEvent> UNIT_STATUS = new OutputTag<>("unit-status") {};
+
   private static final long MINUTE_MS = 60_000L;
   private static final String REGIONAL_REASON = "regional:";
+
+  /** The signals that drain a unit, in the order they are checked. Volume is not one. */
+  private static final List<String> DRAIN_SIGNALS =
+      List.of(Signal.ERROR_RATE.wire(), Signal.LATENCY_P95.wire());
+
+  /** How old a unit's latest minute of a tenant gets before a new minute rewrites it. */
+  private static final long UNIT_TENANT_REFRESH_MS = 3_600_000L;
 
   private static final Comparator<AlertEvent> CANDIDATE_ORDER =
       Comparator.comparing(AlertEvent::detector)
@@ -66,12 +86,12 @@ public class RegionGrouper
 
   private final String runId;
 
-  /** The detector and setting whose sent alerts drain units. Not read yet. */
+  /** The detector and setting whose sent alerts drain units. */
   private final String liveDetector;
 
   private final String liveSetting;
 
-  /** How long a unit remembers its tenants. Not read yet. */
+  /** How long a unit remembers its tenants. */
   private final Duration expiry;
 
   /** Candidates by the timer that applies them. */
@@ -92,6 +112,15 @@ public class RegionGrouper
   /** Tenant to the number of its active keys in the region; changed only in timers. */
   private transient MapState<String, Integer> activeKeys;
 
+  /**
+   * unit|tenant to the latest minute the tenant sent the unit a request, rewritten when that is
+   * more than an hour old. Written as the minute arrives, not in a timer.
+   */
+  private transient MapState<String, Long> unitTenants;
+
+  /** Drained units, each to the signal it was drained for. */
+  private transient MapState<String, String> drained;
+
   public RegionGrouper(String runId, String liveDetector, String liveSetting, Duration expiry) {
     this.runId = runId;
     this.liveDetector = liveDetector;
@@ -101,6 +130,9 @@ public class RegionGrouper
 
   /** How many tenants count and the share of them that alert. */
   private record Share(int tenants, double share) {}
+
+  /** Why a unit should be drained: the signal and "dedicated" or "shared". */
+  private record Drain(String signal, String reason) {}
 
   /** A group's detector, setting and signal, read back from its key. */
   private record Group(String detector, String setting, String signal) {
@@ -148,6 +180,12 @@ public class RegionGrouper
     activeKeys =
         getRuntimeContext()
             .getMapState(new MapStateDescriptor<>("active-keys", Types.STRING, Types.INT));
+    unitTenants =
+        getRuntimeContext()
+            .getMapState(new MapStateDescriptor<>("unit-tenants", Types.STRING, Types.LONG));
+    drained =
+        getRuntimeContext()
+            .getMapState(new MapStateDescriptor<>("drained", Types.STRING, Types.STRING));
   }
 
   /** The last millisecond of the minute of ts. */
@@ -166,7 +204,9 @@ public class RegionGrouper
 
   /**
    * Updates the key's ring at once, since a key's minutes arrive in order. Only a change of the
-   * key's activity waits for the end of its minute.
+   * key's activity waits for the end of its minute. A unit's tenants are written at once too:
+   * against the expiry period of days, how far a watermark step reaches moves only the exact
+   * boundary, and it never changes an alert.
    */
   @Override
   public void processElement2(MinuteAgg m, Context ctx, Collector<AlertEvent> out)
@@ -189,6 +229,13 @@ public class RegionGrouper
     } else {
       activity.put(m.key(), k);
     }
+    if (m.count() > 0) {
+      String unitTenant = m.unit() + "|" + m.tenant();
+      Long last = unitTenants.get(unitTenant);
+      if (last == null || m.minuteMs() - last > UNIT_TENANT_REFRESH_MS) {
+        unitTenants.put(unitTenant, m.minuteMs());
+      }
+    }
   }
 
   /** Applies the minute that ends at t; its events are stamped with the next minute's start. */
@@ -202,13 +249,14 @@ public class RegionGrouper
     // 2. The minute's candidates, in a fixed order.
     applyCandidates(t, region, timers, out);
     // Steps 3 and 4 change the alerts' status in this map and in state alike, so step 4 sees the
-    // holds that step 3 starts.
+    // holds that step 3 starts, and step 5 the alerts that step 4 sends.
     SortedMap<String, SortedMap<String, TenantAlert>> byGroup = alertsByGroup();
     // 3. Regional alerts under a quarter for five minutes resolve.
     resolveRegional(t, at, region, byGroup, timers, out);
     // 4. Holds that end now: promote or release.
     endHolds(t, at, region, byGroup, out);
-    // 5. Unit status: to come.
+    // 5. Unit status. It registers no timer, and a unit changes at most once in a timer.
+    publishUnitStatus(t, at, region, byGroup, ctx);
     // 6. The next minute's timer while a regional alert fires, so that its streak counts minutes.
     // At the final watermark of a bounded input that chain would never end, so there it goes on
     // only while a streak has begun. The share changes only at the timers that apply inputs, so
@@ -228,6 +276,124 @@ public class RegionGrouper
       }
     }
     return false;
+  }
+
+  /**
+   * Drains each unit the live setting's sent alerts call for, and undrains each drained unit they
+   * no longer call for. While that setting has a regional alert they call for none. A drained unit
+   * keeps the signal it was drained for while any signal still calls for it.
+   */
+  private void publishUnitStatus(
+      long t,
+      long at,
+      String region,
+      SortedMap<String, SortedMap<String, TenantAlert>> byGroup,
+      OnTimerContext ctx)
+      throws Exception {
+    boolean regionalFiring = liveRegionalFiring();
+    SortedMap<String, Drain> want =
+        regionalFiring ? Collections.emptySortedMap() : wantedDrains(t, byGroup);
+    SortedMap<String, String> wasDrained = new TreeMap<>();
+    for (Map.Entry<String, String> e : drained.entries()) {
+      wasDrained.put(e.getKey(), e.getValue());
+    }
+    long now = System.currentTimeMillis();
+    String undrainReason = regionalFiring ? UnitStatusEvent.REGIONAL : UnitStatusEvent.CLEARED;
+    for (Map.Entry<String, String> e : wasDrained.entrySet()) {
+      if (!want.containsKey(e.getKey())) {
+        ctx.output(
+            UNIT_STATUS,
+            new UnitStatusEvent(
+                runId,
+                e.getKey(),
+                region,
+                UnitStatusEvent.UNDRAIN,
+                e.getValue(),
+                at,
+                now,
+                undrainReason));
+        drained.remove(e.getKey());
+      }
+    }
+    for (Map.Entry<String, Drain> e : want.entrySet()) {
+      if (!wasDrained.containsKey(e.getKey())) {
+        Drain d = e.getValue();
+        ctx.output(
+            UNIT_STATUS,
+            new UnitStatusEvent(
+                runId, e.getKey(), region, UnitStatusEvent.DRAIN, d.signal(), at, now, d.reason()));
+        drained.put(e.getKey(), d.signal());
+      }
+    }
+  }
+
+  /** Whether the live detector and setting have a regional alert on any signal. */
+  private boolean liveRegionalFiring() throws Exception {
+    for (String key : regional.keys()) {
+      Group g = Group.of(key);
+      if (g.detector().equals(liveDetector) && g.setting().equals(liveSetting)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * The units the live setting's sent alerts call to drain, by unit. For each drain signal in turn,
+   * a unit not called for yet drains when two or more of its tenants have a sent alert on that
+   * signal, or when one has and it is the unit's only tenant.
+   */
+  private SortedMap<String, Drain> wantedDrains(
+      long t, SortedMap<String, SortedMap<String, TenantAlert>> byGroup) throws Exception {
+    SortedMap<String, Drain> want = new TreeMap<>();
+    for (String signal : DRAIN_SIGNALS) {
+      SortedMap<String, Set<String>> tenantsByUnit = new TreeMap<>();
+      SortedMap<String, TenantAlert> groupAlerts =
+          byGroup.getOrDefault(
+              group(liveDetector, liveSetting, signal), Collections.emptySortedMap());
+      for (TenantAlert a : groupAlerts.values()) {
+        if (TenantAlert.SENT.equals(a.status)) {
+          tenantsByUnit.computeIfAbsent(a.unit, u -> new HashSet<>()).add(a.tenant);
+        }
+      }
+      for (Map.Entry<String, Set<String>> u : tenantsByUnit.entrySet()) {
+        String unit = u.getKey();
+        if (want.containsKey(unit)) {
+          continue;
+        }
+        if (u.getValue().size() >= 2) {
+          want.put(unit, new Drain(signal, UnitStatusEvent.SHARED));
+        } else if (tenantsOf(unit, t) == 1) {
+          want.put(unit, new Drain(signal, UnitStatusEvent.DEDICATED));
+        }
+      }
+    }
+    return want;
+  }
+
+  /**
+   * The number of tenants that sent the unit a request in the expiry period up to t. The entries of
+   * the unit older than that are removed.
+   */
+  private int tenantsOf(String unit, long t) throws Exception {
+    String prefix = unit + "|";
+    long since = t - expiry.toMillis();
+    int tenants = 0;
+    List<String> expired = new ArrayList<>();
+    for (Map.Entry<String, Long> e : unitTenants.entries()) {
+      if (!e.getKey().startsWith(prefix)) {
+        continue;
+      }
+      if (e.getValue() > since) {
+        tenants++;
+      } else {
+        expired.add(e.getKey());
+      }
+    }
+    for (String key : expired) {
+      unitTenants.remove(key);
+    }
+    return tenants;
   }
 
   private void applyFlips(long t) throws Exception {

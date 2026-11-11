@@ -14,6 +14,8 @@ import java.util.List;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.api.java.typeutils.PojoTypeInfo;
+import org.apache.flink.runtime.checkpoint.OperatorSubtaskState;
+import org.apache.flink.streaming.api.operators.co.KeyedCoProcessOperator;
 import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.util.KeyedTwoInputStreamOperatorTestHarness;
 import org.apache.flink.streaming.util.ProcessFunctionTestHarnesses;
@@ -39,6 +41,24 @@ class RegionGrouperTest {
         AlertEvent::region,
         MinuteAgg::region,
         Types.STRING);
+  }
+
+  /**
+   * A fresh grouper harness started from a snapshot, set up like {@link #harness()}'s. {@code
+   * ProcessFunctionTestHarnesses} returns one that is already open, so this one is built by hand.
+   */
+  static KeyedTwoInputStreamOperatorTestHarness<String, AlertEvent, MinuteAgg, AlertEvent> restored(
+      OperatorSubtaskState snapshot) throws Exception {
+    KeyedTwoInputStreamOperatorTestHarness<String, AlertEvent, MinuteAgg, AlertEvent> h =
+        new KeyedTwoInputStreamOperatorTestHarness<>(
+            new KeyedCoProcessOperator<>(
+                new RegionGrouper("r", SEASONAL, K4, Duration.ofDays(7))),
+            AlertEvent::region,
+            MinuteAgg::region,
+            Types.STRING);
+    h.initializeState(snapshot);
+    h.open();
+    return h;
   }
 
   /** Minute n of the key tenant|eu|unit, with the record timestamp of the minute's end. */

@@ -12,6 +12,7 @@ import static io.github.sanchaypahalwani.tenantbaselines.group.RegionGrouperTest
 import static io.github.sanchaypahalwani.tenantbaselines.group.RegionGrouperTest.regionalId;
 import static io.github.sanchaypahalwani.tenantbaselines.group.RegionGrouperTest.released;
 import static io.github.sanchaypahalwani.tenantbaselines.group.RegionGrouperTest.resolve;
+import static io.github.sanchaypahalwani.tenantbaselines.group.RegionGrouperTest.restored;
 import static io.github.sanchaypahalwani.tenantbaselines.group.RegionGrouperTest.twoOfFour;
 import static io.github.sanchaypahalwani.tenantbaselines.group.RegionGrouperTest.warm;
 import static io.github.sanchaypahalwani.tenantbaselines.group.RegionGrouperTest.warmAt;
@@ -24,12 +25,9 @@ import static org.assertj.core.api.Assertions.within;
 import io.github.sanchaypahalwani.tenantbaselines.detect.Alerts;
 import io.github.sanchaypahalwani.tenantbaselines.model.AlertEvent;
 import io.github.sanchaypahalwani.tenantbaselines.model.MinuteAgg;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.runtime.checkpoint.OperatorSubtaskState;
-import org.apache.flink.streaming.api.operators.co.KeyedCoProcessOperator;
 import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.util.KeyedTwoInputStreamOperatorTestHarness;
 import org.junit.jupiter.api.Test;
@@ -371,21 +369,6 @@ class RegionGrouperResolveTest {
           .usingRecursiveFieldByFieldElementComparatorIgnoringFields("emittedAtMs")
           .containsExactlyElementsOf(unbroken);
     }
-  }
-
-  /** A fresh grouper harness started from a snapshot, set up like {@link RegionGrouperTest}'s. */
-  private static KeyedTwoInputStreamOperatorTestHarness<String, AlertEvent, MinuteAgg, AlertEvent>
-      restored(OperatorSubtaskState snapshot) throws Exception {
-    KeyedTwoInputStreamOperatorTestHarness<String, AlertEvent, MinuteAgg, AlertEvent> h =
-        new KeyedTwoInputStreamOperatorTestHarness<>(
-            new KeyedCoProcessOperator<>(
-                new RegionGrouper("r", SEASONAL, K4, Duration.ofDays(7))),
-            AlertEvent::region,
-            MinuteAgg::region,
-            Types.STRING);
-    h.initializeState(snapshot);
-    h.open();
-    return h;
   }
 
   @Test
