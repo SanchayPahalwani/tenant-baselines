@@ -3,16 +3,23 @@
 # to start unless the stack is empty (`make reset`). Checks 1-8 are polled every 15 s for up to
 # 30 minutes: the demo script's tenant drop, error burst and regional error spike start 2, 3 and
 # 11 minutes after the generator catches up. Check 5 can be observed only during the scripted
-# spike, from about 17 to 26 minutes after catch-up, so it cannot be rerun later on the same stack.
-# Checks 9-12 then run once, in order. Check 11 restores the job from its oldest retained
-# checkpoint and checks that the re-emitted output collapses to one row each. Check 12 stops the
-# generator, restores the job during the total outage and waits for it to page; it leaves the
-# generator stopped.
+# spike, from about 17 to 26 minutes after the generator catches up. Checks 9-12 then run once,
+# in order. Check 11 restores the job from its oldest retained checkpoint and checks that this
+# restore re-emitted output and that it collapses to one row each. Check 12 stops the generator,
+# restores the job during the total outage and waits for it to page; it leaves the generator
+# stopped.
 #
-# CHECKS, a space-separated list of check numbers, runs only those (default: all), and only they
-# count. CHECKS="11 12" scripts/smoke.sh reruns the restore and outage checks on a live demo
-# stack; check 12 needs the generator running again: `docker compose --profile demo start
-# generator`, then wait two minutes.
+# CHECKS, a space-separated list of check numbers, runs only those, and only they count; unset or
+# empty runs all 12. To rerun checks 11 and 12 on a demo stack that has run check 12:
+#   1. docker compose --profile demo start generator. Both checks need it running. It replays
+#      its three weeks of history (about 24.3 million events), which the running job drops as
+#      late, and then starts a new demo script.
+#   2. Wait until scripts/late-events.sh stops rising, then at least 90 s more, so that the
+#      oldest retained checkpoint comes after the replay.
+#   3. CHECKS="11 12" scripts/smoke.sh
+# After that replay, check 10 cannot pass on that stack. The new demo script has a new spike,
+# but a tenant counts as active only with 1200 requests over the last 60 minutes, and the outage
+# removed them, so checks 2-8 are meant for a fresh stack (make reset).
 #
 # Prints PASS or FAIL per check and exits 1 if any failed.
 set -euo pipefail
@@ -40,6 +47,10 @@ for c in $CHECKS; do
       ;;
   esac
 done
+if [ "$selected" = " " ]; then
+  echo "smoke: CHECKS has no check numbers; leave it empty to run all 12" >&2
+  exit 2
+fi
 
 wanted() {
   case "$selected" in
@@ -115,18 +126,18 @@ check_scores() {
     WHERE ns='live' AND median IS NOT NULL"
 }
 
-# A dedicated unit with a live drain and an undrain at a later time.
+# A dedicated unit with a live drain and a later undrain by a regional alert.
 check_unit_status() {
   ch_positive "SELECT count() FROM (
       SELECT unit FROM tb.unit_status FINAL
       WHERE ns='live' AND unit LIKE '%-d-%' AND dateDiff('second', at, emitted_at) < 600
       GROUP BY unit
       HAVING countIf(status = 'drain') > 0
-        AND minIf(at, status = 'drain') < maxIf(at, status = 'undrain'))"
+        AND minIf(at, status = 'drain') < maxIf(at, status = 'undrain' AND reason = 'regional'))"
 }
 
-# (key, minute) pairs written to live.aggregates more than once. MinuteAgg JSON has "key"
-# before "minute_ms".
+# (key, minute) pairs written to live.aggregates more than once, over the whole topic. MinuteAgg
+# JSON has "key" before "minute_ms".
 reemitted_minutes() {
   docker compose exec -T -e KAFKA_HEAP_OPTS=-Xmx128m kafka /opt/kafka/bin/kafka-console-consumer.sh \
     --bootstrap-server localhost:9092 --topic live.aggregates --from-beginning --timeout-ms 10000 \
@@ -157,7 +168,7 @@ names=(
   "5 Alertmanager inhibits an error_rate tenant alert"
   "6 pager-sink logged notifications to the /regional and the /tenant receiver"
   "7 tb.scores has a median for each of the three signals"
-  "8 tb.unit_status has a live drain of a dedicated unit and a later undrain"
+  "8 tb.unit_status has a live drain of a dedicated unit and a later regional undrain"
   "9 tb.ingest_errors is empty"
   "10 the job dropped no events as late"
   "11 a job restored from its oldest checkpoint re-emits output that collapses to one row each"
@@ -234,7 +245,12 @@ check_late() {
 }
 
 check_restore() {
-  local reemitted agg_extra scores_extra alert_extra late detail
+  local before after reemitted agg_extra scores_extra alert_extra late detail
+  # Earlier restores left re-emitted minutes in the topic too, so count this restore's own.
+  if ! before=$(reemitted_minutes); then
+    fail "${names[11]} (could not read live.aggregates before the restore)"
+    return
+  fi
   echo "restoring the job from its oldest retained checkpoint"
   if ! docker compose exec -T jobmanager bash /opt/tb-scripts/submit-job.sh --from-checkpoint; then
     fail "${names[11]} (resubmit failed)"
@@ -242,21 +258,27 @@ check_restore() {
   fi
   echo "waiting ${RESTORE_SETTLE_S} s for the restored job's output"
   sleep "$RESTORE_SETTLE_S"
-  reemitted=$(reemitted_minutes) || reemitted=unknown
+  if after=$(reemitted_minutes); then
+    reemitted=$((after - before))
+  else
+    reemitted=unknown
+  fi
   agg_extra=$(ch "SELECT count() - uniqExact(key, minute) FROM tb.aggregates FINAL WHERE ns='live'") \
     || agg_extra=unknown
   scores_extra=$(ch "SELECT count() - uniqExact(key, signal, minute) FROM tb.scores FINAL
     WHERE ns='live'") || scores_extra=unknown
   # Business columns, not the dedup key alert_id, so an alert re-emitted with another id counts.
-  alert_extra=$(ch "SELECT count() - uniqExact(detector, setting, scope, key, signal, starts_at, state)
+  alert_extra=$(ch "SELECT count()
+      - uniqExact(detector, setting, scope, key, signal, starts_at, state)
     FROM tb.alert_log FINAL WHERE ns='live'") || alert_extra=unknown
   # The restored job starts on a backlog at least 60 s deep while traffic is live.
   late=$(scripts/late-events.sh) || late=unknown
-  detail="re-emitted minute rows $reemitted; extra rows: aggregates $agg_extra, scores $scores_extra,"
-  detail+=" alert_log $alert_extra; restored job's lateEvents $late"
+  detail="minute rows re-emitted by this restore $reemitted (topic total ${after:-unknown});"
+  detail+=" extra rows: aggregates $agg_extra, scores $scores_extra, alert_log $alert_extra;"
+  detail+=" restored job's lateEvents $late"
   if [ "$reemitted" = unknown ]; then
     fail "${names[11]} (could not read live.aggregates; $detail)"
-  elif [ "$reemitted" -eq 0 ]; then
+  elif [ "$reemitted" -le 0 ]; then
     fail "${names[11]} (nothing was re-emitted, so nothing was tested; $detail)"
   elif [ "$agg_extra" = 0 ] && [ "$scores_extra" = 0 ] && [ "$alert_extra" = 0 ] \
     && [ "$late" = 0 ]; then
