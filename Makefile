@@ -9,7 +9,7 @@ CI_PY_IMAGE = tenant-baselines-ci-py
 # demo and smoke depend on their prerequisites running in order.
 .NOTPARALLEL:
 
-.PHONY: jar test-java test-py lint-py check-am test ci up down reset submit demo smoke logs
+.PHONY: jar test-java test-py lint-py thresholds-demo check-am test ci up down reset submit demo smoke logs
 
 jar:
 	$(MVN) clean package
@@ -22,6 +22,10 @@ test-py:
 
 lint-py:
 	cd py && uv run ruff check . && uv run ruff format --check .
+
+# Regenerates the demo's thresholds file (setting p99.9, fitted on three simulated weeks).
+thresholds-demo:
+	cd py && uv run python -m tenant_baselines.thresholds --demo --out ../infra/flink/thresholds-demo.json
 
 check-am:
 	scripts/check-am.sh

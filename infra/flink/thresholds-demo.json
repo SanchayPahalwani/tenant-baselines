@@ -2,15 +2,354 @@
   "sets": [
     {
       "detector": "global_static",
-      "setting": "default",
-      "valid_from_ms": 0,
-      "valid_to_ms": null,
       "global": {
-        "error_rate": { "fire": 0.05, "resolve": 0.025 },
-        "latency_p95": { "fire": 400, "resolve": 250 },
-        "volume_5m": { "fire": 0, "resolve": 5 }
+        "error_rate": {
+          "fire": 0.07692307692307693,
+          "resolve": 0.038461538461538464
+        },
+        "latency_p95": {
+          "fire": 394.904386067058,
+          "resolve": 290.02540001049397
+        },
+        "volume_5m": {
+          "fire": 1.0,
+          "resolve": 64.5
+        }
       },
-      "per_key": {}
+      "per_key": {},
+      "setting": "p99.9",
+      "valid_from_ms": 0,
+      "valid_to_ms": null
+    },
+    {
+      "detector": "per_key_static",
+      "global": {
+        "error_rate": {
+          "fire": 0.07692307692307693,
+          "resolve": 0.038461538461538464
+        },
+        "latency_p95": {
+          "fire": 394.904386067058,
+          "resolve": 290.02540001049397
+        },
+        "volume_5m": {
+          "fire": 1.0,
+          "resolve": 64.5
+        }
+      },
+      "per_key": {
+        "t01|eu-central|eu-central-s1": {
+          "error_rate": {
+            "fire": 0.058823529411764705,
+            "resolve": 0.029411764705882353
+          },
+          "latency_p95": {
+            "fire": 443.7141619736742,
+            "resolve": 345.7407512949128
+          },
+          "volume_5m": {
+            "fire": 7.0,
+            "resolve": 39.0
+          }
+        },
+        "t01|us-east|us-east-d-t01": {
+          "error_rate": {
+            "fire": 0.06160714285714425,
+            "resolve": 0.030803571428572124
+          },
+          "latency_p95": {
+            "fire": 278.39183816340596,
+            "resolve": 221.58569886050807
+          },
+          "volume_5m": {
+            "fire": 7.0,
+            "resolve": 39.0
+          }
+        },
+        "t01|us-east|us-east-s1": {
+          "error_rate": {
+            "fire": 0.05990808823530107,
+            "resolve": 0.029954044117650534
+          },
+          "latency_p95": {
+            "fire": 357.6842937314361,
+            "resolve": 282.8574946719433
+          },
+          "volume_5m": {
+            "fire": 8.0,
+            "resolve": 39.5
+          }
+        },
+        "t02|eu-central|eu-central-d-t02": {
+          "error_rate": {
+            "fire": 0.06921921182266698,
+            "resolve": 0.03460960591133349
+          },
+          "latency_p95": {
+            "fire": 278.39183816340596,
+            "resolve": 216.92218149023515
+          },
+          "volume_5m": {
+            "fire": 22.0,
+            "resolve": 86.0
+          }
+        },
+        "t02|eu-central|eu-central-s1": {
+          "error_rate": {
+            "fire": 0.06040000000000873,
+            "resolve": 0.030200000000004366
+          },
+          "latency_p95": {
+            "fire": 372.55137834934925,
+            "resolve": 284.4032914841166
+          },
+          "volume_5m": {
+            "fire": 22.0,
+            "resolve": 85.0
+          }
+        },
+        "t03|ap-southeast|ap-southeast-s1": {
+          "error_rate": {
+            "fire": 0.06235227272727708,
+            "resolve": 0.03117613636363854
+          },
+          "latency_p95": {
+            "fire": 262.63352150096915,
+            "resolve": 209.04302315901674
+          },
+          "volume_5m": {
+            "fire": 14.0,
+            "resolve": 58.0
+          }
+        },
+        "t03|ap-southeast|ap-southeast-s2": {
+          "error_rate": {
+            "fire": 0.057130337078652636,
+            "resolve": 0.028565168539326318
+          },
+          "latency_p95": {
+            "fire": 394.904386067058,
+            "resolve": 314.32358735545023
+          },
+          "volume_5m": {
+            "fire": 14.0,
+            "resolve": 58.5
+          }
+        },
+        "t04|eu-central|eu-central-s1": {
+          "error_rate": {
+            "fire": 0.1,
+            "resolve": 0.05
+          },
+          "latency_p95": {
+            "fire": 539.9491849137959,
+            "resolve": 393.8582627649737
+          },
+          "volume_5m": {
+            "fire": 0.0,
+            "resolve": 10.0
+          }
+        },
+        "t04|us-east|us-east-s1": {
+          "error_rate": {
+            "fire": 0.1,
+            "resolve": 0.05
+          },
+          "latency_p95": {
+            "fire": 426.4093615524684,
+            "resolve": 317.2200285824594
+          },
+          "volume_5m": {
+            "fire": 0.0,
+            "resolve": 10.0
+          }
+        },
+        "t04|us-east|us-east-s2": {
+          "error_rate": {
+            "fire": 0.09364545454545806,
+            "resolve": 0.04682272727272903
+          },
+          "latency_p95": {
+            "fire": 220.51241826935734,
+            "resolve": 165.05019864995307
+          },
+          "volume_5m": {
+            "fire": 0.0,
+            "resolve": 10.0
+          }
+        },
+        "t05|eu-central|eu-central-s1": {
+          "error_rate": {
+            "fire": 0.06963054187193121,
+            "resolve": 0.034815270935965606
+          },
+          "latency_p95": {
+            "fire": 372.55137834934925,
+            "resolve": 284.4032914841166
+          },
+          "volume_5m": {
+            "fire": 24.0,
+            "resolve": 91.0
+          }
+        },
+        "t05|eu-central|eu-central-s2": {
+          "error_rate": {
+            "fire": 0.06896551724137931,
+            "resolve": 0.034482758620689655
+          },
+          "latency_p95": {
+            "fire": 312.8007373904352,
+            "resolve": 238.7901484740227
+          },
+          "volume_5m": {
+            "fire": 23.0,
+            "resolve": 90.5
+          }
+        },
+        "t06|ap-southeast|ap-southeast-s1": {
+          "error_rate": {
+            "fire": 0.0625582218725546,
+            "resolve": 0.0312791109362773
+          },
+          "latency_p95": {
+            "fire": 262.63352150096915,
+            "resolve": 204.64338473181894
+          },
+          "volume_5m": {
+            "fire": 15.0,
+            "resolve": 63.5
+          }
+        },
+        "t06|ap-southeast|ap-southeast-s2": {
+          "error_rate": {
+            "fire": 0.06451612903225806,
+            "resolve": 0.03225806451612903
+          },
+          "latency_p95": {
+            "fire": 394.904386067058,
+            "resolve": 314.32358735545023
+          },
+          "volume_5m": {
+            "fire": 15.0,
+            "resolve": 63.0
+          }
+        },
+        "t07|us-east|us-east-s1": {
+          "error_rate": {
+            "fire": 0.06158673469387942,
+            "resolve": 0.03079336734693971
+          },
+          "latency_p95": {
+            "fire": 394.904386067058,
+            "resolve": 307.70840216820767
+          },
+          "volume_5m": {
+            "fire": 4.0,
+            "resolve": 28.5
+          }
+        },
+        "t07|us-east|us-east-s2": {
+          "error_rate": {
+            "fire": 0.07142857142857142,
+            "resolve": 0.03571428571428571
+          },
+          "latency_p95": {
+            "fire": 196.25520461888394,
+            "resolve": 152.92159182471636
+          },
+          "volume_5m": {
+            "fire": 5.0,
+            "resolve": 29.0
+          }
+        },
+        "t08|eu-central|eu-central-s1": {
+          "error_rate": {
+            "fire": 0.07501709401709958,
+            "resolve": 0.03750854700854979
+          },
+          "latency_p95": {
+            "fire": 394.904386067058,
+            "resolve": 301.4675408397542
+          },
+          "volume_5m": {
+            "fire": 18.0,
+            "resolve": 71.5
+          }
+        },
+        "t08|eu-central|eu-central-s2": {
+          "error_rate": {
+            "fire": 0.07238095238095392,
+            "resolve": 0.03619047619047696
+          },
+          "latency_p95": {
+            "fire": 312.8007373904352,
+            "resolve": 243.73355157835772
+          },
+          "volume_5m": {
+            "fire": 17.0,
+            "resolve": 70.0
+          }
+        },
+        "t09|ap-southeast|ap-southeast-d-t09": {
+          "error_rate": {
+            "fire": 0.08333333333333333,
+            "resolve": 0.041666666666666664
+          },
+          "latency_p95": {
+            "fire": 372.55137834934925,
+            "resolve": 284.4032914841166
+          },
+          "volume_5m": {
+            "fire": 112.235,
+            "resolve": 131.1175
+          }
+        },
+        "t09|ap-southeast|ap-southeast-s1": {
+          "error_rate": {
+            "fire": 0.0819301801801893,
+            "resolve": 0.04096509009009465
+          },
+          "latency_p95": {
+            "fire": 351.46331506147266,
+            "resolve": 263.0648404138765
+          },
+          "volume_5m": {
+            "fire": 114.0,
+            "resolve": 132.0
+          }
+        },
+        "t10|ap-southeast|ap-southeast-s1": {
+          "error_rate": {
+            "fire": 0.08333333333333333,
+            "resolve": 0.041666666666666664
+          },
+          "latency_p95": {
+            "fire": 340.30247407116906,
+            "resolve": 257.48441991872465
+          },
+          "volume_5m": {
+            "fire": 113.235,
+            "resolve": 131.6175
+          }
+        },
+        "t11|ap-southeast|ap-southeast-s1": {
+          "error_rate": {
+            "fire": 0.08333333333333333,
+            "resolve": 0.041666666666666664
+          },
+          "latency_p95": {
+            "fire": 351.46331506147266,
+            "resolve": 263.0648404138765
+          },
+          "volume_5m": {
+            "fire": 115.0,
+            "resolve": 132.5
+          }
+        }
+      },
+      "setting": "p99.9",
+      "valid_from_ms": 0,
+      "valid_to_ms": null
     }
   ]
 }

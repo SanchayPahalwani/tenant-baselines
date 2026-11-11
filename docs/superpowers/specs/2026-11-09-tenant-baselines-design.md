@@ -177,7 +177,7 @@ aggregate generator (Python, eval) ─▶ <run>.aggregates-in ─┘
 - **Calibration, chosen to favour the opponent:**
   - The week-4 thresholds are fitted on weeks 1–3.
   - The week-5 thresholds are refitted on weeks 1–4, keeping the percentile chosen on week 4.
-  - Labelled incident minutes are **masked out** of the fit. Seasonal gets no such help, since its design feeds every minute.
+  - The minutes of every labelled scenario are **masked out** of the fit: the should-page incidents, and the launch surges and holiday dips too. Only the Monday-morning peak, which is part of every week, stays in. Seasonal gets no such help, since its design feeds every minute. *(Amended 2026-11-12 by the owner: the mask covers every labelled scenario except the Monday peak, where this said "labelled incident minutes". A surge left in the fit would lift the high-percentile latency thresholds to surge level.)*
 - **A key with no calibration data** (onboarded later) uses the global threshold.
 
 **Settings grids: 4 per family, fixed here** *(builder's call)*:

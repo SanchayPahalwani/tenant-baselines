@@ -16,15 +16,24 @@ class ThresholdsFileTest {
   void loadsDemoFile() throws Exception {
     try (InputStream in = getClass().getResourceAsStream("/thresholds-demo.json")) {
       List<ThresholdSet> sets = ThresholdsFile.load(in);
-      assertThat(sets).hasSize(1);
-      ThresholdSet s = sets.get(0);
-      assertThat(s.detector()).isEqualTo("global_static");
-      assertThat(s.setting()).isEqualTo("default");
-      assertThat(s.validFromMs()).isZero();
-      assertThat(s.validToMs()).isEqualTo(Long.MAX_VALUE);
-      assertThat(s.levelFor("any", Signal.ERROR_RATE)).isEqualTo(new Level(0.05, 0.025));
-      assertThat(s.levelFor("any", Signal.LATENCY_P95)).isEqualTo(new Level(400, 250));
-      assertThat(s.levelFor("any", Signal.VOLUME_5M)).isEqualTo(new Level(0, 5));
+      assertThat(sets).hasSize(2);
+      ThresholdSet global = sets.get(0);
+      ThresholdSet perKey = sets.get(1);
+      assertThat(global.detector()).isEqualTo("global_static");
+      assertThat(perKey.detector()).isEqualTo("per_key_static");
+      for (ThresholdSet s : sets) {
+        assertThat(s.setting()).isEqualTo("p99.9");
+        assertThat(s.validFromMs()).isZero();
+        assertThat(s.validToMs()).isEqualTo(Long.MAX_VALUE);
+        for (Signal signal : Signal.values()) {
+          assertThat(s.levelFor("no-such-key", signal)).isNotNull();
+        }
+      }
+      assertThat(global.perKey()).isEmpty();
+      assertThat(perKey.perKey()).isNotEmpty();
+      String demoKey = perKey.perKey().keySet().iterator().next();
+      assertThat(perKey.levelFor(demoKey, Signal.ERROR_RATE))
+          .isNotEqualTo(perKey.levelFor("no-such-key", Signal.ERROR_RATE));
     }
   }
 
