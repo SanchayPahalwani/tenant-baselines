@@ -4,11 +4,13 @@ import io.github.sanchaypahalwani.tenantbaselines.agg.MinuteAggregator;
 import io.github.sanchaypahalwani.tenantbaselines.baseline.PopulationBaseline;
 import io.github.sanchaypahalwani.tenantbaselines.baseline.PopulationBaselines;
 import io.github.sanchaypahalwani.tenantbaselines.detect.Scorer;
+import io.github.sanchaypahalwani.tenantbaselines.group.RegionGrouper;
 import io.github.sanchaypahalwani.tenantbaselines.detect.ThresholdSet;
 import io.github.sanchaypahalwani.tenantbaselines.model.AlertEvent;
 import io.github.sanchaypahalwani.tenantbaselines.model.Event;
 import io.github.sanchaypahalwani.tenantbaselines.model.MinuteAgg;
 import io.github.sanchaypahalwani.tenantbaselines.model.ScoreEvent;
+import io.github.sanchaypahalwani.tenantbaselines.model.UnitStatusEvent;
 import java.time.Duration;
 import java.util.List;
 import org.apache.flink.api.common.typeinfo.Types;
@@ -31,6 +33,7 @@ public final class Pipeline {
       DataStream<MinuteAgg> aggregates,
       DataStream<AlertEvent> alerts,
       DataStream<ScoreEvent> scores,
+      DataStream<UnitStatusEvent> unitStatus,
       DataStream<Event> late) {}
 
   /** @param timestampedEvents events that already carry timestamps and watermarks */
@@ -52,7 +55,7 @@ public final class Pipeline {
             .name("population-baselines");
 
     Scorer scorer = new Scorer(cfg.runId(), sets, cfg.seasonal(), cfg.emitScores(), KEY_EXPIRY);
-    SingleOutputStreamOperator<AlertEvent> alerts =
+    SingleOutputStreamOperator<AlertEvent> candidates =
         aggregates
             .keyBy(MinuteAgg::key)
             .connect(population.broadcast(Scorer.POPULATION))
@@ -60,10 +63,21 @@ public final class Pipeline {
             .uid("scorer")
             .name("scorer");
 
+    SingleOutputStreamOperator<AlertEvent> grouped =
+        candidates
+            .keyBy(AlertEvent::region)
+            .connect(aggregates.keyBy(MinuteAgg::region))
+            .process(
+                new RegionGrouper(
+                    cfg.runId(), Scorer.SEASONAL, cfg.seasonal().get(0).setting(), KEY_EXPIRY))
+            .uid("region-grouper")
+            .name("region-grouper");
+
     return new Outputs(
         aggregates,
-        alerts,
-        alerts.getSideOutput(Scorer.SCORES),
+        grouped,
+        candidates.getSideOutput(Scorer.SCORES),
+        grouped.getSideOutput(RegionGrouper.UNIT_STATUS),
         aggregates.getSideOutput(MinuteAggregator.LATE));
   }
 }

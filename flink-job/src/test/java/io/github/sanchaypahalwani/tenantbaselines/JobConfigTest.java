@@ -16,6 +16,7 @@ class JobConfigTest {
     assertThat(cfg.seasonal()).isEqualTo(List.of(new SeasonalSetting("k4", 4, 2)));
     assertThat(cfg.emitScores()).isTrue();
     assertThat(cfg.scoresTopic()).isEqualTo("live.scores");
+    assertThat(cfg.unitStatusTopic()).isEqualTo("live.unit-status");
   }
 
   @Test

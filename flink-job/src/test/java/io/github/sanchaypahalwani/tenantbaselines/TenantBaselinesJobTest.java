@@ -54,6 +54,8 @@ class TenantBaselinesJobTest {
             "population-baselines",
             "scorer",
             "scores-sink",
+            "region-grouper",
+            "unit-status-sink",
             "late-events");
   }
 

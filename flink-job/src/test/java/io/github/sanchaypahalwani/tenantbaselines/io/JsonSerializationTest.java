@@ -4,8 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.sanchaypahalwani.tenantbaselines.model.AlertEvent;
 import io.github.sanchaypahalwani.tenantbaselines.model.MinuteAgg;
 import io.github.sanchaypahalwani.tenantbaselines.model.ScoreEvent;
+import io.github.sanchaypahalwani.tenantbaselines.model.UnitStatusEvent;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -62,5 +64,38 @@ class JsonSerializationTest {
         .isEqualTo("t|r|u");
     assertThat(new String(JsonSerialization.scoreKey().serialize(score), StandardCharsets.UTF_8))
         .isEqualTo("t|r|u");
+  }
+
+  @Test
+  void unitStatusEventKeysAndKey() throws Exception {
+    UnitStatusEvent event =
+        new UnitStatusEvent("live", "u1", "eu", "drain", "error_rate", 60_000L, 70_000L,
+            "dedicated");
+
+    JsonNode node =
+        new ObjectMapper().readTree(JsonSerialization.<UnitStatusEvent>json().serialize(event));
+
+    List<String> names = new ArrayList<>();
+    node.fieldNames().forEachRemaining(names::add);
+    assertThat(names)
+        .containsExactlyInAnyOrder(
+            "run_id", "unit", "region", "status", "signal", "at_ms", "emitted_at_ms", "reason");
+    assertThat(new String(JsonSerialization.unitKey().serialize(event), StandardCharsets.UTF_8))
+        .isEqualTo("u1");
+  }
+
+  @Test
+  void regionalAlertWritesEmptyTenantAndUnit() throws Exception {
+    AlertEvent alert =
+        new AlertEvent("id", "live", "seasonal", "k4", "region", "eu", "", "eu", "", "error_rate",
+            "firing", 0L, 60_000L, 70_000L, 0.5, 0.1, null);
+
+    JsonNode node =
+        new ObjectMapper().readTree(JsonSerialization.<AlertEvent>json().serialize(alert));
+
+    assertThat(node.get("tenant").isTextual()).isTrue();
+    assertThat(node.get("tenant").asText()).isEmpty();
+    assertThat(node.get("unit").isTextual()).isTrue();
+    assertThat(node.get("unit").asText()).isEmpty();
   }
 }

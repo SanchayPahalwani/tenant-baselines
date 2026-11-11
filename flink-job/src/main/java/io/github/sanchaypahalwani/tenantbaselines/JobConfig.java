@@ -111,6 +111,10 @@ public record JobConfig(
     return ns + ".scores";
   }
 
+  public String unitStatusTopic() {
+    return ns + ".unit-status";
+  }
+
   public String alertsTopic() {
     return ns + ".alerts";
   }

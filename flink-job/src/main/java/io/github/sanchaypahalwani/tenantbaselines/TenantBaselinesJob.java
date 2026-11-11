@@ -70,6 +70,10 @@ public final class TenantBaselinesJob {
           .uid("scores-sink")
           .name("scores-sink");
     }
+    out.unitStatus()
+        .sinkTo(sink(cfg.bootstrap(), cfg.unitStatusTopic(), JsonSerialization.unitKey()))
+        .uid("unit-status-sink")
+        .name("unit-status-sink");
     out.late()
         .map(new CountLate())
         .uid("late-events")

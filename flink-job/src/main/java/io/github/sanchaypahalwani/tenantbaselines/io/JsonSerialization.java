@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import io.github.sanchaypahalwani.tenantbaselines.model.AlertEvent;
 import io.github.sanchaypahalwani.tenantbaselines.model.MinuteAgg;
 import io.github.sanchaypahalwani.tenantbaselines.model.ScoreEvent;
+import io.github.sanchaypahalwani.tenantbaselines.model.UnitStatusEvent;
 import java.nio.charset.StandardCharsets;
 import org.apache.flink.api.common.serialization.SerializationSchema;
 
@@ -28,6 +29,11 @@ public final class JsonSerialization {
 
   public static SerializationSchema<AlertEvent> alertKey() {
     return alert -> alert.key().getBytes(StandardCharsets.UTF_8);
+  }
+
+  /** The compacted unit-status topic rejects records without a key. */
+  public static SerializationSchema<UnitStatusEvent> unitKey() {
+    return status -> status.unit().getBytes(StandardCharsets.UTF_8);
   }
 
   private static final class JsonSchema<T> implements SerializationSchema<T> {

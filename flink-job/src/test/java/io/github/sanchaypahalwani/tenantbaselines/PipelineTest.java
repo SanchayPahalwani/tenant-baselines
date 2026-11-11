@@ -125,6 +125,45 @@ class PipelineTest {
     assertThat(firing).hasSize(1);
     assertThat(firing.get(0).signal()).isEqualTo("error_rate");
     assertThat(firing.get(0).startsAtMs()).isEqualTo(600_000L);
+    assertThat(firing.get(0).eventTimeMs()).isEqualTo(900_000L);
+    assertThat(firing.get(0).scope()).isEqualTo("tenant");
+  }
+
+  /**
+   * Four tenants on one unit, 100 events a minute each. From minute 65 three of them have every
+   * second event fail. The list is built minute by minute: the timestamps are monotonous, so a
+   * list built tenant by tenant would drop three tenants as late.
+   */
+  private static List<Event> regionalEvents() {
+    List<Event> events = new ArrayList<>();
+    for (int minute = 0; minute < 75; minute++) {
+      for (int t = 1; t <= 4; t++) {
+        for (int i = 0; i < 100; i++) {
+          long ts = minute * MINUTE_MS + i * 600L;
+          boolean ok = t == 4 || minute < 65 || i % 2 == 0;
+          events.add(new Event(ts, "t" + t, "eu", "u1", 100.0, ok));
+        }
+      }
+    }
+    return events;
+  }
+
+  @Test
+  void regionalAlertAbsorbsTenantAlerts() throws Exception {
+    StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+    DataStream<Event> events = withTimestamps(env.fromData(regionalEvents()));
+    List<AlertEvent> alerts =
+        collect(Pipeline.build(events, config(75 * MINUTE_MS), thresholds()).alerts());
+
+    List<AlertEvent> staticAlerts =
+        alerts.stream().filter(a -> a.detector().equals("global_static")).toList();
+    assertThat(staticAlerts.stream().filter(a -> a.scope().equals("region")))
+        .filteredOn(a -> a.state().equals("firing"))
+        .hasSize(1);
+    assertThat(staticAlerts).filteredOn(a -> a.state().equals("absorbed")).hasSize(3);
+    assertThat(staticAlerts)
+        .filteredOn(a -> a.scope().equals("tenant") && a.state().equals("firing"))
+        .isEmpty();
   }
 
   @Test

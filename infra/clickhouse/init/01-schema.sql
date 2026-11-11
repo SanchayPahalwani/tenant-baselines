@@ -85,6 +85,27 @@ SETTINGS
     kafka_num_consumers = 1,
     kafka_handle_error_mode = 'stream';
 
+-- Unit drains and undrains (UnitStatusEvent JSON). The topic is compacted, keyed by unit.
+CREATE TABLE IF NOT EXISTS tb.kafka_unit_status
+(
+    run_id String,
+    unit String,
+    region String,
+    status String,
+    signal String,
+    at_ms Int64,
+    emitted_at_ms Int64,
+    reason String
+)
+ENGINE = Kafka
+SETTINGS
+    kafka_broker_list = 'kafka:19092',
+    kafka_topic_list = 'live.unit-status,eval.unit-status,bench.unit-status',
+    kafka_group_name = 'ch-unit-status',
+    kafka_format = 'JSONEachRow',
+    kafka_num_consumers = 1,
+    kafka_handle_error_mode = 'stream';
+
 CREATE TABLE IF NOT EXISTS tb.aggregates
 (
     ns LowCardinality(String),
@@ -143,6 +164,21 @@ CREATE TABLE IF NOT EXISTS tb.alert_log
 )
 ENGINE = ReplacingMergeTree
 ORDER BY (ns, run_id, alert_id, state);
+
+CREATE TABLE IF NOT EXISTS tb.unit_status
+(
+    ns LowCardinality(String),
+    run_id LowCardinality(String),
+    unit LowCardinality(String),
+    region LowCardinality(String),
+    status LowCardinality(String),
+    signal LowCardinality(String),
+    at DateTime64(3, 'UTC'),
+    emitted_at DateTime64(3, 'UTC'),
+    reason LowCardinality(String)
+)
+ENGINE = ReplacingMergeTree
+ORDER BY (ns, run_id, unit, at);
 
 -- Messages that failed to parse, from any of the topic families.
 CREATE TABLE IF NOT EXISTS tb.ingest_errors
@@ -233,4 +269,26 @@ SELECT
     _error AS error,
     _raw_message AS raw
 FROM tb.kafka_alerts
+WHERE length(_error) > 0;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS tb.mv_unit_status TO tb.unit_status AS
+SELECT
+    splitByChar('.', _topic)[1] AS ns,
+    run_id,
+    unit,
+    region,
+    status,
+    signal,
+    fromUnixTimestamp64Milli(at_ms, 'UTC') AS at,
+    fromUnixTimestamp64Milli(emitted_at_ms, 'UTC') AS emitted_at,
+    reason
+FROM tb.kafka_unit_status
+WHERE length(_error) = 0;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS tb.mv_unit_status_errors TO tb.ingest_errors AS
+SELECT
+    _topic AS topic,
+    _error AS error,
+    _raw_message AS raw
+FROM tb.kafka_unit_status
 WHERE length(_error) > 0;
