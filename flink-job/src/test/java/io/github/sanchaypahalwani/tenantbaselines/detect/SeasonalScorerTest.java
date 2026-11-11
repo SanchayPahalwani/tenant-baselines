@@ -308,6 +308,26 @@ class SeasonalScorerTest {
   }
 
   @Test
+  void minutesWhileFiringStillFeedTheBaseline() throws Exception {
+    try (var h = harness(true)) {
+      // Weeks 1 and 2: 30 calm, scored minutes of bucket 0, so the key is warm in week 3.
+      history(h, MON, MON + 30 * MINUTE_MS, 100, 0, 100.0);
+      history(h, MON + WEEK, MON + WEEK + 30 * MINUTE_MS, 100, 0, 100.0);
+      // Week 3: the whole hour fires against the zero baseline.
+      history(h, W3, W3 + 60 * MINUTE_MS, 100, 50, 100.0);
+      assertThat(errorRateEvents(h)).extracting(AlertEvent::state).containsExactly("firing");
+      // Week 4: the window is 60 calm values and 60 firing ones.
+      history(h, W3 + WEEK, W3 + WEEK + MINUTE_MS, 100, 50, 100.0);
+
+      List<ScoreEvent> scores = scores(h);
+      Double inWeek3 = scoreAt(scores, KEY, W3, "error_rate").median();
+      Double inWeek4 = scoreAt(scores, KEY, W3 + WEEK, "error_rate").median();
+      assertThat(inWeek3).isEqualTo(0.0);
+      assertThat(inWeek4).isCloseTo(0.25, within(1e-9));
+    }
+  }
+
+  @Test
   void scoresAreEmittedPerSignalWithBand() throws Exception {
     String other = "b|eu|u1";
     try (var h = harness(true)) {
