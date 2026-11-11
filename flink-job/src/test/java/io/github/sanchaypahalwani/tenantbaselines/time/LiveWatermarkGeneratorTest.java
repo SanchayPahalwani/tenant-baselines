@@ -1,7 +1,6 @@
 package io.github.sanchaypahalwani.tenantbaselines.time;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.sanchaypahalwani.tenantbaselines.model.Event;
@@ -16,23 +15,20 @@ class LiveWatermarkGeneratorTest {
 
     static final class RecordingOutput implements WatermarkOutput {
         final List<Long> emitted = new ArrayList<>();
-        boolean idle = false;
+        int idleCalls = 0;
 
         @Override
         public void emitWatermark(Watermark watermark) {
             emitted.add(watermark.getTimestamp());
-            idle = false;
         }
 
         @Override
         public void markIdle() {
-            idle = true;
+            idleCalls++;
         }
 
         @Override
-        public void markActive() {
-            idle = false;
-        }
+        public void markActive() {}
 
         long last() {
             return emitted.get(emitted.size() - 1);
@@ -67,6 +63,7 @@ class LiveWatermarkGeneratorTest {
         clock.addAndGet(600_000);
         g.onPeriodicEmit(out);
         assertEquals(NOW + 600_000 - 20_001, out.last());
+        assertEquals(0, out.idleCalls, "an output that has seen an event never goes idle");
     }
 
     @Test
@@ -77,10 +74,10 @@ class LiveWatermarkGeneratorTest {
         clock.addAndGet(59_000);
         g.onPeriodicEmit(out);
         assertTrue(out.emitted.isEmpty());
-        assertFalse(out.idle);
+        assertEquals(0, out.idleCalls);
         clock.addAndGet(2_000);
         g.onPeriodicEmit(out);
-        assertTrue(out.idle);
+        assertEquals(1, out.idleCalls);
         clock.addAndGet(600_000);
         g.onPeriodicEmit(out);
         assertTrue(out.emitted.isEmpty(), "an output without events never emits the wall clock");
@@ -97,11 +94,12 @@ class LiveWatermarkGeneratorTest {
         RecordingOutput out = new RecordingOutput();
         clock.addAndGet(120_000);
         g.onPeriodicEmit(out);
+        int idleBefore = out.idleCalls;
         long weeksAgo = NOW - 21 * 86_400_000L;
         g.onEvent(at(weeksAgo), weeksAgo, out);
         g.onPeriodicEmit(out);
         assertEquals(List.of(weeksAgo - 20_001), out.emitted);
-        assertFalse(out.idle);
+        assertEquals(idleBefore, out.idleCalls, "no markIdle() after the first event");
     }
 
     @Test

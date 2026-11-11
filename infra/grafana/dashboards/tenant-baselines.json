@@ -25,8 +25,8 @@
           "type": "grafana-clickhouse-datasource",
           "uid": "clickhouse"
         },
-        "query": "SELECT DISTINCT key FROM tb.aggregates WHERE ns='live' ORDER BY key",
-        "definition": "SELECT DISTINCT key FROM tb.aggregates WHERE ns='live' ORDER BY key",
+        "query": "SELECT key FROM tb.aggregates WHERE ns='live' AND minute > now() - INTERVAL 1 HOUR GROUP BY key ORDER BY sum(count) DESC",
+        "definition": "SELECT key FROM tb.aggregates WHERE ns='live' AND minute > now() - INTERVAL 1 HOUR GROUP BY key ORDER BY sum(count) DESC",
         "refresh": 2,
         "sort": 0,
         "multi": false,
@@ -204,7 +204,7 @@
           "editorType": "sql",
           "queryType": "table",
           "format": 1,
-          "rawSql": "SELECT event_time, state, signal, key, value, reference, reason, scope, region,\n    starts_at, emitted_at, detector, setting, alert_id\nFROM tb.alert_log FINAL\nWHERE ns = 'live'\nORDER BY event_time DESC, alert_id, state\nLIMIT 100"
+          "rawSql": "SELECT event_time, state, detector, setting, signal, key, value, reference, reason, scope,\n    region, starts_at, emitted_at, alert_id\nFROM tb.alert_log FINAL\nWHERE ns = 'live'\nORDER BY event_time DESC, alert_id, state\nLIMIT 100"
         }
       ],
       "fieldConfig": {

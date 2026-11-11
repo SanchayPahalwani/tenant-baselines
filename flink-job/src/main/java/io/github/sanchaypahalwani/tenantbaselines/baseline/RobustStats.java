@@ -18,7 +18,11 @@ public final class RobustStats {
     return n % 2 == 1 ? v[n / 2] : (v[n / 2 - 1] + v[n / 2]) / 2.0;
   }
 
-  /** The median of |v[i] - median| over the first n entries. Reorders v. */
+  /**
+   * The median of |v[i] - median| over the first n entries. Overwrites the first n entries of v
+   * with the absolute deviations, then sorts them, so the caller passes a scratch buffer. The
+   * values must not contain NaN.
+   */
   public static double mad(double[] v, int n, double median) {
     for (int i = 0; i < n; i++) {
       v[i] = Math.abs(v[i] - median);

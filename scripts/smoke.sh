@@ -2,8 +2,8 @@
 # End-to-end smoke test of the demo; `make smoke` runs it after `make demo`, which refuses to
 # start unless the stack is empty (`make reset`). Checks 1-6 are polled every 15 s for up to
 # 30 minutes: the demo script's tenant drop and regional error spike start 2 and 14 minutes
-# after the generator catches up. Check 7 runs once after them. Check 8 restores the job from a
-# checkpoint, checks that it re-emitted minute rows to Kafka, and that ClickHouse collapses them
+# after the generator catches up. Checks 7 and 8 run once after them. Check 9 restores the job
+# from a checkpoint, checks that it re-emitted minute rows to Kafka, and that ClickHouse collapses them
 # to one row each. Prints PASS or FAIL per check and exits 1 if any failed.
 set -euo pipefail
 
@@ -79,7 +79,8 @@ names=(
   "5 pager-sink logged a notification"
   "6 tb.scores has a median for each of the three signals"
   "7 tb.ingest_errors is empty"
-  "8 restored job's re-emitted output collapses to one row each in aggregates, scores and alert_log"
+  "8 the job dropped no events as late"
+  "9 restored job's re-emitted output collapses to one row each in aggregates, scores and alert_log"
 )
 polled=(1 2 3 4 5 6)
 checks=("" check_aggregates check_drop_alert check_spike_alert check_alertmanager check_pager check_scores)
@@ -125,6 +126,13 @@ else
   fail "${names[7]} ($errors rows)"
 fi
 
+late=$(scripts/late-events.sh) || late=unknown
+if [ "$late" = 0 ]; then
+  pass "${names[8]} (lateEvents $late)"
+else
+  fail "${names[8]} (lateEvents $late)"
+fi
+
 echo "restoring the job from a checkpoint"
 if docker compose exec -T jobmanager bash /opt/tb-scripts/submit-job.sh --from-checkpoint; then
   echo "waiting ${SETTLE_S} s for the restored job's output"
@@ -138,20 +146,20 @@ if docker compose exec -T jobmanager bash /opt/tb-scripts/submit-job.sh --from-c
     || alert_extra=unknown
   detail="re-emitted minute rows $reemitted; extra rows: aggregates $agg_extra, scores $scores_extra, alert_log $alert_extra"
   if [ "$reemitted" = unknown ]; then
-    fail "${names[8]} (could not read live.aggregates; $detail)"
+    fail "${names[9]} (could not read live.aggregates; $detail)"
   elif [ "$reemitted" -eq 0 ]; then
-    fail "${names[8]} (nothing was re-emitted, so nothing was tested; $detail)"
+    fail "${names[9]} (nothing was re-emitted, so nothing was tested; $detail)"
   elif [ "$agg_extra" = 0 ] && [ "$scores_extra" = 0 ] && [ "$alert_extra" = 0 ]; then
-    pass "${names[8]} ($detail)"
+    pass "${names[9]} ($detail)"
   else
-    fail "${names[8]} ($detail)"
+    fail "${names[9]} ($detail)"
   fi
 else
-  fail "${names[8]} (resubmit failed)"
+  fail "${names[9]} (resubmit failed)"
 fi
 
 if [ "$failures" -gt 0 ]; then
-  echo "smoke: $failures of 8 checks failed"
+  echo "smoke: $failures of 9 checks failed"
   exit 1
 fi
-echo "smoke: all 8 checks passed"
+echo "smoke: all 9 checks passed"

@@ -5,7 +5,10 @@ public final class HourOfWeek {
   public static final long HOUR_MS = 3_600_000L;
   public static final long WEEK_MS = 604_800_000L;
 
-  /** 1970-01-05 is the first Monday, three days after the epoch. */
+  /**
+   * 1970-01-01 was a Thursday, so the first Monday, 1970-01-05, is four days after the epoch.
+   * Adding 3 days (259,200,000 ms) maps every Monday 00:00 UTC onto a multiple of 7 days.
+   */
   private static final long MONDAY_SHIFT_MS = 259_200_000L;
 
   private HourOfWeek() {}

@@ -52,7 +52,7 @@ if [ "$with_data" -gt 0 ]; then
 fi
 
 echo "Starting the demo: three weeks of synthetic history, then live traffic." \
-  "Warm-up takes about 3.5 minutes."
+  "Warm-up takes about 3 to 4 minutes."
 
 start=$SECONDS
 docker compose --profile demo up -d --build --no-deps generator
@@ -104,16 +104,35 @@ while :; do
 done
 
 echo "caught up after $((SECONDS - start)) s"
-echo
-echo "Grafana http://localhost:3000/d/tenant-baselines"
-echo "Alertmanager http://localhost:9093"
-echo "Flink http://localhost:8081"
+# Flink serves job metrics from a cache that refreshes every 10 s, so the counter can be missing
+# for a short while after the job starts. Try for up to 30 s before giving up.
+late=unknown
+for _ in 1 2 3 4 5 6; do
+  late=$(scripts/late-events.sh 2> /dev/null) && break
+  late=unknown
+  sleep 5
+done
+echo "events dropped as late: $late"
+if [ "$late" != 0 ]; then
+  echo "The history arrived behind the watermark, so the baselines are incomplete." \
+    'Run "make reset && make demo" with the machine awake to start clean.' >&2
+fi
 echo
 script_line=$(docker compose --profile demo logs --no-log-prefix generator 2> /dev/null \
   | grep -m 1 'demo script:' || true)
 echo "generator: ${script_line:-no demo script line in its log yet}"
 echo
-echo "What to watch, counted from the generator's catch-up (the UTC times above):"
-echo "  the tenant drop starts about 2 minutes after catch-up and pages after about 5 to 8 more;"
-echo "  the regional error spike starts about 14 minutes after catch-up and pages about 4 minutes later;"
+# The dropped key from the generator's "volume x0.1 on <key> " text, with | encoded for a URL.
+dropped_key=$(printf '%s\n' "$script_line" | sed -n 's/.*volume x0\.1 on \([^ ]*\) .*/\1/p')
+if [ -n "$dropped_key" ]; then
+  echo "Grafana http://localhost:3000/d/tenant-baselines?var-key=${dropped_key//|/%7C}"
+else
+  echo "Grafana http://localhost:3000/d/tenant-baselines"
+fi
+echo "Alertmanager http://localhost:9093"
+echo "Flink http://localhost:8081"
+echo
+echo "What to watch:"
+echo "  the tenant drop (UTC times above) pages about 4 to 5 minutes after it starts;"
+echo "  the regional error spike pages about 3 to 4 minutes after it starts;"
 echo "  alerts decided during the history appear in the alert log but are never paged."

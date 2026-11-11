@@ -214,8 +214,12 @@ class ScorerFallbackTest {
     }
 
     try (var h = restored(snapshot)) {
+      // KEY's expiry timer came back with the snapshot; COLD gets its own on its first minute.
+      // KEY already has its timer, so its minutes add none: 2 means one restored and one new.
+      assertThat(h.numEventTimeTimers()).isEqualTo(1);
       errorSpike(h, KEY, W3);
       errorSpike(h, COLD, W3);
+      assertThat(h.numEventTimeTimers()).isEqualTo(2);
 
       List<AlertEvent> out = h.extractOutputValues();
       assertThat(out).hasSize(2);
@@ -261,6 +265,7 @@ class ScorerFallbackTest {
             VolumeRing.class,
             AlertStateMachine.class,
             PopHistogram.class,
+            PopulationBaseline.class,
             MinuteAccumulator.class)) {
       assertThat(TypeInformation.of(c)).as(c.getSimpleName()).isInstanceOf(PojoTypeInfo.class);
     }
