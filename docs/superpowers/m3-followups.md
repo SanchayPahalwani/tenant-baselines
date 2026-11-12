@@ -13,8 +13,16 @@ Planning material, like the rest of `docs/superpowers/`. These are review findin
 
 - **Checkpoint size in the eval summaries.** The summaries record it, and §6 reads state size from it. With a hashmap backend it is not the size of a RocksDB state, so §6 needs one run on RocksDB instead.
 - **Busy times from the eval runs** (Task 15): the `scorer` and `region-grouper` busy times belong in the throughput write-up.
-- **Scorer writes.** Check whether the Scorer's unchanged machine-state writes were removed, or are still written every minute (see `m1-followups.md`, milestone 5).
 - **`live.*` topics carry event time.** The `live.*` output topics are stamped with event time, so the broker's 7-day retention deletes backfilled rows within hours of the write (seen on the demo stack: `live.alerts` starting at offset 8). The forwarder's rebuild from the start of `live.alerts` then misses them. Give `live.*` `LogAppendTime` too, or say why not.
+
+From the milestone 4 final review:
+
+- **Java Minors in the job (they change the jar).** `ThresholdsFile` treats a non-object `global` or `per_key` node as empty, and reports a non-integer `valid_from_ms` as missing. Its overlap message lacks the `#index` form. One line is 150 characters long. `AggregateJson`'s "not JSON (…)" message has no length bound. The `fin && due > replayEndMs` branch of `Scorer.onTimer` has no test. Milestone 5 or 6.
+- **Machine facts per run.** Summaries should record the host and Docker VM facts measured at run time. `docs/results/machine.json` holds them once, for the 15 official runs. The benchmark write-up needs the same.
+- **Connector 5.1.0.** Move to it when it is released, and drop the rule that a replay-mode run hitting FLINK-39728 is simply run again.
+- `eval_run`'s poll retries can overshoot `timeout_s` by about a minute.
+- `submit-job.sh` writes the checkpoint path twice.
+- `create-topics.sh --if-not-exists` keeps an old stack's topic configs.
 
 ## Milestone 6 (README and design doc)
 
@@ -38,6 +46,20 @@ Planning material, like the rest of `docs/superpowers/`. These are review findin
   - the eval world's composition (48 keys, not "about 60", and why);
   - the placement builder's calls (scenario spacing, the eligibility rules, the thresholds mask);
   - the scoring builder's calls (what counts as a page, a match and a false page);
-  - the owner's decisions of the plan (expected-signal recall as the selection and headline measure, the mask amendment, the seed protocol).
+  - the owner's decisions of the plan (expected-signal recall as the selection and headline measure, the mask amendment, the seed protocol);
+  - the dedicated-unit drop moves only the tenant's dedicated key, not its key on the shared unit;
+  - the cold-start burst has no volume rule, so it can land in minutes the seasonal detector does not score (seasonal found 2 of 5 at k6);
+  - a regional page matches every scenario with an affected key in its region, tenant-level scenarios included;
+  - a page's week is set by `starts_at_ms`, its match by `event_time_ms`;
+  - load is per key, not per tenant.
 - **Open items from `m1-followups.md`:** tests for non-JSON webhook bodies, and the script items (the default submit misses jobs in CREATED or INITIALIZING; `make ci` and `ci.yml` are kept in sync by hand; the Flink CLI prints `Unknown module: jdk.compiler` from the image).
 - **`check-paths.json` timing.** Its `total` uses the host's monotonic clock, which stops during a host sleep, while the job seconds come from Flink's wall clock. After a sleep, `total` can be smaller than one job's time.
+
+From the milestone 4 final review:
+
+- **Measured Python modules, cleanups only.** `shape_array` and the error and latency formulas restate `traffic.py`. The `weeks <= 0` message. In `thresholds.py`: the unused `_MINUTES_PER_WEEK`, the `assert` that `-O` removes, and the `--demo` flag that is always required. In `scenarios.py`: `_MAX_ATTEMPTS` reads as per scenario but counts per week, and `_SCORED_FROM` doubles as the cold-start week. Any edit breaks the report's "measured code equals the freeze commit" line, so batch them with a stated reason, or leave them.
+- **A reader cannot reproduce an official run.** `make eval` is sealed, `eval-dev` refuses official seeds, and a rebuilt jar has another hash. Add a `repro` kind: an official seed, a local build, output under `data/eval/repro-*` only, and a comparison of `selected_week5` with the committed summary.
+- **False-page breakdown.** A script that splits the selected settings' false pages between bursts, day factors and the rest, so the README can explain them with measured figures. Analysis only; no setting changes.
+- **Repo-wide rule test.** Check the banned words and the "synthetic" label over the whole tracked tree, not only the rendered `results.md`.
+- **Pages per regional outage.** Spec 4.7 asks for them. The outage table shows whether a regional alert formed; the page count is only pooled (seasonal: 3.00 per detected outage).
+- **Test-only leftovers.** `WatermarksTest` pins only the timestamp assigners. `PopulationBaselinesTest` has a 60 s timeout. The rows-order test is O(rows × keys). `checked()` guards continuity per key only.
