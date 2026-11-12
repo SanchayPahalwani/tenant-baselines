@@ -43,30 +43,71 @@ def test_vertex_matches_a_chained_name_by_prefix():
         bench_flink.vertex(job, "nothing")
 
 
-def test_sample_sums_task_level_ids_only():
-    busy = {
-        "accumulated-busy-time": 100,
+class Seq:
+    """A route that answers with its items in turn; the last one repeats."""
+
+    def __init__(self, *items):
+        self.items = list(items)
+
+    def next(self):
+        return self.items.pop(0) if len(self.items) > 1 else self.items[0]
+
+
+def seq_getter(routes: dict, calls: list | None = None):
+    def get(url, timeout=None):
+        path = url.removeprefix("http://127.0.0.1:8081")
+        if calls is not None:
+            calls.append(path)
+        body = routes[path]
+        return Resp(body.next() if isinstance(body, Seq) else body)
+
+    return get
+
+
+BASE = "/jobs/j/vertices/s/metrics"
+QUERY = BASE + "?get=" + ",".join(bench_flink.source_ids(2))
+
+
+def reads(c0: int, c1: int, busy: float = 0.0, bp: int = 0, idle: int = 0) -> list[dict]:
+    """The source's metrics for two subtasks; the clock is the sum of the three accumulates."""
+    body = [
+        {"id": "0.numRecordsOut", "value": str(c0)},
+        {"id": "1.numRecordsOut", "value": str(c1)},
+        {"id": "0.Source__events.numRecordsOut", "value": "99"},
+    ]
+    for i in (0, 1):
+        body += [
+            {"id": f"{i}.accumulateBusyTimeMs", "value": str(busy)},
+            {"id": f"{i}.accumulateBackPressuredTimeMs", "value": str(bp)},
+            {"id": f"{i}.accumulateIdleTimeMs", "value": str(idle)},
+        ]
+    return body
+
+
+def job_body(busy=100):
+    m = {
+        "accumulated-busy-time": busy,
         "accumulated-backpressured-time": 5,
         "accumulated-idle-time": 900,
     }
-    base = "/jobs/j/vertices/s/metrics"
-    routes = {
-        "/jobs/j": {"vertices": [vtx("s", "Source: events", **busy)]},
-        base: [],
-        base + "?get=0.numRecordsOut,1.numRecordsOut": [
-            {"id": "0.numRecordsOut", "value": "10"},
-            {"id": "1.numRecordsOut", "value": "20"},
-            {"id": "0.Source__events.numRecordsOut", "value": "10"},
-        ],
-    }
-    slept = []
-    calls = []
-    got = bench_flink.sample(
-        "j", "s", 2, get=getter(routes, calls), now=lambda: 5.0, monotonic=lambda: 7.0,
-        sleep=lambda s: (slept.append(s), calls.append("sleep")),
+    return {"vertices": [vtx("s", "Source: events", **m)]}
+
+
+def take(routes, previous=None, calls=None, slept=None):
+    slept = [] if slept is None else slept
+    return bench_flink.sample(
+        "j", "s", 2, previous=previous, get=seq_getter(routes, calls),
+        now=lambda: 5.0, monotonic=lambda: 7.0, sleep=slept.append,
     )  # fmt: skip
-    assert calls == [base, "sleep", base + "?get=0.numRecordsOut,1.numRecordsOut", "/jobs/j"]
+
+
+def test_sample_sums_task_level_ids_only():
+    routes = {"/jobs/j": job_body(), BASE: [], QUERY: reads(10, 20, busy=50.0, bp=2, idle=8)}
+    slept, calls = [], []
+    got = take(routes, calls=calls, slept=slept)
+    assert calls == [BASE, QUERY, "/jobs/j", QUERY]  # one trigger; the count read brackets the job
     assert got["count"] == 30 and got["t"] == 5.0 and got["mono"] == 7.0
+    assert got["clock_ms"] == 120.0 and got["stale"] is False
     assert slept == [bench_flink.REFRESH_WAIT_S] == [3.0]
     assert got["vertices"] == {
         "Source: events": {
@@ -78,11 +119,50 @@ def test_sample_sums_task_level_ids_only():
     }
 
 
+def test_a_stale_read_is_read_again_in_the_same_burst():
+    previous = {"clock_ms": 120.0, "count": 30}
+    routes = {
+        "/jobs/j": job_body(),
+        BASE: [],
+        QUERY: Seq(reads(10, 20, busy=50.0, bp=2, idle=8), reads(10, 20, busy=50.0, bp=2, idle=8),
+                   reads(70, 80, busy=90.0, bp=2, idle=8)),
+    }  # fmt: skip
+    slept, calls = [], []
+    got = take(routes, previous=previous, calls=calls, slept=slept)
+    assert got["stale"] is False and got["count"] == 150 and got["clock_ms"] == 200.0
+    assert calls.count(BASE) == 1  # the refresh was triggered once; the second look is a re-read
+    assert slept == [bench_flink.REFRESH_WAIT_S, bench_flink.STALE_RETRY_WAIT_S]
+
+
+def test_a_read_that_stays_stale_is_marked():
+    previous = {"clock_ms": 120.0, "count": 30}
+    routes = {"/jobs/j": job_body(), BASE: [], QUERY: reads(10, 20, busy=50.0, bp=2, idle=8)}
+    got = take(routes, previous=previous)
+    assert got["stale"] is True
+
+
+def test_a_refresh_landing_between_the_reads_is_a_mixed_sample_and_is_read_again():
+    previous = {"clock_ms": 100.0, "count": 0}
+    old, new = reads(10, 20, busy=50.0), reads(40, 50, busy=75.0)
+    routes = {"/jobs/j": job_body(), BASE: [], QUERY: Seq(old, new, new, new)}
+    slept = []
+    got = take(routes, previous=previous, slept=slept)
+    assert got["stale"] is False and got["count"] == 90  # the second look, not the mixed one
+    assert len(slept) == 2
+
+
+def test_a_mixed_sample_that_stays_mixed_is_marked_stale():
+    previous = {"clock_ms": 100.0, "count": 0}
+    a, b = reads(10, 20, busy=50.0), reads(40, 50, busy=75.0)
+    routes = {"/jobs/j": job_body(), BASE: [], QUERY: Seq(a, b, a, b)}
+    assert take(routes, previous=previous)["stale"] is True
+
+
 def test_sample_raises_when_a_counter_has_no_value():
     base = "/jobs/j/vertices/s/metrics"
     routes = {
         base: [],
-        base + "?get=0.numRecordsOut,1.numRecordsOut": [{"id": "0.numRecordsOut", "value": "1"}],
+        QUERY: [{"id": "0.numRecordsOut", "value": "1"}],
         "/jobs/j": {"vertices": []},
     }
     with pytest.raises(KeyError, match="1.numRecordsOut"):
@@ -134,6 +214,41 @@ def test_late_events_sums_the_subtasks():
         ],
     }
     assert bench_flink.late_events("j", get=getter(routes), sleep=lambda s: None) == 7
+
+
+def late_routes(late_bodies, clock_bodies):
+    ids = ["0.late-events.lateEvents", "1.late-events.lateEvents"]
+    return {
+        "/jobs/j": {"vertices": [{"id": "m", "name": "x"}]},
+        "/jobs/j/vertices/m/metrics": [{"id": i} for i in ids],
+        "/jobs/j/vertices/m/metrics?get=" + ",".join(ids): late_bodies,
+        "/jobs/j/vertices/s/metrics": [],
+        QUERY: clock_bodies,
+    }
+
+
+def late(value):
+    return [{"id": "0.late-events.lateEvents", "value": "3"},
+            {"id": "1.late-events.lateEvents", "value": str(value)}]  # fmt: skip
+
+
+def test_late_events_rereads_when_the_clock_has_not_moved():
+    stale, fresh = reads(0, 0, busy=50.0), reads(0, 0, busy=90.0)
+    routes = late_routes(Seq(late(0), late(4)), Seq(stale, stale, fresh, fresh))
+    slept = []
+    got = bench_flink.late_events(
+        "j", fresh_after=("s", 2, 100.0), get=seq_getter(routes), sleep=slept.append
+    )
+    assert got == 7 and len(slept) == 2
+
+
+def test_late_events_raises_when_the_clock_never_moves():
+    stale = reads(0, 0, busy=50.0)
+    routes = late_routes(late(0), stale)
+    with pytest.raises(bench_flink.RunFailed, match="stale"):
+        bench_flink.late_events(
+            "j", fresh_after=("s", 2, 100.0), get=seq_getter(routes), sleep=lambda s: None
+        )
 
 
 def test_restarts_and_job_times_and_config():

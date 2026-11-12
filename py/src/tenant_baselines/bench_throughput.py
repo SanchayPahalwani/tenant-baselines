@@ -13,6 +13,8 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
+from confluent_kafka.admin import AdminClient, ConfigResource
+
 from tenant_baselines import bench_env, bench_flink, bench_world, kafka_io
 from tenant_baselines.bench_fill import fill_events
 from tenant_baselines.eval_run import RunFailed
@@ -22,6 +24,7 @@ __all__ = [
     "WindowTooShort",
     "alert_counts",
     "check_final_count",
+    "next_due",
     "main",
     "sustained_rate",
     "window",
@@ -32,7 +35,11 @@ BYTES_PER_EVENT = 20  # measured 15.7 in the pilot, rounded up to the next 10
 EVENTS_PER_MINUTE = 240_000  # 2,000 keys at 120 requests a minute
 PARTITIONS = 8
 SAMPLE_INTERVAL_S = 12
-RUN_TIMEOUT_S = 30 * 60
+MIN_RUN_TIMEOUT_S = 30 * 60
+MIN_EVENTS_PER_S = 8000  # a run fails only below this rate
+MIN_BURST_GAP_S = 11  # the metric cache refreshes at most every 10 s
+WARMUP_S = 60
+END_SHARE = 0.9
 RUNNING_TIMEOUT_S = 120
 METRIC_CACHE_WAIT_S = 11
 MAX_MINUTES = 300
@@ -46,25 +53,33 @@ class WindowTooShort(Exception):
     pass
 
 
-def window(
-    samples: list[dict], total: int, warmup_s: float = 60, end_share: float = 0.9
-) -> tuple[int, int]:
-    """Indexes of the window's first and last sample.
+def _fresh(samples: list[dict]) -> list[int]:
+    """Indexes of the samples that were not read from a stale cache."""
+    return [i for i, s in enumerate(samples) if not s.get("stale")]
 
-    The first is the first sample at least `warmup_s` after the first one with a count above 0;
-    the last is the last sample with a count below `end_share * total`.
+
+def window(
+    samples: list[dict], total: int, warmup_s: float = WARMUP_S, end_share: float = END_SHARE
+) -> tuple[int, int]:
+    """Indexes of the window's first and last sample, both fresh.
+
+    The first is the first fresh sample at least `warmup_s` after the first one with a count above
+    0; the last is the last fresh sample with a count below `end_share * total` (a count equal to
+    it is out).
     """
-    for a, b in zip(samples, samples[1:], strict=False):
-        if b["count"] < a["count"]:
+    fresh = _fresh(samples)
+    for a, b in zip(fresh, fresh[1:], strict=False):
+        if samples[b]["count"] < samples[a]["count"]:
             raise ValueError(
-                f"the source count fell from {a['count']} to {b['count']}: the job restarted"
+                f"the source count fell from {samples[a]['count']} to {samples[b]['count']}:"
+                " the job restarted"
             )
-    active = next((i for i, s in enumerate(samples) if s["count"] > 0), None)
+    active = next((i for i in fresh if samples[i]["count"] > 0), None)
     if active is None:
         raise WindowTooShort("the source never emitted; raise BENCH_MINUTES or check the job")
     t0 = samples[active]["t"] + warmup_s
-    first = next((i for i, s in enumerate(samples) if s["t"] >= t0), None)
-    last = max((i for i, s in enumerate(samples) if s["count"] < end_share * total), default=None)
+    first = next((i for i in fresh if samples[i]["t"] >= t0), None)
+    last = max((i for i in fresh if samples[i]["count"] < end_share * total), default=None)
     if first is None or last is None or last <= first:
         raise WindowTooShort(
             "no sample lies between the warm-up and the last tenth of the fill; raise BENCH_MINUTES"
@@ -75,13 +90,14 @@ def window(
 def sustained_rate(
     samples: list[dict],
     total: int,
-    warmup_s: float = 60,
-    end_share: float = 0.9,
+    warmup_s: float = WARMUP_S,
+    end_share: float = END_SHARE,
     min_window_s: float = 120,
     min_intervals: int = 8,
 ) -> dict:
+    """The rate over the window, from the fresh samples only; rounded only in the result."""
     first, last = window(samples, total, warmup_s, end_share)
-    win = samples[first : last + 1]
+    win = [samples[i] for i in _fresh(samples) if first <= i <= last]
     span = win[-1]["t"] - win[0]["t"]
     intervals = len(win) - 1
     if span < min_window_s or intervals < min_intervals:
@@ -94,14 +110,22 @@ def sustained_rate(
     ]
     return {
         "events_per_s": round((win[-1]["count"] - win[0]["count"]) / span, 1),
-        "window_start_s": win[0]["t"],
-        "window_end_s": win[-1]["t"],
-        "window_s": span,
+        "window_start_s": round(win[0]["t"], 1),
+        "window_end_s": round(win[-1]["t"], 1),
+        "window_s": round(span, 1),
         "intervals": intervals,
         "min_interval_rate": round(min(rates), 1),
         "max_interval_rate": round(max(rates), 1),
-        "timing_error_pct": round(100 * 2 * bench_flink.REFRESH_WAIT_S / span, 1),
+        # An upper bound: each endpoint's counter was read between its `t` and `t` plus the
+        # refresh wait, so the span is off by at most that wait.
+        "timing_error_pct": round(100 * bench_flink.REFRESH_WAIT_S / span, 1),
     }
+
+
+def next_due(due: float, burst_start: float) -> float:
+    """When the next burst starts: one interval after the last due time, but never closer than
+    MIN_BURST_GAP_S to the last burst's start, so a late burst is not followed by a catch-up."""
+    return max(due + SAMPLE_INTERVAL_S, burst_start + MIN_BURST_GAP_S)
 
 
 def window_shares(samples: list[dict], first: int, last: int) -> dict:
@@ -144,7 +168,8 @@ def parse_df_available_kib(text: str) -> int:
 
 
 def parse_du_kib(text: str) -> int:
-    return int(text.split()[0])
+    """The sum of the first fields of `du -sk` lines: one line per partition directory."""
+    return sum(int(line.split()[0]) for line in text.splitlines() if line.strip())
 
 
 def _kafka_exec(run: Callable, *cmd: str) -> str:
@@ -177,6 +202,13 @@ def _wait_running(job_id: str, get: Callable = bench_flink.httpx.get) -> None:
         time.sleep(1.0)
 
 
+def _topic_compression(topic: str) -> str:
+    """The topic's `compression.type`, read from the broker."""
+    admin = AdminClient({"bootstrap.servers": kafka_io.BOOTSTRAP, **kafka_io._CLIENT})
+    res = ConfigResource(ConfigResource.Type.TOPIC, topic)
+    return admin.describe_configs([res])[res].result()["compression.type"].value
+
+
 def _fill(args, fill_id: str, run: Callable) -> dict:
     topic = f"{fill_id}.events"
     world = bench_world.build("bench", args.seed)
@@ -188,7 +220,6 @@ def _fill(args, fill_id: str, run: Callable) -> dict:
             f"the broker has {free / 1e9:.1f} GB free and the fill needs twice"
             f" {need / 2e9:.1f} GB; lower BENCH_MINUTES"
         )
-    before = parse_du_kib(_kafka_exec(run, "du", "-sk", DATA_DIR)) * 1024
     kafka_io.create_topic(topic, PARTITIONS)
     start_ms = int(time.time() // 60 * 60_000) - (args.minutes + 1) * 60_000
     t0 = time.monotonic()
@@ -199,8 +230,9 @@ def _fill(args, fill_id: str, run: Callable) -> dict:
     ends = kafka_io.end_offsets(topic)
     if sum(ends.values()) != produced:
         raise RunFailed(f"{topic} holds {sum(ends.values())} records, {produced} were produced")
-    after = parse_du_kib(_kafka_exec(run, "du", "-sk", DATA_DIR)) * 1024
-    grown = after - before
+    # This topic's partition directories only: other topics' growth is not in the figure.
+    du = _kafka_exec(run, "sh", "-c", f"du -sk {DATA_DIR}/{topic}-*")
+    on_disk = parse_du_kib(du) * 1024
     return {
         "topic": topic,
         "keys": n_keys,
@@ -210,9 +242,37 @@ def _fill(args, fill_id: str, run: Callable) -> dict:
         "events": produced,
         "seconds": round(seconds, 1),
         "events_per_s": round(produced / seconds, 1),
-        "kafka_bytes": grown,
-        "bytes_per_event": round(grown / produced, 1),
+        "kafka_bytes": on_disk,
+        "bytes_per_event": round(on_disk / produced, 1),
+        "compression": _topic_compression(topic),
     }
+
+
+def _poll_source(job_id: str, src: dict, samples: list[dict], total: int, deadline: float) -> str:
+    """Take a sample every SAMPLE_INTERVAL_S until the count reaches `total`. Returns "" or the
+    reason the run must stop: the count fell (a restart) or the deadline passed."""
+    due = time.monotonic()
+    while True:
+        burst_start = time.monotonic()
+        try:
+            previous = samples[-1] if samples else None
+            s = bench_flink.sample(job_id, src["id"], src["parallelism"], previous=previous)
+        except KeyError:
+            if samples:
+                raise  # the metrics existed and went; not a start-up gap
+            s = None  # tasks not up yet
+        if s is not None:
+            fresh = [x for x in samples if not x["stale"]]
+            dropped = bool(fresh) and not s["stale"] and s["count"] < fresh[-1]["count"]
+            samples.append(s)
+            if dropped:
+                return f"the source count fell to {s['count']}: the job restarted"
+            if s["count"] >= total:
+                return ""
+        if time.monotonic() > deadline:
+            return "the count did not reach the fill before the deadline"
+        due = next_due(due, burst_start)
+        time.sleep(max(0.0, due - time.monotonic()))
 
 
 def _one_run(n: int, fill_id: str, total: int, args, run_dir: Path) -> dict:
@@ -221,30 +281,37 @@ def _one_run(n: int, fill_id: str, total: int, args, run_dir: Path) -> dict:
     alerts_from = kafka_io.end_offsets(ALERTS_TOPIC)
     job_id = bench_flink.submit(run_id, topic)
     samples: list[dict] = []
+    timeout_s = max(MIN_RUN_TIMEOUT_S, total / MIN_EVENTS_PER_S)
+    print(
+        f"bench: {run_id} fails below {MIN_EVENTS_PER_S} events/s ({timeout_s / 60:.0f} min limit)"
+    )
     try:
         _wait_running(job_id)
         job = bench_flink._json(bench_flink.httpx.get, f"/jobs/{job_id}")
         src = bench_flink.vertex(job, "Source: events")
-        deadline = time.monotonic() + RUN_TIMEOUT_S
-        due = time.monotonic()
-        while True:
-            try:
-                s = bench_flink.sample(job_id, src["id"], src["parallelism"])
-            except KeyError:
-                if samples:
-                    raise  # the metrics existed and went; not a start-up gap
-                s = None  # tasks not up yet
-            if s is not None:
-                samples.append(s)
-                if s["count"] >= total:
-                    break
-            if time.monotonic() > deadline:
-                raise RunFailed(f"{run_id}: the count did not reach {total} in 30 minutes")
-            due += SAMPLE_INTERVAL_S
-            time.sleep(max(0.0, due - time.monotonic()))
+        stop = _poll_source(job_id, src, samples, total, time.monotonic() + timeout_s)
+        if stop:
+            restarts = bench_flink.restarts(job_id)
+            if "restarted" in stop and restarts == 0:
+                restarts = 1  # the count fell, so the job did restart; the history lags
+            aborted = {
+                "run_id": run_id,
+                "job_id": job_id,
+                "events": total,
+                "aborted": stop,
+                "restarts": restarts,
+                "late_events": 0,
+                "stale_samples": sum(x["stale"] for x in samples),
+                "host_sleep_gaps_s": _gaps(samples),
+            }
+            if "restarted" not in stop:
+                raise RunFailed(f"{run_id}: {stop}")
+            bench_flink.cancel_and_clean(job_id, run_id)
+            return aborted
         check_final_count(samples[-1]["count"], total)
         time.sleep(METRIC_CACHE_WAIT_S)
-        late = bench_flink.late_events(job_id)
+        fresh_after = (src["id"], src["parallelism"], samples[-1]["clock_ms"])
+        late = bench_flink.late_events(job_id, fresh_after=fresh_after)
         restarts = bench_flink.restarts(job_id)
         history = bench_flink.checkpoint_history(job_id)
         ck = bench_flink.latest_before(history, None)
@@ -262,8 +329,9 @@ def _one_run(n: int, fill_id: str, total: int, args, run_dir: Path) -> dict:
         except Exception as e:  # keep the first error
             print(f"bench: could not clean {run_id}: {e}")
         raise
+    finally:
+        (run_dir / f"samples-r{n}.json").write_text(json.dumps(samples, allow_nan=False))
     bench_flink.cancel_and_clean(job_id, run_id)
-    (run_dir / f"samples-r{n}.json").write_text(json.dumps(samples, allow_nan=False))
     return _summarise(run_id, job_id, total, samples, args.pilot) | {
         "checkpoint": {
             "id": ck["id"],
@@ -278,10 +346,19 @@ def _one_run(n: int, fill_id: str, total: int, args, run_dir: Path) -> dict:
     }
 
 
+def _gaps(samples: list[dict]) -> list[float]:
+    return [round(g, 1) for g in bench_env.gaps([s["mono"] for s in samples])]
+
+
 def _summarise(run_id: str, job_id: str, total: int, samples: list[dict], pilot: bool) -> dict:
     t0 = samples[0]["t"]
-    rebased = [{**s, "t": round(s["t"] - t0, 1)} for s in samples]
-    out: dict = {"run_id": run_id, "job_id": job_id, "events": total}
+    rebased = [{**s, "t": s["t"] - t0} for s in samples]  # unrounded: round only what is reported
+    out: dict = {
+        "run_id": run_id,
+        "job_id": job_id,
+        "events": total,
+        "stale_samples": sum(s["stale"] for s in samples),
+    }
     try:
         rate = sustained_rate(rebased, total)
         first, last = window(rebased, total)
@@ -290,13 +367,15 @@ def _summarise(run_id: str, job_id: str, total: int, samples: list[dict], pilot:
             raise
         out["window_error"] = str(e)
         rate, first, last = {}, 0, len(samples) - 1
+        while samples[last]["stale"] and last > 0:
+            last -= 1
     shares = window_shares(rebased, first, last)
     out |= rate
     out["source"] = _share_of(shares, "Source: events")
     out["drop_ticks_busy"] = _share_of(shares, "drop-ticks")["busy"]
     out["shares"] = shares
     out["busiest_vertex"] = max(shares, key=lambda n: shares[n]["busy"])
-    out["host_sleep_gaps_s"] = [round(g, 1) for g in bench_env.gaps([s["mono"] for s in samples])]
+    out["host_sleep_gaps_s"] = _gaps(samples)
     return out
 
 
@@ -325,11 +404,16 @@ def main(argv: list[str] | None = None) -> None:
     for n in range(1, args.runs + 1):
         r = _one_run(n, fill_id, total, args, run_dir)
         runs.append(r)
+        if "aborted" in r:
+            print(f"bench: run {n} stopped: {r['aborted']}")
+            break
         print(
             f"bench: run {n}: {r.get('events_per_s', 'no window')} events/s, source idle"
-            f" {r['source']['idle']}, busiest {r['busiest_vertex']}"
+            f" {r['source']['idle']}, busiest {r['busiest_vertex']}, stale samples"
+            f" {r['stale_samples']}, min interval rate {r.get('min_interval_rate')}"
         )
     extra = [f"run {r['run_id']}: {r['window_error']}" for r in runs if "window_error" in r]
+    extra += [f"run {r['run_id']}: {r['aborted']}" for r in runs if "aborted" in r]
     sleeps = [g for r in runs for g in r["host_sleep_gaps_s"]]
     valid, reasons = bench_env.validity(
         sum(r["restarts"] for r in runs), sum(r["late_events"] for r in runs), sleeps, extra
@@ -344,8 +428,8 @@ def main(argv: list[str] | None = None) -> None:
         "valid": valid,
         "invalid_reasons": reasons,
         "fill": fill,
-        "warmup_s": 60,
-        "end_share": 0.9,
+        "warmup_s": WARMUP_S,
+        "end_share": END_SHARE,
         "sample_interval_s": SAMPLE_INTERVAL_S,
         "settings": _settings(),
         "runs": runs,

@@ -20,6 +20,8 @@ from tenant_baselines.freeze import REPO
 
 # A 1 s wait read the old cache in 2 of 5 samples on the loaded stack; 3 s did not in 6 of 6.
 REFRESH_WAIT_S = 3.0
+STALE_RETRY_WAIT_S = 2.0
+_CLOCK_METRICS = ("accumulateBusyTimeMs", "accumulateBackPressuredTimeMs", "accumulateIdleTimeMs")
 CANCEL_WAIT_S = 60
 _WATERMARK_FLOOR = 0  # a lowest watermark below this means no watermark yet (Long.MIN_VALUE)
 _SUBMIT = (
@@ -90,10 +92,28 @@ def _find_metric(get: Callable, job_id: str, suffix: str) -> tuple[str, list[str
     raise KeyError(f"no {suffix.lstrip('.')} metric on any vertex of job {job_id}")
 
 
+def source_ids(parallelism: int) -> list[str]:
+    """The ids read from the source in one request: each subtask's output count, then its three
+    accumulated times (busy, back-pressured, idle). The times are one TaskManager clock: they
+    only grow, so a read whose sum has not grown since the last sample came from an old cache."""
+    ids = [f"{i}.numRecordsOut" for i in range(parallelism)]
+    for i in range(parallelism):
+        ids += [f"{i}.{m}" for m in _CLOCK_METRICS]
+    return ids
+
+
+def _count_and_clock(get: Callable, job_id: str, vertex_id: str, parallelism: int):
+    got = _values(get, job_id, vertex_id, source_ids(parallelism))
+    count = sum(got[f"{i}.numRecordsOut"] for i in range(parallelism))
+    clock = sum(v for k, v in got.items() if not k.endswith("numRecordsOut"))
+    return int(count), clock
+
+
 def sample(
     job_id: str,
     source_vertex_id: str,
     parallelism: int,
+    previous: dict | None = None,
     get: Callable = httpx.get,
     now: Callable = time.time,
     monotonic: Callable = time.monotonic,
@@ -102,19 +122,33 @@ def sample(
     """One burst: the source's output count and every vertex's busy, backpressured and idle time.
 
     `count` sums the task-level `<i>.numRecordsOut` of the source subtasks, not the operator-level
-    ids, which would count the same records again.
+    ids, which would count the same records again. The source's accumulated times come from the
+    same request (`clock_ms`). The count is read before and after the job's vertex block; the three
+    reads are one cache generation only if both clocks are equal, and fresh only if the clock is
+    above the previous sample's. Otherwise the reads are repeated once inside the burst (the
+    refresh is already triggered; the cache stays valid for 10 s). A sample that is still
+    incoherent or old is returned with `"stale": true`.
     """
     t = now()
     mono = monotonic()
     _json(get, f"/jobs/{job_id}/vertices/{source_vertex_id}/metrics")
     sleep(REFRESH_WAIT_S)
-    ids = [f"{i}.numRecordsOut" for i in range(parallelism)]
-    counts = _values(get, job_id, source_vertex_id, ids)
-    job = _json(get, f"/jobs/{job_id}")
+    for attempt in (0, 1):
+        _, before = _count_and_clock(get, job_id, source_vertex_id, parallelism)
+        job = _json(get, f"/jobs/{job_id}")
+        count, clock = _count_and_clock(get, job_id, source_vertex_id, parallelism)
+        coherent = before == clock
+        fresh = previous is None or clock > previous["clock_ms"]
+        if coherent and fresh:
+            break
+        if attempt == 0:
+            sleep(STALE_RETRY_WAIT_S)
     return {
         "t": t,
         "mono": mono,
-        "count": int(sum(counts.values())),
+        "count": count,
+        "clock_ms": clock,
+        "stale": not (coherent and fresh),
         "vertices": {
             v["name"]: {
                 "busy_ms": v["metrics"]["accumulated-busy-time"],
@@ -148,12 +182,36 @@ def watermark_lag_s(
     return sent + offset_s - lowest / 1000
 
 
-def late_events(job_id: str, get: Callable = httpx.get, sleep: Callable = time.sleep) -> int:
-    """The job's total `lateEvents`, summed over the late-events operator's subtasks."""
+def late_events(
+    job_id: str,
+    fresh_after: tuple[str, int, float] | None = None,
+    get: Callable = httpx.get,
+    sleep: Callable = time.sleep,
+) -> int:
+    """The job's total `lateEvents`, summed over the late-events operator's subtasks.
+
+    `fresh_after` is `(source vertex id, its parallelism, the clock of the last sample)`. The read
+    counts only when the source's clock, read before and after the late-event counters, is equal
+    and above that clock; it is repeated once, then raises RunFailed. A stale read could only
+    under-count.
+    """
     first = _json(get, f"/jobs/{job_id}")["vertices"][0]["id"]
     _refresh(job_id, first, get, sleep)
-    vid, ids = _find_metric(get, job_id, ".late-events.lateEvents")
-    return int(sum(_values(get, job_id, vid, ids).values()))
+    for attempt in (0, 1):
+        vid, ids = _find_metric(get, job_id, ".late-events.lateEvents")
+        if fresh_after is None:
+            return int(sum(_values(get, job_id, vid, ids).values()))
+        src, par, previous = fresh_after
+        _, before = _count_and_clock(get, job_id, src, par)
+        total = int(sum(_values(get, job_id, vid, ids).values()))
+        _, after = _count_and_clock(get, job_id, src, par)
+        if before == after and after > previous:
+            return total
+        if attempt == 0:
+            sleep(STALE_RETRY_WAIT_S)
+    raise RunFailed(
+        f"the late-events read of job {job_id} is stale: the source's clock did not move"
+    )
 
 
 def restarts(job_id: str, get: Callable = httpx.get) -> int:

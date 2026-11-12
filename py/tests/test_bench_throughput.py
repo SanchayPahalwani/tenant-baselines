@@ -1,6 +1,5 @@
 import pytest
 
-from tenant_baselines import bench_flink
 from tenant_baselines import bench_throughput as bt
 
 
@@ -23,7 +22,7 @@ def test_sustained_rate_excludes_warmup_and_the_last_tenth():
         "intervals": 13,
         "min_interval_rate": 100_000.0,
         "max_interval_rate": 100_000.0,
-        "timing_error_pct": round(100 * 2 * bench_flink.REFRESH_WAIT_S / 156, 1),
+        "timing_error_pct": 1.9,  # 100 x 3 s / 156 s
     }
 
 
@@ -54,7 +53,7 @@ def test_window_shares():
                 "scorer": {
                     "busy_ms": busy,
                     "backpressured_ms": 0,
-                    "idle_ms": 0 + (t - 100) * 1000 * 2 // 2,
+                    "idle_ms": (t - 100) * 1000,
                     "parallelism": 2,
                 }
             },
@@ -80,4 +79,36 @@ def test_alert_counts():
 def test_free_space_and_size_parsing():
     df = "Filesystem 1024-blocks Used Available Capacity Mounted\n/dev/vda1 100 40 60 40% /data\n"
     assert bt.parse_df_available_kib(df) == 60
-    assert bt.parse_du_kib("1234\t/var/lib/kafka/data\n") == 1234
+    assert bt.parse_du_kib("1234\t/var/lib/kafka/data/t-0\n66\t/var/lib/kafka/data/t-1\n") == 1300
+
+
+def fresh_ramp(n=40, per=1_000_000):
+    return [{"t": 12 * k, "count": k * per, "stale": False} for k in range(n)]
+
+
+def test_the_sample_at_the_end_share_is_not_in_the_window():
+    s = fresh_ramp()
+    total = 30_000_000
+    assert s[27]["count"] == bt.END_SHARE * total  # the boundary: 27 M of 30 M
+    first, last = bt.window(s, total)
+    assert s[last]["count"] == 26_000_000 and first == 6  # 60 s after the first count
+
+
+def test_stale_samples_are_never_endpoints_and_do_not_change_the_rate():
+    clean = fresh_ramp()
+    rate = bt.sustained_rate(clean, 30_000_000)
+    s = fresh_ramp()
+    for k in (6, 12, 26):  # the start, a middle one, the end: each a repeat of its neighbour
+        s[k] = {**s[k - 1], "t": s[k]["t"], "stale": True}
+    first, last = bt.window(s, 30_000_000)
+    assert not s[first]["stale"] and not s[last]["stale"]
+    assert (first, last) == (7, 25)
+    got = bt.sustained_rate(s, 30_000_000)
+    assert got["events_per_s"] == rate["events_per_s"] == pytest.approx(83_333.3, abs=0.1)
+    assert got["min_interval_rate"] > 0
+    assert got["intervals"] == 18 - 1 - 0  # 7..25 are 19 samples, one stale in the middle
+
+
+def test_next_due_catches_up_without_a_burst():
+    assert bt.next_due(100.0, burst_start=95.0) == 112.0  # on schedule
+    assert bt.next_due(100.0, burst_start=130.0) == 141.0  # late: 11 s after the last burst
