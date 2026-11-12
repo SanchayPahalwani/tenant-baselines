@@ -481,3 +481,72 @@ def test_submit_raises_on_a_failed_script_or_a_bad_id():
         done = subprocess.CompletedProcess([], rc, stdout=out)
         with pytest.raises(RunFailed, match="submit-bench.sh"):
             bench_flink.submit("r1", "t", run=lambda cmd, done=done, **kw: done)
+
+
+def lag_routes(watermark, clocks):
+    """The source (`s`, two subtasks) and the minute aggregator (`m`); `clocks` and `watermark`
+    are Seq answers for the clock read and the watermark read."""
+    ids = [f"{i}.minute-aggregator.currentInputWatermark" for i in range(2)]
+    return {
+        "/jobs/j": {"vertices": [{"id": "s", "name": "src"}, {"id": "m", "name": "agg"}]},
+        "/jobs/j/vertices/s/metrics": [{"id": "0.numRecordsOut"}],
+        "/jobs/j/vertices/m/metrics": [{"id": i} for i in ids],
+        "/jobs/j/vertices/m/metrics?get=" + ",".join(ids): watermark,
+        QUERY: clocks,
+    }
+
+
+def wm(*values):
+    return [{"id": f"{i}.minute-aggregator.currentInputWatermark", "value": str(v)}
+            for i, v in enumerate(values)]  # fmt: skip
+
+
+def lag(routes, previous=None, slept=None, times=None):
+    clock = iter(times or [1000.0, 1001.0, 1002.0, 1003.0])
+    slept = [] if slept is None else slept
+    return bench_flink.watermark_lag_sample(
+        "j", -0.7, ("s", 2), previous=previous, get=seq_getter(routes),
+        now=lambda: next(clock), sleep=slept.append,
+    )  # fmt: skip
+
+
+def test_lag_sample_reads_the_lag_with_the_sources_clock_in_one_burst():
+    routes = lag_routes(wm(980_000, 978_000), reads(10, 20, busy=60_000))
+    got = lag(routes)
+    assert got["lag_s"] == pytest.approx(1000 - 0.7 - 978)
+    assert got["t"] == 1000.0 and got["clock_ms"] == 120_000.0
+    assert got["stale"] is False and got["reread"] is False
+    assert got["read_s"] == 1.0
+
+
+def test_lag_sample_rereads_once_when_the_clock_did_not_advance():
+    previous = {"t": 940.0, "clock_ms": 120_000.0}  # two subtasks: the clock should be 60 s on
+    old = reads(10, 20, busy=60_000)  # 120,000 ms: no advance
+    new = reads(10, 20, busy=120_000)  # 240,000 ms: 60 s per subtask
+    routes = lag_routes(Seq(wm(900_000, 900_000), wm(980_000, 978_000)), Seq(old, old, new, new))
+    slept = []
+    got = lag(routes, previous=previous, slept=slept)
+    assert got["reread"] is True and got["stale"] is False
+    assert got["lag_s"] == pytest.approx(1000 - 0.7 - 978)  # the second look's watermark
+    assert slept == [bench_flink.REFRESH_WAIT_S, bench_flink.STALE_RETRY_WAIT_S]
+
+
+def test_lag_sample_that_is_still_stale_is_marked_stale():
+    previous = {"t": 940.0, "clock_ms": 120_000.0}
+    old = reads(10, 20, busy=60_000)
+    routes = lag_routes(wm(900_000, 900_000), old)
+    got = lag(routes, previous=previous)
+    assert got["stale"] is True and got["reread"] is True
+
+
+def test_lag_sample_is_not_coherent_when_the_clock_moves_inside_the_read():
+    a, b = reads(10, 20, busy=60_000), reads(10, 20, busy=120_000)
+    routes = lag_routes(wm(980_000, 978_000), Seq(a, b, b, b))
+    got = lag(routes)
+    assert got["reread"] is True and got["stale"] is False
+
+
+def test_lag_sample_before_the_first_watermark_has_no_lag_and_is_not_stale():
+    routes = lag_routes(wm(NO_WATERMARK, 978_000), reads(10, 20, busy=60_000))
+    got = lag(routes)
+    assert got["lag_s"] is None and got["stale"] is False

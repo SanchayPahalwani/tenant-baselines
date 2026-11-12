@@ -196,6 +196,48 @@ def watermark_lag_s(
     return sent + offset_s - lowest / 1000
 
 
+def watermark_lag_sample(
+    job_id: str,
+    offset_s: float,
+    source: tuple[str, int],
+    previous: dict | None = None,
+    get: Callable = httpx.get,
+    now: Callable = time.time,
+    sleep: Callable = time.sleep,
+) -> dict:
+    """One burst: the watermark lag and the source's accumulated clock, tested for freshness.
+
+    `source` is `(source vertex id, its parallelism)`. The lag is as in `watermark_lag_s` (request
+    time, plus the VM clock offset, minus the lowest watermark), or None until every subtask has a
+    watermark. The source's clock is read before and after the watermark. The read is fresh when
+    the two clocks are equal and the clock has advanced since `previous` (the last fresh sample)
+    by about the time elapsed, as in `sample`. Otherwise it is repeated once inside the burst.
+    A read that is still old is returned with `"stale": true`; the caller drops its lag.
+    """
+    src_id, par = source
+    sent = now()  # before the first request of the burst, so the value is never newer than it
+    _refresh(job_id, src_id, get, sleep)
+    vid, ids = _find_metric(get, job_id, ".minute-aggregator.currentInputWatermark")
+    for attempt in (0, 1):
+        _, before = _count_and_clock(get, job_id, src_id, par)
+        lowest = min(_values(get, job_id, vid, ids).values())
+        _, clock = _count_and_clock(get, job_id, src_id, par)
+        coherent = before == clock
+        fresh = previous is None or _advanced(previous, sent, clock, par)
+        if coherent and fresh:
+            break
+        if attempt == 0:
+            sleep(STALE_RETRY_WAIT_S)
+    return {
+        "t": sent,
+        "lag_s": None if lowest < _WATERMARK_FLOOR else sent + offset_s - lowest / 1000,
+        "clock_ms": clock,
+        "stale": not (coherent and fresh),
+        "read_s": now() - sent,
+        "reread": attempt == 1,
+    }
+
+
 def late_events(
     job_id: str,
     fresh_after: tuple[str, int, dict] | None = None,

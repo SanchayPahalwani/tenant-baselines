@@ -8,8 +8,11 @@
 # now - watermark in seconds over the samples, and the UTC weekday and time of the first sample.
 # Each sample is fresh: it starts a refresh of Flink's metric cache, waits for it and reads, and
 # "now" is when it started the refresh (see flink_metrics.py). A refresh starts only when the
-# cache is more than 10 s old, so samples are at least 11 s apart. Exits 1 with a message on
-# stderr when there is no running job, the metric is missing or there is no watermark yet.
+# cache is more than 10 s old, so samples are at least 11 s apart. The lag is against the
+# host's clock, so a VM clock that is off shifts it by the same amount.
+# Exits 1 with a message on stderr when there is no running job, the metric is missing or there
+# is no watermark yet (a sample whose lowest watermark is negative), and when a real watermark
+# is more than 86,400 s behind the wall clock: the job is replaying history.
 set -euo pipefail
 
 FLINK="${FLINK_URL:-http://localhost:8081}"
@@ -31,8 +34,9 @@ from flink_metrics import run  # noqa: E402
 
 samples = int(sys.argv[3])
 interval_s = int(sys.argv[4])
-# A lag this large means a subtask has no watermark yet (Long.MIN_VALUE).
-NO_WATERMARK_S = 86_400
+# A negative watermark means a subtask has none yet (Long.MIN_VALUE). A real one this far behind
+# means the job is still replaying history.
+REPLAY_S = 86_400
 
 
 def body(fm):
@@ -46,9 +50,12 @@ def body(fm):
             time.sleep(max(0.0, sent + interval_s - time.time()))
             sent = fm.refresh()
         watermark_s = min(fm.values(vid, ids).values()) / 1000
-        lag = sent - watermark_s
-        if lag > NO_WATERMARK_S:
+        if watermark_s < 0:
             fm.die("no watermark yet")
+        lag = sent - watermark_s
+        if lag > REPLAY_S:
+            fm.die(f"the watermark is {lag / 86_400:.1f} days behind the wall clock:"
+                   " the job is replaying history")
         lags.append(lag)
     print(f"watermark lag over {samples} samples {interval_s} s apart:"
           f" min {min(lags):.1f} s, median {statistics.median(lags):.1f} s,"

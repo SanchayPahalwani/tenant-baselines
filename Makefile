@@ -10,7 +10,7 @@ CI_PY_IMAGE = tenant-baselines-ci-py
 .NOTPARALLEL:
 
 .PHONY: jar test-java test-py lint-py thresholds-demo check-am test ci up down reset submit demo smoke logs \
-	eval-dev check-paths results eval bench-throughput
+	eval-dev check-paths results eval bench-throughput bench-delay
 
 # The dev seed and amplitude of `make eval-dev`.
 SEED ?= 7
@@ -127,3 +127,11 @@ BENCH_MINUTES ?= 120
 bench-throughput: jar up
 	cd py && $(AWAKE) uv run python -m tenant_baselines.bench_throughput \
 		--minutes $(BENCH_MINUTES) $(BENCH_ARGS)
+
+BENCH_INCIDENTS ?= 60
+# The delay benchmark (synthetic data): three weeks of history, then live traffic at a fixed
+# rate with injected incidents. About 80 minutes. Needs AC power and the lid open throughout.
+bench-delay: jar up
+	docker compose --profile demo build generator
+	cd py && $(AWAKE) uv run python -m tenant_baselines.bench_delay_run \
+		--incidents $(BENCH_INCIDENTS) $(BENCH_ARGS)
