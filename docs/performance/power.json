@@ -1,0 +1,79 @@
+{
+  "runs": {
+    "delay": {
+      "covered_by_log": true,
+      "end": "2026-11-12T22:34:54+05:30",
+      "end_from": "the write time of data/bench/delay-20261112T154647/result.json",
+      "incidents": {
+        "caught_up": "2026-11-12T21:20:54+05:30",
+        "earliest_page": "2026-11-12T21:31:09.400000+05:30",
+        "first_incident_start": "2026-11-12T21:26:40+05:30",
+        "matched_page_on_battery": false,
+        "settle_s": 300,
+        "shortest_time_to_page_s": 269.4
+      },
+      "intervals": [
+        {
+          "from": "2026-11-12T20:55:02+05:30",
+          "overlap_s": 287.0,
+          "source": "AC Power",
+          "to": "2026-11-12T21:21:33+05:30"
+        },
+        {
+          "from": "2026-11-12T21:21:33+05:30",
+          "overlap_s": 330.0,
+          "source": "Battery Power",
+          "to": "2026-11-12T21:27:03+05:30"
+        },
+        {
+          "from": "2026-11-12T21:27:03+05:30",
+          "overlap_s": 4071.0,
+          "source": "AC Power",
+          "to": "2026-11-12T22:44:24+05:30"
+        }
+      ],
+      "log": "power/delay-20261112T154647.log",
+      "log_from": "2026-11-12T20:55:02+05:30",
+      "log_read_at": "2026-11-12T23:11:47+05:30",
+      "run_id": "delay-20261112T154647",
+      "start": "2026-11-12T21:16:46+05:30"
+    },
+    "state": {
+      "covered_by_log": true,
+      "end": "2026-11-12T22:38:35+05:30",
+      "end_from": "the write time of data/bench/state-20261112T170455/result.json",
+      "intervals": [
+        {
+          "from": "2026-11-12T21:27:03+05:30",
+          "overlap_s": 220.0,
+          "source": "AC Power",
+          "to": "2026-11-12T22:44:24+05:30"
+        }
+      ],
+      "log": "power/state-20261112T170455.log",
+      "log_from": "2026-11-12T20:55:02+05:30",
+      "log_read_at": "2026-11-12T23:11:54+05:30",
+      "run_id": "state-20261112T170455",
+      "start": "2026-11-12T22:34:55+05:30"
+    },
+    "throughput": {
+      "covered_by_log": true,
+      "end": "2026-11-12T21:16:44+05:30",
+      "end_from": "the write time of data/bench/tp-20261112T153247/result.json",
+      "intervals": [
+        {
+          "from": "2026-11-12T20:55:02+05:30",
+          "overlap_s": 837.0,
+          "source": "AC Power",
+          "to": "2026-11-12T21:21:33+05:30"
+        }
+      ],
+      "log": "power/tp-20261112T153247.log",
+      "log_from": "2026-11-12T20:55:02+05:30",
+      "log_read_at": "2026-11-12T23:11:50+05:30",
+      "run_id": "tp-20261112T153247",
+      "start": "2026-11-12T21:02:47+05:30"
+    }
+  },
+  "source": "pmset -g log: the lines that say Using AC or Using Batt"
+}

@@ -10,7 +10,7 @@ CI_PY_IMAGE = tenant-baselines-ci-py
 .NOTPARALLEL:
 
 .PHONY: jar test-java test-py lint-py thresholds-demo check-am test ci up down reset submit demo smoke logs \
-	eval-dev check-paths results eval bench-throughput bench-delay bench-state performance bench
+	eval-dev check-paths results eval bench-throughput bench-delay bench-state performance power-log bench
 
 # The dev seed and amplitude of `make eval-dev`.
 SEED ?= 7
@@ -140,6 +140,14 @@ bench-delay: jar up
 # checkpointing every 5 s, on the hashmap and the RocksDB backend. About 6 minutes.
 bench-state: jar up
 	cd py && $(AWAKE) uv run python -m tenant_baselines.bench_state $(BENCH_ARGS)
+
+# The OS power log during the published runs: docs/performance/power.json, from the logs in
+# docs/performance/power/. POWER_ARGS=--save-logs first copies the power-source lines of each
+# published run's saved `pmset -g log` excerpt (data/bench/<run_id>/pmset-log-excerpt.txt) there.
+power-log:
+	cd py && uv run python -m tenant_baselines.bench_power --results ../docs/performance \
+		--logs ../docs/performance/power --runs ../data/bench --out ../docs/performance/power.json \
+		$(POWER_ARGS)
 
 # Renders docs/performance.md from docs/performance/*.json.
 performance:

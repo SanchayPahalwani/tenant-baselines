@@ -1,0 +1,9 @@
+2026-11-12 20:55:02 +0530 Assertions          	Summary- [System: PrevIdle DeclUser kDisp] Using AC(Charge: 59)          
+2026-11-12 21:21:33 +0530 Assertions          	Summary- [System: PrevIdle PrevDisp DeclUser kDisp] Using Batt(Charge: 89)          
+2026-11-12 21:27:03 +0530 Assertions          	Summary- [System: PrevIdle DeclUser IntPrevDisp kDisp] Using AC(Charge: 89)          
+2026-11-12 21:27:06 +0530 Assertions          	Summary- [System: PrevIdle DeclUser SRPrevSleep IntPrevDisp kCPU kDisp] Using AC(Charge: 89)          
+2026-11-12 21:27:30 +0530 Assertions          	Summary- [System: PrevIdle DeclUser IntPrevDisp kDisp] Using AC(Charge: 89)          
+2026-11-12 21:46:47 +0530 Assertions          	Summary- [System: PrevIdle] Using AC(Charge: 95)          
+2026-11-12 21:52:37 +0530 Assertions          	Summary- [System: PrevIdle PrevDisp PrevSleep DeclUser kCPU kDisp] Using AC(Charge: 95)          
+2026-11-12 22:44:24 +0530 Assertions          	Summary- [System: PrevIdle PrevDisp DeclUser kDisp] Using Batt(Charge: 95)          
+2026-11-12 23:11:50 +0530 : Showing all currently held IOKit power assertions
