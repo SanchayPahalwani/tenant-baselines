@@ -90,7 +90,7 @@ results:
 # the one built at the freeze, so `up` and not `jar`. Resumes after an interruption.
 # `make eval` ran the 15 official runs. Each pair runs once, so it now only renders
 # `docs/results.md`.
-# EVAL_ARGS="--only-seed 4101 --only-amplitude 6 --rerun-reason 'bug: ...'" repeats one run.
+# A re-run goes through the driver itself, not `make eval` (step 3 below).
 #
 # Re-running after a bug fix (spec 5.3). A bug is code that disagrees with the spec; anything
 # else is a setting change and may not be re-run.
@@ -98,9 +98,13 @@ results:
 #   2. If the Java code changed: `make jar`, copy flink-job/target/tenant-baselines-job.jar to
 #      data/frozen/<its sha256>.jar, set `jar_sha256` in eval/freeze.json to that hash, and
 #      commit. data/frozen/ is not in git: keep it, with the old copy beside the new one.
-#   3. Re-run every pair, one invocation each (15 in all), for example
-#      make eval EVAL_ARGS="--only-seed 4101 --only-amplitude 6 --rerun-reason 'bug: <what>'"
-#      Each writes a run-log line before it runs and moves the pair's old summary to
+#   3. With the stack up (`make up`), re-run every pair, one invocation each (15 in all),
+#      through the driver itself, for example
+#      cd py && uv run python -m tenant_baselines.eval_official --only-seed 4101 \
+#        --only-amplitude 6 --rerun-reason 'bug: <what>'
+#      Not through `make eval`: its render step refuses summaries of two commits, so it would
+#      fail after each of the first 14 re-runs although the run was recorded. Each re-run writes
+#      a run-log line before it runs and moves the pair's old summary to
 #      docs/results/superseded/ once it finishes.
 #   4. `make results` renders docs/results.md. It refuses summaries of two commits, so every
 #      pair must have been re-run.

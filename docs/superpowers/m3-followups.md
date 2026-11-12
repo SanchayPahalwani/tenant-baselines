@@ -63,3 +63,11 @@ From the milestone 4 final review:
 - **Repo-wide rule test.** Check the banned words and the "synthetic" label over the whole tracked tree, not only the rendered `results.md`.
 - **Pages per regional outage.** Spec 4.7 asks for them. The outage table shows whether a regional alert formed; the page count is only pooled (seasonal: 3.00 per detected outage).
 - **Test-only leftovers.** `WatermarksTest` pins only the timestamp assigners. `PopulationBaselinesTest` has a 60 s timeout. The rows-order test is O(rows × keys). `checked()` guards continuity per key only.
+- **Eval driver and report, small gaps found after the fix wave.**
+  - After a bug re-run, the "measured code equals the freeze" line still compares HEAD with the freeze commit, and any `bug:` entry accepts a "no". A later change to measured code would go unflagged.
+  - After a bug fix, a failed re-run can only be repeated under `bug:`, not `infrastructure:`, because of the freeze diff and the anchor.
+  - With a selection that matches no planned pair, the driver prints "all 0 official runs are finished".
+  - A dev render prints the official runs' machine-facts source line, which is wrong for dev runs.
+  - `make eval` still starts the stack (`eval: up`), so "it now only renders" needs Docker.
+  - `eval_report.py` still defines its own `REPO`; import it from `freeze`.
+  - The test resource `thresholds-eval-dev-s7-a6.json` cannot carry a "synthetic" label: the format has no field for one. Its test says so instead.

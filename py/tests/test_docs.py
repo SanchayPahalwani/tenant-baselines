@@ -1,12 +1,16 @@
 """The README's eval figures come from the committed records, through the report script.
 
-Synthetic data only. Every number in the README's Eval section is rebuilt here from the
-summaries, the registry, the freeze file, `machine.json` and `check-paths.json` (spec 2: no
+Synthetic data only. The README's measured figures (the headline table, the sweep and
+false-page figures, the wall time, the machine and the check-paths commit) are rebuilt here from
+the summaries, the registry, the freeze file, `machine.json` and `check-paths.json` (spec 2: no
 number that no script produces), and the README's table is compared with `docs/results.md`.
+The design figures it also states (the seed count, the amplitudes, the replay length) are the
+freeze file's and the spec's, and are not rebuilt here.
 """
 
 import json
 import re
+import subprocess
 
 import pytest
 
@@ -163,3 +167,20 @@ def test_each_fixed_version_is_the_one_the_build_uses(name, version):
     java = re.search(r"\(Java (\d+)\)", version)
     if java:
         assert f"<maven.compiler.release>{java[1]}</maven.compiler.release>" in pinned
+
+
+def test_the_jar_sources_are_unchanged_since_the_freeze_commit_the_readme_names():
+    named = re.search(
+        r"\(`flink-job/pom.xml`, `flink-job/src/main` and `shared/` are unchanged since"
+        r" ([0-9a-f]{7,40})\)",
+        README,
+    )
+    assert named, "the README no longer states which jar sources are unchanged"
+    freeze = json.loads((REPO / "eval" / "freeze.json").read_text())
+    assert freeze["commit"].startswith(named.group(1))
+    diff = subprocess.run(
+        ["git", "diff", "--quiet", named.group(1), "HEAD", "--"]
+        + ["flink-job/pom.xml", "flink-job/src/main", "shared"],
+        cwd=REPO,
+    )
+    assert diff.returncode == 0
