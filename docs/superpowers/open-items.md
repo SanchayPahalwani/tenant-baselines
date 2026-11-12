@@ -50,9 +50,3 @@ Planning material; nothing in it blocked a milestone. Each line is a follow-up t
 - The stale-read path has not been seen live under the current code. Needs a new delay run, or an old pilot's samples kept as a test fixture. (M5 C8.)
 - A warmed-up throughput run (history first, then the dense fill), so the cold-baseline caveat becomes a figure. Needs a new run. (M5 C9.)
 - Two test nits from milestone 5 Task 6: `test_measure_run_fails_when_no_checkpoint_is_in_the_last_share` matches a message both failures contain, and `measure_run` reads `/checkpoints` and `/checkpoints/config` twice each. Reason: test and efficiency nits only; neither changes a result.
-
-## To state in the documents (removed in Task 7)
-
-- Time-to-page is counted from the start of the first breaching minute, so the spec's "at least about 5 minutes" (6) does not hold for an incident that breaches in its start minute. `docs/design.md` section 10 (the plan's disagreement 6); `docs/performance/delay.json` has the measured minimum.
-- Machine facts per run: `docs/results/machine.json` holds the host and Docker VM facts once, for the 15 official runs; the summaries do not record them per run. `docs/design.md` section 9, and one line in the README's notes. `docs/performance.md` carries its own machine facts.
-- `check_paths.py`'s `total` uses the host's monotonic clock, which stops during a host sleep, so after a sleep it can be smaller than one job's time. `docs/design.md` section 9, where `check-paths.json` is cited.

@@ -15,7 +15,7 @@ import subprocess
 
 import pytest
 
-from tenant_baselines import eval_report
+from tenant_baselines import bench_report, eval_report
 from tenant_baselines.freeze import REPO, planned
 
 README = (REPO / "README.md").read_text()
@@ -23,7 +23,7 @@ RESULTS = REPO / "docs" / "results"
 
 
 def eval_section() -> str:
-    return README[README.index("## Eval") : README.index("## Design")]
+    return README[README.index("### Detection eval") : README.index("### Performance")]
 
 
 @pytest.fixture(scope="module")
@@ -195,3 +195,70 @@ def test_the_jar_sources_are_unchanged_since_the_freeze_commit_the_readme_names(
         cwd=REPO,
     )
     assert diff.returncode == 0
+
+
+PERFORMANCE = REPO / "docs" / "performance"
+DESIGN = (REPO / "docs" / "design.md").read_text()
+ALLOWED = {"8", "10", "10.231.0.0/24", "127.0.0.1", "Apache-2.0"}
+FENCE = re.compile(r"```mermaid\n.*?```", re.S)
+LINK = re.compile(r"\[[^\]]*\]\([^)]*\)")
+
+
+def test_the_readme_performance_block_is_the_scripts():
+    begin, end = "<!-- performance:begin -->", "<!-- performance:end -->"
+    block = README[README.index(begin) + len(begin) : README.index(end)].strip()
+    data = [
+        json.loads((PERFORMANCE / f"{n}.json").read_text())
+        for n in ("throughput", "delay", "state")
+    ]
+    assert block == bench_report.readme_block(*data).strip()
+
+
+def test_the_readme_diagram_is_the_design_docs():
+    readme, design = FENCE.findall(README), FENCE.findall(DESIGN)
+    assert len(readme) == 1 and len(design) == 1
+    assert readme == design
+
+
+def test_readme_sections_in_order():
+    headings = re.findall(r"^## (.+)$", README, re.M)
+    assert headings == [
+        "Architecture",
+        "Quick start",
+        "Results",
+        "Design",
+        "What this repo does not do",
+    ]
+
+
+def test_no_number_outside_the_results_section_but_the_allowed_ones():
+    outside = README[: README.index("## Results")] + README[README.index("## Design") :]
+    outside = LINK.sub(" ", FENCE.sub(" ", outside))
+    bad = []
+    for line in outside.splitlines():
+        for token in line.split():
+            token = token.strip("`").strip(".,;:()").strip("`")
+            if any(c.isdigit() for c in token) and token not in ALLOWED:
+                bad.append((token, line))
+    assert not bad, bad
+
+
+def test_readme_states_its_limits():
+    for phrase in (
+        "Synthetic data only",
+        "production use",
+        "not evidence about any real",
+        "docs/design.md",
+        "docs/performance.md",
+        "docs/results.md",
+    ):
+        assert phrase in README, phrase
+    assert "Work in progress" not in README
+    assert "milestone 5 of 6" not in README
+
+
+def test_readme_links_resolve():
+    for target in re.findall(r"\]\(([^)#]+)(?:#[^)]*)?\)", README):
+        if "://" in target:
+            continue
+        assert (REPO / target).exists(), target
