@@ -1,7 +1,7 @@
 {
   "uid": "tenant-baselines",
   "title": "Tenant baselines",
-  "description": "Synthetic demo data. One key's signals against their seasonal baseline, and the live alert log.",
+  "description": "Synthetic demo data. One key's signals against their seasonal baseline, the live alert log, Score by key for each region, Notifications the stand-in pager received, and Unit status.",
   "tags": [
     "tenant-baselines"
   ],
@@ -71,6 +71,24 @@
             "selected": true
           }
         ]
+      },
+      {
+        "name": "region",
+        "label": "region",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-clickhouse-datasource",
+          "uid": "clickhouse"
+        },
+        "query": "SELECT DISTINCT region FROM tb.scores WHERE ns = 'live' ORDER BY region",
+        "definition": "SELECT DISTINCT region FROM tb.scores WHERE ns = 'live' ORDER BY region",
+        "refresh": 2,
+        "sort": 0,
+        "multi": true,
+        "includeAll": true,
+        "hide": 2,
+        "current": {},
+        "options": []
       }
     ]
   },
@@ -79,7 +97,7 @@
       "id": 1,
       "type": "timeseries",
       "title": "$key: $signal with baseline band",
-      "description": "The seasonal baseline of the key's hour of the week (or its region's or the global one while the key is cold). The dashed line is the median, for volume the expected 5-minute sum. The band is 4 spreads either side of it, the k4 fire level: error rate and latency fire above it, volume below it.",
+      "description": "Synthetic demo data. The seasonal baseline of the key's hour of the week (or its region's or the global one while the key is cold). The dashed line is the median, for volume the expected 5-minute sum. The band is 4 spreads either side of it, the k4 fire level: error rate and latency fire above it, volume below it. Units: error_rate is a fraction of requests, latency_p95 is milliseconds, volume_5m is requests in 5 minutes.",
       "repeat": "signal",
       "repeatDirection": "v",
       "gridPos": {
@@ -102,7 +120,7 @@
           "editorType": "sql",
           "queryType": "timeseries",
           "format": 0,
-          "rawSql": "SELECT minute AS time, value, median, median + 4 * spread AS upper,\n       greatest(median - 4 * spread, 0) AS lower\nFROM tb.scores FINAL\nWHERE ns = 'live' AND key = '${key}' AND signal = '${signal}'\n  AND minute >= $__fromTime AND minute <= $__toTime\nORDER BY time"
+          "rawSql": "SELECT minute AS time, value, median, median + 4 * spread AS upper,\n       if(isNull(median), NULL, greatest(median - 4 * spread, 0)) AS lower\nFROM tb.scores FINAL\nWHERE ns = 'live' AND key = '${key}' AND signal = '${signal}'\n  AND minute >= $__fromTime AND minute <= $__toTime\nORDER BY time"
         }
       ],
       "fieldConfig": {
@@ -205,6 +223,147 @@
           "queryType": "table",
           "format": 1,
           "rawSql": "SELECT event_time, state, detector, setting, signal, key, value, reference, reason, scope,\n    region, starts_at, emitted_at, alert_id\nFROM tb.alert_log FINAL\nWHERE ns = 'live'\nORDER BY event_time DESC, alert_id, state\nLIMIT 100"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    },
+    {
+      "id": 3,
+      "type": "status-history",
+      "title": "Score by key: $region",
+      "description": "Synthetic demo data. One row per key. Each cell is the highest score of the key's three signals in 5 minutes, against the live seasonal setting: yellow from 2 (the resolve level), red from 4 (the fire level). A regional incident shows as a block; one tenant's as one row.",
+      "repeat": "region",
+      "repeatDirection": "v",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 20
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "queryType": "timeseries",
+          "format": 0,
+          "rawSql": "SELECT toStartOfInterval(minute, INTERVAL 5 minute) AS time, key, max(score) AS score\nFROM tb.scores FINAL\nWHERE ns = 'live' AND region = '${region}' AND minute >= $__fromTime AND minute <= $__toTime\nGROUP BY time, key ORDER BY time, key"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 2
+              },
+              {
+                "color": "red",
+                "value": 4
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showValue": "never",
+        "legend": {
+          "showLegend": true,
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "table",
+      "title": "Notifications (latest 100, from pager-sink)",
+      "description": "Synthetic demo data. What Alertmanager sent to the stand-in pager, one row per alert in each notification. Read from pager-sink's log over HTTP, not from a table.",
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 0,
+        "y": 28
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "queryType": "table",
+          "format": 1,
+          "rawSql": "SELECT parseDateTime64BestEffort(received_at, 3, 'UTC') AS received, * EXCEPT (received_at)\nFROM url('http://pager-sink:8099/notifications', 'JSONEachRow', 'received_at String, receiver String, status String, alertname String, scope String, region String, tenant String, unit String, signal String, detector String, setting String, starts_at String, ends_at String')\nORDER BY received DESC LIMIT 100"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    },
+    {
+      "id": 5,
+      "type": "table",
+      "title": "Unit status (live)",
+      "description": "Synthetic demo data. Published only: nothing acts on a drain. A drained unit keeps the signal and reason it was first drained for until it undrains. Volume alerts never drain a unit, and no unit is drained during a regional alert.",
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 12,
+        "y": 28
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "clickhouse"
+          },
+          "editorType": "sql",
+          "queryType": "table",
+          "format": 1,
+          "rawSql": "SELECT unit, region, argMax(status, at) AS last_status, argMax(signal, at) AS last_signal,\n       argMax(reason, at) AS last_reason, max(at) AS since\nFROM tb.unit_status FINAL\nWHERE ns = 'live'\nGROUP BY unit, region ORDER BY since DESC"
         }
       ],
       "fieldConfig": {

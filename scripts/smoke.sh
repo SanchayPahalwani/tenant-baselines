@@ -3,14 +3,15 @@
 # to start unless the stack is empty (`make reset`). Checks 1-8 are polled every 15 s for up to
 # 30 minutes: the demo script's tenant drop, error burst and regional error spike start 2, 3 and
 # 11 minutes after the generator catches up. Check 5 can be observed only during the scripted
-# spike, from about 17 to 26 minutes after the generator catches up. Checks 9-12 then run once,
-# in order. Check 11 restores the job from its oldest retained checkpoint and checks that this
+# spike, from about 17 to 26 minutes after the generator catches up. Checks 9-13 then run once,
+# in the order 9, 10, 13, 11, 12. Check 13 runs the dashboard checker on Grafana. Check 11
+# restores the job from its oldest retained checkpoint and checks that this
 # restore re-emitted output and that it collapses to one row each. Check 12 stops the generator,
 # restores the job during the total outage and waits for it to raise an alert; it leaves the generator
 # stopped.
 #
 # CHECKS, a space-separated list of check numbers, runs only those, and only they count; unset or
-# empty runs all 12. To rerun checks 11 and 12 on a demo stack that has run check 12:
+# empty runs all 13. To rerun checks 11 and 12 on a demo stack that has run check 12:
 #   1. docker compose --profile demo start generator. Both checks need it running. It replays
 #      its three weeks of history, which the running job drops as
 #      late, and then starts a new demo script.
@@ -26,7 +27,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-ALL_CHECKS="1 2 3 4 5 6 7 8 9 10 11 12"
+ALL_CHECKS="1 2 3 4 5 6 7 8 9 10 11 12 13"
 CHECKS="${CHECKS:-$ALL_CHECKS}"
 POLL_S=15
 LIMIT_S="${LIMIT_S:-1800}"
@@ -42,13 +43,13 @@ for c in $CHECKS; do
   case " $ALL_CHECKS " in
     *" $c "*) selected+="$c " ;;
     *)
-      echo "smoke: CHECKS has '$c'; use check numbers from 1 to 12" >&2
+      echo "smoke: CHECKS has '$c'; use check numbers from 1 to 13" >&2
       exit 2
       ;;
   esac
 done
 if [ "$selected" = " " ]; then
-  echo "smoke: CHECKS has no check numbers; leave it empty to run all 12" >&2
+  echo "smoke: CHECKS has no check numbers; leave it empty to run all 13" >&2
   exit 2
 fi
 
@@ -173,6 +174,7 @@ names=(
   "10 the job dropped no events as late"
   "11 a job restored from its oldest checkpoint re-emits output that collapses to one row each"
   "12 a total outage across a restore closes zero-count minutes and raises a volume_5m alert"
+  "13 Grafana serves the five panels and each returns rows"
 )
 checks=("" check_aggregates check_drop_alert check_regional_alert check_absorbed check_inhibit
   check_pagers check_scores check_unit_status)
@@ -222,6 +224,15 @@ poll_checks() {
   for i in "${polled[@]}"; do
     "${passed[i]}" || fail "${names[i]} (not seen within ${LIMIT_S} s)"
   done
+}
+
+check_dashboard() {
+  local out
+  if out=$(cd py && uv run python -m tenant_baselines.check_dashboard --require-rows 2>&1); then
+    pass "${names[13]} ($out)"
+  else
+    fail "${names[13]} ($out)"
+  fi
 }
 
 check_ingest_errors() {
@@ -338,6 +349,7 @@ if [ "${#polled[@]}" -gt 0 ]; then
 fi
 if wanted 9; then check_ingest_errors; fi
 if wanted 10; then check_late; fi
+if wanted 13; then check_dashboard; fi
 if wanted 11; then check_restore; fi
 if wanted 12; then check_outage; fi
 
