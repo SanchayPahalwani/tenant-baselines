@@ -413,3 +413,20 @@ def test_load_record_raises_on_a_failed_command():
 
     with pytest.raises(RuntimeError, match="boom"):
         bench_env.load_record(run)
+
+
+def test_slept_s_reads_the_awake_clock_first():
+    """With no sleep both clocks advance together: reading the sleep-counting clock first
+    would make the result slightly negative (seen in the Linux CI container)."""
+    import itertools
+
+    ids = {
+        "CLOCK_MONOTONIC": 1,
+        "CLOCK_UPTIME_RAW": 2,
+        "CLOCK_BOOTTIME": 3,
+        "CLOCK_MONOTONIC_RAW": 4,
+    }
+    for platform in ("darwin", "linux"):
+        ticks = itertools.count(1000.0, 1e-6)  # every read is 1 µs later, and no sleep at all
+        fake = SimpleNamespace(**ids, clock_gettime=lambda _c, t=ticks: next(t))
+        assert bench_env.slept_s(fake, platform) >= 0, platform

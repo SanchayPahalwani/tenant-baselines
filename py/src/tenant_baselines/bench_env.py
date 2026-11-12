@@ -216,15 +216,20 @@ def slept_s(time_=time, platform: str = sys.platform) -> float:
     so the difference is the sleep alone (CLOCK_MONOTONIC is frequency-adjusted, so it would add
     the clock's slew; it is the fallback when the raw clock is missing). Linux: CLOCK_BOOTTIME
     counts sleep and CLOCK_MONOTONIC does not. Elsewhere: the wall clock minus the monotonic clock.
+
+    The clock that does not count sleep is read first, so the time between the two reads adds
+    to the result instead of taking from it: with no sleep the result is a few nanoseconds above
+    zero, never below.
     """
     if hasattr(time_, "CLOCK_UPTIME_RAW") and platform == "darwin":
         counting = getattr(time_, "CLOCK_MONOTONIC_RAW", time_.CLOCK_MONOTONIC)
-        return time_.clock_gettime(counting) - time_.clock_gettime(time_.CLOCK_UPTIME_RAW)
+        awake = time_.clock_gettime(time_.CLOCK_UPTIME_RAW)  # read first: see below
+        return time_.clock_gettime(counting) - awake
     if hasattr(time_, "CLOCK_BOOTTIME") and platform.startswith("linux"):
-        return time_.clock_gettime(time_.CLOCK_BOOTTIME) - time_.clock_gettime(
-            time_.CLOCK_MONOTONIC
-        )
-    return time_.time() - time_.monotonic()
+        awake = time_.clock_gettime(time_.CLOCK_MONOTONIC)
+        return time_.clock_gettime(time_.CLOCK_BOOTTIME) - awake
+    awake = time_.monotonic()
+    return time_.time() - awake
 
 
 def host_sleep_s(slept: list[float]) -> float:
