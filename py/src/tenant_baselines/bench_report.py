@@ -37,9 +37,18 @@ def _runs_of(name: str, doc: dict) -> list[tuple[str, dict]]:
     return [(r.get("run_id", r.get("backend", "a run")), r) for r in doc.get("runs", [])]
 
 
+def _battery(power_line: str | None) -> bool:
+    """A `pmset -g ps` reading that is not AC; one that was not read (None or empty) is not."""
+    return bool(power_line) and "AC Power" not in power_line
+
+
 def _contradictions(name: str, doc: dict) -> list[str]:
     out = []
+    if name == "state" and _battery(doc.get("power_end")):
+        out.append(f"on battery at the end ({doc['power_end']})")
     for label, r in _runs_of(name, doc):
+        if _battery(r.get("power_end")):
+            out.append(f"{label}: on battery at its end ({r['power_end']})")
         if r.get("host_sleep_s", 0) > _SLEEP_LIMIT_S:
             out.append(f"{label}: the host slept {r['host_sleep_s']} s")
         if r.get("stall_gaps_s"):

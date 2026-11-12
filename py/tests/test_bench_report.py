@@ -378,6 +378,38 @@ def test_report_refuses_results_that_contradict_their_validity():
         render(d=d)
 
 
+BATTERY = "Now drawing from 'Battery Power'"
+
+
+@pytest.mark.parametrize(
+    ("which", "edit", "reason"),
+    [
+        ("throughput", lambda d: d["runs"][1].update(power_end=BATTERY), "tp-x-r2: on battery"),
+        ("delay", lambda d: d.update(power_end=BATTERY), "the run: on battery"),
+        ("state", lambda d: d.update(power_end=BATTERY), "on battery at the end"),
+        (
+            "delay",
+            lambda d: d["clock_offset"]["after"].update(offset_s=1.5),
+            "the VM clock offset moved by more than 1 s",
+        ),
+    ],
+)
+def test_report_refuses_results_that_contradict_their_valid(which, edit, reason):
+    docs = {"throughput": throughput(), "delay": delay(), "state": state()}
+    edit(docs[which])
+    with pytest.raises(br.ReportRefused) as e:
+        br.render(docs["throughput"], docs["delay"], docs["state"])
+    assert f"{which}.json: marked valid, but its fields say otherwise" in str(e.value)
+    assert reason in str(e.value)
+
+
+def test_a_power_end_that_was_not_read_is_not_a_contradiction():
+    t, d = throughput(), delay()
+    t["runs"][0]["power_end"] = None
+    d["power_end"] = ""
+    assert "## Delay" in render(t=t, d=d)
+
+
 def test_columns_split_when_environments_differ():
     one = render()
     assert "abc1234" in one
