@@ -10,7 +10,7 @@ CI_PY_IMAGE = tenant-baselines-ci-py
 .NOTPARALLEL:
 
 .PHONY: jar test-java test-py lint-py thresholds-demo check-am test ci up down reset submit demo smoke logs \
-	eval-dev check-paths results eval bench-throughput bench-delay
+	eval-dev check-paths results eval bench-throughput bench-delay bench-state
 
 # The dev seed and amplitude of `make eval-dev`.
 SEED ?= 7
@@ -135,3 +135,8 @@ bench-delay: jar up
 	docker compose --profile demo build generator
 	cd py && $(AWAKE) uv run python -m tenant_baselines.bench_delay_run \
 		--incidents $(BENCH_INCIDENTS) $(BENCH_ARGS)
+
+# The state-size measurement (synthetic data): a dev seed's five weeks through the job twice,
+# checkpointing every 5 s, on the hashmap and the RocksDB backend. About 6 minutes.
+bench-state: jar up
+	cd py && $(AWAKE) uv run python -m tenant_baselines.bench_state $(BENCH_ARGS)
