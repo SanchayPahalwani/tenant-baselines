@@ -58,6 +58,12 @@ def _fresh(samples: list[dict]) -> list[int]:
     return [i for i, s in enumerate(samples) if not s.get("stale")]
 
 
+def _endpoint_ok(samples: list[dict], i: int) -> bool:
+    """A window endpoint is fresh and does not directly follow a stale sample, which can carry an
+    older cache generation inside the freshness tolerance."""
+    return not samples[i].get("stale") and not (i > 0 and samples[i - 1].get("stale"))
+
+
 def window(
     samples: list[dict], total: int, warmup_s: float = WARMUP_S, end_share: float = END_SHARE
 ) -> tuple[int, int]:
@@ -78,8 +84,9 @@ def window(
     if active is None:
         raise WindowTooShort("the source never emitted; raise BENCH_MINUTES or check the job")
     t0 = samples[active]["t"] + warmup_s
-    first = next((i for i in fresh if samples[i]["t"] >= t0), None)
-    last = max((i for i in fresh if samples[i]["count"] < end_share * total), default=None)
+    ends = [i for i in fresh if _endpoint_ok(samples, i)]
+    first = next((i for i in ends if samples[i]["t"] >= t0), None)
+    last = max((i for i in ends if samples[i]["count"] < end_share * total), default=None)
     if first is None or last is None or last <= first:
         raise WindowTooShort(
             "no sample lies between the warm-up and the last tenth of the fill; raise BENCH_MINUTES"
@@ -255,31 +262,41 @@ def _poll_source(
     samples: list[dict],
     total: int,
     deadline: float,
-    sample_fn: Callable = bench_flink.sample,
-    monotonic: Callable = time.monotonic,
-    sleep: Callable = time.sleep,
+    sample_fn: Callable | None = None,
+    monotonic: Callable | None = None,
+    sleep: Callable | None = None,
 ) -> tuple[str, str]:
     """Take a sample every SAMPLE_INTERVAL_S until the count reaches `total`.
 
     Returns `("", "")` when it did, else `(kind, reason)`: "restarted" (the count fell),
     "vanished" (the metrics went) or "deadline". Each sample is compared with the last fresh one.
+    A restart is a count or clock below that sample's on two samples in a row.
     """
+    sample_fn = sample_fn or bench_flink.sample
+    monotonic = monotonic or time.monotonic
+    sleep = sleep or time.sleep
     due = monotonic()
+    regressed_in_a_row = 0
     while True:
         burst_start = monotonic()
         fresh = [x for x in samples if not x["stale"]]
+        last_fresh = fresh[-1] if fresh else None
         try:
-            s = sample_fn(
-                job_id, src["id"], src["parallelism"], previous=fresh[-1] if fresh else None
-            )
+            s = sample_fn(job_id, src["id"], src["parallelism"], previous=last_fresh)
         except KeyError as e:
             if samples:
                 return "vanished", f"the source's metrics vanished: {e}"
             s = None  # tasks not up yet
         if s is not None:
-            dropped = bool(fresh) and not s["stale"] and s["count"] < fresh[-1]["count"]
             samples.append(s)
-            if dropped:
+            # A restart resets the count and the accumulated times together, and every later
+            # sample is then "stale" against the last fresh one; so a restart is a count or a
+            # clock below the last fresh sample's, stale or not, twice in a row.
+            regressed = last_fresh is not None and (
+                s["count"] < last_fresh["count"] or s["clock_ms"] < last_fresh["clock_ms"]
+            )
+            regressed_in_a_row = regressed_in_a_row + 1 if regressed else 0
+            if regressed_in_a_row >= 2:
                 return "restarted", f"the source count fell to {s['count']}: the job restarted"
             if s["count"] >= total:
                 return "", ""
@@ -304,6 +321,7 @@ def _one_run(n: int, fill_id: str, total: int, args, run_dir: Path) -> dict:
     run_id = f"{fill_id}-r{n}"
     topic = f"{fill_id}.events"
     alerts_from = kafka_io.end_offsets(ALERTS_TOPIC)
+    load_start = bench_env.load_record()
     job_id = bench_flink.submit(run_id, topic)
     samples: list[dict] = []
     timeout_s = max(MIN_RUN_TIMEOUT_S, total / MIN_EVENTS_PER_S)
@@ -317,6 +335,7 @@ def _one_run(n: int, fill_id: str, total: int, args, run_dir: Path) -> dict:
         kind, stop = _poll_source(job_id, src, samples, total, time.monotonic() + timeout_s)
         if kind == "deadline":
             raise RunFailed(f"{run_id}: {stop}")
+        load_end = bench_env.load_record()
         if kind:
             restarts = bench_flink.restarts(job_id)
             if kind == "restarted" and restarts == 0:
@@ -329,13 +348,17 @@ def _one_run(n: int, fill_id: str, total: int, args, run_dir: Path) -> dict:
                 "aborted": stop,
                 "restarts": restarts,
                 "late_events": None,  # not read: the job did not finish
+                "load_start": load_start,
+                "load_end": load_end,
                 "stale_samples": sum(x["stale"] for x in samples),
                 "host_sleep_gaps_s": _gaps(samples),
             }
         check_final_count(samples[-1]["count"], total)
         time.sleep(METRIC_CACHE_WAIT_S)
-        last_fresh = [x for x in samples if not x["stale"]][-1]
-        fresh_after = (src["id"], src["parallelism"], last_fresh["clock_ms"])
+        fresh = [x for x in samples if not x["stale"]]
+        if not fresh:
+            raise RunFailed(f"{run_id}: no sample was fresh; cannot check the late events")
+        fresh_after = (src["id"], src["parallelism"], fresh[-1])
         late = bench_flink.late_events(job_id, fresh_after=fresh_after)
         restarts = bench_flink.restarts(job_id)
         history = bench_flink.checkpoint_history(job_id)
@@ -368,6 +391,8 @@ def _one_run(n: int, fill_id: str, total: int, args, run_dir: Path) -> dict:
         "alert_rows": alert_counts(rows),
         "late_events": late,
         "restarts": restarts,
+        "load_start": load_start,
+        "load_end": load_end,
     }
 
 
@@ -402,15 +427,19 @@ def _summarise(run_id: str, job_id: str, total: int, samples: list[dict], pilot:
             raise
         out["window_error"] = str(e)
         fresh = _fresh(samples)
-        rate, first, last = {}, fresh[0], fresh[-1]
-    shares = window_shares(rebased, first, last)
+        rate = {}
+        first, last = (fresh[0], fresh[-1]) if fresh else (0, 0)
     out |= rate
     if last > first:
+        shares = window_shares(rebased, first, last)
         out["events_per_s_source_clock"] = _source_clock_rate(samples[first], samples[last])
-    out["source"] = _share_of(shares, "Source: events")
-    out["drop_ticks_busy"] = _share_of(shares, "drop-ticks")["busy"]
+    else:  # fewer than two fresh samples: there is no window to take shares over
+        shares = {}
+        out["window_error"] = out.get("window_error", "") + "; fewer than two fresh samples"
+    out["source"] = _share_of(shares, "Source: events") if shares else None
+    out["drop_ticks_busy"] = _share_of(shares, "drop-ticks")["busy"] if shares else None
     out["shares"] = shares
-    out["busiest_vertex"] = max(shares, key=lambda n: shares[n]["busy"])
+    out["busiest_vertex"] = max(shares, key=lambda n: shares[n]["busy"]) if shares else None
     out["host_sleep_gaps_s"] = _gaps(samples)
     return out
 
@@ -446,7 +475,7 @@ def main(argv: list[str] | None = None) -> None:
             break
         print(
             f"bench: run {n}: {r.get('events_per_s', 'no window')} events/s, source idle"
-            f" {r['source']['idle']}, busiest {r['busiest_vertex']}, stale samples"
+            f" {(r['source'] or {}).get('idle')}, busiest {r['busiest_vertex']}, stale samples"
             f" {r['stale_samples']}, min interval rate {r.get('min_interval_rate')}"
         )
     extra = [f"run {r['run_id']}: {r['window_error']}" for r in runs if "window_error" in r]

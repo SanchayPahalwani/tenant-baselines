@@ -317,3 +317,38 @@ def test_write_result_skips_the_docs_file_for_a_pilot(tmp_path, monkeypatch):
 def test_write_result_refuses_nan(tmp_path):
     with pytest.raises(ValueError):
         bench_env.write_result("x", {"a": float("nan")}, tmp_path, pilot=True)
+
+
+def fake_run(outputs: dict):
+    def run(cmd):
+        key = " ".join(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout=outputs[key], stderr="")
+
+    return run
+
+
+def test_load_record_splits_this_projects_cpu_from_the_others():
+    ours, other1, other2 = "a" * 64, "b" * 64, "c" * 64
+    run = fake_run(
+        {
+            "sysctl -n vm.loadavg": "{ 3.52 2.10 1.90 }\n",
+            "docker compose ps -q": f"{ours}\n",
+            "docker stats --no-stream --no-trunc --format {{.ID}} {{.CPUPerc}}": (
+                f"{ours} 150.50%\n{other1} 20.25%\n{other2[:12]} 0.25%\n"
+            ),
+        }
+    )
+    got = bench_env.load_record(run)
+    assert got == {
+        "host_load_1m": 3.52,
+        "project_containers_cpu_pct": 150.5,
+        "other_containers_cpu_pct": 20.5,
+    }
+
+
+def test_load_record_raises_on_a_failed_command():
+    def run(cmd):
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        bench_env.load_record(run)

@@ -106,11 +106,18 @@ def test_stale_samples_are_never_endpoints_and_do_not_change_the_rate():
         s[k] = {**s[k - 1], "t": s[k]["t"], "stale": True}
     first, last = bt.window(s, 30_000_000)
     assert not s[first]["stale"] and not s[last]["stale"]
-    assert (first, last) == (7, 25)
+    assert (first, last) == (8, 25)  # 7 follows the stale 6, so it is not an endpoint either
     got = bt.sustained_rate(s, 30_000_000)
     assert got["events_per_s"] == rate["events_per_s"] == pytest.approx(83_333.3, abs=0.1)
     assert got["min_interval_rate"] > 0
-    assert got["intervals"] == 18 - 1 - 0  # 7..25 are 19 samples, one stale in the middle
+    assert got["intervals"] == 16  # samples 8 to 25 are 18, one of them stale: 17 fresh
+
+
+def test_a_sample_right_after_a_stale_one_is_never_an_endpoint():
+    s = fresh_ramp()
+    s[25] = {**s[24], "t": s[25]["t"], "stale": True}
+    first, last = bt.window(s, 30_000_000)
+    assert (first, last) == (6, 24)  # 26 follows the stale 25; the last endpoint is 24, not 26
 
 
 def test_next_due_catches_up_without_a_burst():
@@ -161,6 +168,18 @@ def test_summarise_pilot_fallback_walks_both_ends_to_fresh_samples():
         bt._summarise("r1", "j1", 1_000_000_000, s, pilot=False)
 
 
+def test_summarise_pilot_with_one_fresh_sample_or_none_does_not_divide_by_zero():
+    one = [sampled(k, k * 1000, stale=k != 3) for k in range(6)]
+    out = bt._summarise("r1", "j1", 1_000_000_000, one, pilot=True)
+    assert "window_error" in out and out["shares"] == {} and out["source"] is None
+    assert "events_per_s_source_clock" not in out
+    none = [sampled(k, k * 1000, stale=True) for k in range(6)]
+    out = bt._summarise("r1", "j1", 1_000_000_000, none, pilot=True)
+    assert "window_error" in out and out["busiest_vertex"] is None
+    with pytest.raises(bt.WindowTooShort):
+        bt._summarise("r1", "j1", 1_000_000_000, none, pilot=False)
+
+
 def test_validity_skips_a_late_events_that_was_not_read():
     assert bench_env.validity(0, None, [], []) == (True, [])
 
@@ -197,15 +216,28 @@ def test_poll_stops_at_the_total_and_compares_with_the_last_fresh_sample():
     assert seen == [None, a, a]  # the stale sample b is not the baseline
 
 
-def test_poll_stops_when_the_count_falls():
-    a, b = sampled(0, 2_000_000), sampled(1, 100)
-    kind, samples, _ = poll([a, b])
-    assert kind[0] == "restarted" and samples == [a, b]
+def after_restart(k):
+    """What the real `sample` gives once the job has restarted: the count and the accumulated
+    times start again, so the clock is below the last fresh sample's and the sample is stale."""
+    return {**sampled(k, 100 * k), "stale": True, "clock_ms": 500.0 * k}
 
 
-def test_a_stale_sample_with_a_lower_count_is_not_a_restart():
-    a, b, c = sampled(0, 2_000_000), sampled(1, 1_999_000, stale=True), sampled(2, 3_000_000)
+def test_poll_detects_a_restart_whose_samples_are_all_stale():
+    a, b, c = sampled(5, 2_000_000), after_restart(1), after_restart(2)
+    kind, samples, _ = poll([a, b, c])
+    assert kind[0] == "restarted" and samples == [a, b, c]
+
+
+def test_one_regressed_sample_is_not_yet_a_restart():
+    a, b, c = sampled(5, 2_000_000), after_restart(1), sampled(6, 3_000_000)
     assert poll([a, b, c])[0] == ("", "")
+
+
+def test_a_clock_reset_alone_counts_as_a_regression():
+    a = sampled(5, 2_000_000)
+    b = {**sampled(6, 2_100_000), "clock_ms": 10.0, "stale": True}
+    c = {**sampled(7, 2_200_000), "clock_ms": 20.0, "stale": True}
+    assert poll([a, b, c])[0][0] == "restarted"
 
 
 def test_poll_keeps_the_samples_when_the_metrics_vanish():
@@ -226,7 +258,7 @@ def test_poll_gives_up_at_the_deadline():
     assert kind[0] == "deadline"
 
 
-def one_run(monkeypatch, tmp_path, poll_result, restarts=0):
+def one_run(monkeypatch, tmp_path, poll_result, restarts=0, script=None):
     calls = []
     monkeypatch.setattr(bt.kafka_io, "end_offsets", lambda topic: {0: 0})
     monkeypatch.setattr(bt.bench_flink, "submit", lambda run_id, topic: "j" * 32)
@@ -242,7 +274,12 @@ def one_run(monkeypatch, tmp_path, poll_result, restarts=0):
         samples += [sampled(0, 1_000_000), sampled(1, 100)]
         return poll_result
 
-    monkeypatch.setattr(bt, "_poll_source", fake_poll)
+    if script is None:
+        monkeypatch.setattr(bt, "_poll_source", fake_poll)
+    else:  # the real loop, fed what the real `sample` would give
+        it = iter(script)
+        monkeypatch.setattr(bt.bench_flink, "sample", lambda *a, **k: next(it))
+        monkeypatch.setattr(bt.time, "sleep", lambda s: None)
     args = SimpleNamespace(pilot=False)
     return bt._one_run(1, "tp-x", 3_000_000, args, tmp_path), calls
 
@@ -253,6 +290,15 @@ def test_a_restarted_run_is_recorded_cancelled_and_keeps_its_samples(monkeypatch
     assert r["run_id"] == "tp-x-r1" and r["stale_samples"] == 0
     assert calls == [("j" * 32, "tp-x-r1")]
     assert len(json.loads((tmp_path / "samples-r1.json").read_text())) == 2
+
+
+def test_a_real_restart_ends_the_run_as_restarted_with_its_samples(monkeypatch, tmp_path):
+    script = [sampled(5, 2_000_000), after_restart(1), after_restart(2)]
+    r, calls = one_run(monkeypatch, tmp_path, None, script=script)
+    assert "restarted" in r["aborted"] and r["restarts"] == 1 and r["late_events"] is None
+    assert calls and len(json.loads((tmp_path / "samples-r1.json").read_text())) == 3
+    ok, reasons = bench_env.validity(r["restarts"], 0, [], [f"run {r['run_id']}: {r['aborted']}"])
+    assert not ok and any("restarted" in x for x in reasons)
 
 
 def test_a_run_whose_metrics_vanish_is_invalid_with_the_reason(monkeypatch, tmp_path):

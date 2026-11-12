@@ -198,28 +198,30 @@ def watermark_lag_s(
 
 def late_events(
     job_id: str,
-    fresh_after: tuple[str, int, float] | None = None,
+    fresh_after: tuple[str, int, dict] | None = None,
     get: Callable = httpx.get,
     sleep: Callable = time.sleep,
+    now: Callable = time.time,
 ) -> int:
     """The job's total `lateEvents`, summed over the late-events operator's subtasks.
 
-    `fresh_after` is `(source vertex id, its parallelism, the clock of the last sample)`. The read
-    counts only when the source's clock, read before and after the late-event counters, is equal
-    and above that clock; it is repeated once, then raises RunFailed. A stale read could only
-    under-count.
+    `fresh_after` is `(source vertex id, its parallelism, the last fresh sample)`. The read counts
+    only when the source's clock, read before and after the late-event counters, is equal and has
+    advanced since that sample as far as the host's time has (the sample test); it is repeated once,
+    then raises RunFailed. A stale read could only under-count.
     """
+    t = now()
     first = _json(get, f"/jobs/{job_id}")["vertices"][0]["id"]
     _refresh(job_id, first, get, sleep)
     for attempt in (0, 1):
         vid, ids = _find_metric(get, job_id, ".late-events.lateEvents")
         if fresh_after is None:
             return int(sum(_values(get, job_id, vid, ids).values()))
-        src, par, previous = fresh_after
+        src, par, last_fresh = fresh_after
         _, before = _count_and_clock(get, job_id, src, par)
         total = int(sum(_values(get, job_id, vid, ids).values()))
         _, after = _count_and_clock(get, job_id, src, par)
-        if before == after and after > previous:
+        if before == after and _advanced(last_fresh, t, after, par):
             return total
         if attempt == 0:
             sleep(STALE_RETRY_WAIT_S)

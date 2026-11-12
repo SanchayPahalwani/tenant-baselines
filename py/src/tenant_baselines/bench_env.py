@@ -27,6 +27,7 @@ __all__ = [
     "PreflightFailed",
     "collect",
     "gaps",
+    "load_record",
     "preflight",
     "read_stamped",
     "validity",
@@ -143,6 +144,33 @@ def collect(on_battery: bool, run: Callable = _sh, get: Callable = httpx.get) ->
             "version": _json(get, "/config")["flink-version"],
             **{k: cfg.get(k) for k in wanted},
         },
+    }
+
+
+def _same_container(a: str, b: str) -> bool:
+    """Ids match on a prefix: `docker stats` may print the short form."""
+    return a.startswith(b) or b.startswith(a)
+
+
+def load_record(run: Callable = _sh) -> dict:
+    """What the machine is doing: the host's 1-minute load, and the CPU% of this project's
+    containers and of all the others on the VM (summed; never named). Not a validity rule."""
+    load = _out(run, ["sysctl", "-n", "vm.loadavg"]).strip("{} \n").split()[0]
+    ours = _out(run, ["docker", "compose", "ps", "-q"]).split()
+    fmt = "{{.ID}} {{.CPUPerc}}"
+    stats = _out(run, ["docker", "stats", "--no-stream", "--no-trunc", "--format", fmt])
+    mine = other = 0.0
+    for line in stats.splitlines():
+        cid, cpu = line.split()
+        pct = float(cpu.rstrip("%"))
+        if any(_same_container(cid, o) for o in ours):
+            mine += pct
+        else:
+            other += pct
+    return {
+        "host_load_1m": float(load),
+        "project_containers_cpu_pct": round(mine, 1),
+        "other_containers_cpu_pct": round(other, 1),
     }
 
 

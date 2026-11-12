@@ -264,6 +264,18 @@ def late_routes(late_bodies, clock_bodies):
     }
 
 
+PREV = {"clock_ms": 100.0, "count": 0, "t": 0.0}  # the last fresh sample
+
+
+def test_late_events_needs_the_clock_to_have_run_as_long_as_the_host_clock():
+    routes = late_routes(late(1), reads(0, 0, busy=50.5))  # 0.25 s per subtask in 40 s: old
+    with pytest.raises(bench_flink.RunFailed, match="stale"):
+        bench_flink.late_events(
+            "j", fresh_after=("s", 2, PREV), get=seq_getter(routes), sleep=lambda s: None,
+            now=lambda: 40.0,
+        )  # fmt: skip
+
+
 def late(value):
     return [{"id": "0.late-events.lateEvents", "value": "3"},
             {"id": "1.late-events.lateEvents", "value": str(value)}]  # fmt: skip
@@ -274,7 +286,7 @@ def test_late_events_rereads_when_the_clock_has_not_moved():
     routes = late_routes(Seq(late(0), late(4)), Seq(stale, stale, fresh, fresh))
     slept = []
     got = bench_flink.late_events(
-        "j", fresh_after=("s", 2, 100.0), get=seq_getter(routes), sleep=slept.append
+        "j", fresh_after=("s", 2, PREV), get=seq_getter(routes), sleep=slept.append, now=lambda: 3.0
     )
     assert got == 7 and len(slept) == 2
 
@@ -284,8 +296,9 @@ def test_late_events_raises_when_the_clock_never_moves():
     routes = late_routes(late(0), stale)
     with pytest.raises(bench_flink.RunFailed, match="stale"):
         bench_flink.late_events(
-            "j", fresh_after=("s", 2, 100.0), get=seq_getter(routes), sleep=lambda s: None
-        )
+            "j", fresh_after=("s", 2, PREV), get=seq_getter(routes), sleep=lambda s: None,
+            now=lambda: 3.0,
+        )  # fmt: skip
 
 
 def test_restarts_and_job_times_and_config():
