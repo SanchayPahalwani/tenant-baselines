@@ -43,7 +43,7 @@ ci:
 	printf 'FROM python:3.12-slim\nCOPY --from=ghcr.io/astral-sh/uv:0.13.0 /uv /uvx /bin/\n' \
 		| docker build -q -t $(CI_PY_IMAGE) - > /dev/null
 	docker run --rm -v "$(CURDIR)":/src:ro -v tb-uv-cache:/root/.cache/uv $(CI_PY_IMAGE) \
-		sh -c '$(CI_COPY) && cd /w/py && uv sync && uv run ruff check . \
+		sh -c '$(CI_COPY) && cd /w/py && uv sync --locked && uv run ruff check . \
 		&& uv run ruff format --check . && uv run pytest -q'
 	scripts/check-am.sh
 

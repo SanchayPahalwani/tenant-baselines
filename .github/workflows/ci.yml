@@ -31,11 +31,14 @@ jobs:
         working-directory: py
     steps:
       - uses: actions/checkout@v7
+        with:
+          # Full history: the tests that compare the tree with the freeze commit skip without it.
+          fetch-depth: 0
       # setup-uv publishes no major-version tag after v7, so this pins its latest release.
       - uses: astral-sh/setup-uv@v10.3.3
         with:
           version: "0.13.0"
-      - run: uv sync
+      - run: uv sync --locked
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run pytest -q

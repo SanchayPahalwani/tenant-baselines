@@ -12,7 +12,7 @@
 # CHECKS, a space-separated list of check numbers, runs only those, and only they count; unset or
 # empty runs all 12. To rerun checks 11 and 12 on a demo stack that has run check 12:
 #   1. docker compose --profile demo start generator. Both checks need it running. It replays
-#      its three weeks of history (about 24.3 million events), which the running job drops as
+#      its three weeks of history, which the running job drops as
 #      late, and then starts a new demo script.
 #   2. Wait until scripts/late-events.sh stops rising, then at least 90 s more, so that the
 #      oldest retained checkpoint comes after the replay.

@@ -14,6 +14,7 @@ cd "$(dirname "$0")/.."
 TOPIC=live.events
 PARTITIONS_TIMEOUT_S=120
 WARMUP_TIMEOUT_S=900
+start=$SECONDS
 POLL_S=5
 # Caught up when the newest closed minute starts at most this long before now. That minute can
 # start up to 60 s + 80 s of watermark lag before now, so 120 passes at quiet hours only by luck.
@@ -48,14 +49,13 @@ if [ "$total" -eq 0 ]; then
   exit 1
 fi
 if [ "$with_data" -gt 0 ]; then
-  echo 'live.events already has data. The demo timeline cannot restart in place: run "make reset" first.'
+  echo 'live.events already has data. The demo timeline cannot restart in place: run "make reset" first.' >&2
   exit 1
 fi
 
 echo "Starting the demo: three weeks of synthetic history, then live traffic." \
-  "Warm-up took 235 s in the measured run (see the README for the machine)."
+  "Warm-up takes a few minutes."
 
-start=$SECONDS
 docker compose --profile demo up -d --build --no-deps generator
 
 # The job must not start before every partition has data. A partition with no event for 60 s
@@ -81,7 +81,7 @@ progress() {
     FROM tb.aggregates WHERE ns = 'live' FORMAT TSV"
 }
 
-deadline=$((SECONDS + WARMUP_TIMEOUT_S))
+deadline=$((start + WARMUP_TIMEOUT_S))
 while :; do
   if row=$(progress); then
     IFS=$'\t' read -r rows behind_s percent newest <<< "$row"
@@ -144,7 +144,4 @@ echo "  undrains the unit and mutes the burst's tenant alert in Alertmanager;"
 echo "  the regional alert usually absorbs the other tenants' alerts in the region; one of them"
 echo "  can page first if fewer than half the active tenants are alerting when its hold ends;"
 echo "  alerts decided during the history appear in the alert log but are never paged."
-echo "Page times measured from each incident's start minute, hold and watermark lag included:"
-echo "  tenant drop 389 s, error burst 390 s, regional spike 327 s."
-echo "  (measured once on an arm64 laptop, 8-CPU Docker VM, Wednesday 2026-11-11, 18:33 UTC, watermark lag"
-echo "  22.5 s median; page times vary with the hour, see the README.)"
+echo "Measured delays, on synthetic data: docs/performance.md."
