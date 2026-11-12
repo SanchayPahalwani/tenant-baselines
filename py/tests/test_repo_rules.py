@@ -11,7 +11,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 
 BANNED = ("spearheaded", "leveraged", "synergy", "cutting-edge", "results-driven", "passionate")
-SYNTHETIC_DOCS = ["README.md", "docs/results.md", "docs/performance.md"]
+SYNTHETIC_DOCS = ["README.md", "docs/results.md", "docs/performance.md", "docs/design.md"]
 ALLOWED_FILES = {
     "py/tests/test_bench_report.py",
     "py/tests/test_eval_report.py",
