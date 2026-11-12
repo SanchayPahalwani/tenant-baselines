@@ -2,38 +2,6 @@
 
 Planning material, like the rest of `docs/superpowers/`. These are review findings from milestone 3 (alert noise control) that were deferred on purpose, grouped by the milestone where each should land. None blocked the merge.
 
-## Milestone 4 (the eval)
-
-1. **Identical alert logs are a plain diff only for one region.**
-   - The grouper is keyed by region and the job runs at parallelism 2, so regions interleave in `<ns>.alerts` in arrival order.
-   - Compare sorted by `(event_time, region, detector, setting, signal, key, state)`.
-   - Leave out `emitted_at`, which is the wall clock.
-2. **Aggregates-mode timestamps.**
-   - `RegionGrouper` buffers candidates by their record timestamp and activity flips by `minuteMs`.
-   - The aggregates source must assign a timestamp inside each aggregate's minute. Otherwise records carry Kafka produce time and candidates land on wall-clock timers, with no error.
-   - Add a test that a candidate's timer equals the minute end.
-3. **Zero-count rows.** The aggregate generator must emit zero-count rows exactly as `MinuteAggregator` does, from a key's first event to expiry or replay end. Otherwise `KeyActivity` keeps a silent key active.
-4. **`Scorer`'s expiry at the final watermark** (milestone 2 code: the early return at `Long.MAX_VALUE`, around `Scorer.java:249`).
-   - An expiry due after the last real watermark but before the replay end is skipped, so an `expired` resolve can appear in one mode's log only.
-   - Fix: expire at the final watermark when the due time is at or before `replayEndMs`.
-5. **The end of a replay.**
-   - Held alerts are released, and a streak in progress resolves, with `event_time` up to a few minutes past the replay end. This is deterministic.
-   - A regional alert at or above 25% stays open with no resolve.
-   - Scoring clips at the replay end and treats open alerts explicitly.
-6. **Timestamps for scoring.**
-   - A tenant `firing` row's `event_time` is the hold end, and `starts_at` is the first breaching minute.
-   - A regional row's `starts_at` is the promotion minute.
-   - Measure delay with `event_time` for both scopes.
-7. **`/` in a detector name** breaks `Group.of` in `RegionGrouper` and the Scorer's id split; a `/` in a setting is fine. Reject it in `ThresholdsFile`, together with the existing `ThresholdsFile` item in `m1-followups.md`.
-8. **Unit status follows a different setting from the pager.** It follows the first `--seasonal-k`, while the forwarder pages `--live-setting` (k4). With `--seasonal-k 3,4,5,6`, drains would follow k3. Align them when the eval runs several seasonal settings.
-9. **`AlertEvent` is now checkpointed state** (the grouper's `pending-alerts`), so changing its fields is a state-compatibility change.
-10. **Cost.** `alertsByGroup()` scans every alert of a region on every timer, and a firing regional alert means a timer every minute. Measure it on a dev seed before the official runs, with 12 settings.
-11. **Tests to add when the code is next touched:**
-    - `PopulationLookupTest`: the week-1 parity-slot case.
-    - `RegionGrouper`: the step-2 sort, a -1 activity flip down to zero, two active keys of one tenant in the denominator, and `KeyActivity`'s out-of-order guard.
-    - These may also be covered by `make check-paths` disagreeing.
-12. **A tenant alert absorbed by two regional alerts** writes two `absorbed` events with one `(alert_id, state)`, and `tb.alert_log` keeps the later one. The scoring must expect that.
-
 ## Milestone 5 (throughput and delay)
 
 - The union of events and ticks adds one local channel hop per event; measure it in the benchmark.
@@ -42,6 +10,11 @@ Planning material, like the rest of `docs/superpowers/`. These are review findin
 - `ticksDoNotOutrunABacklog` would pass without ticks: end of input closes all three minutes. Collect one more minute so only a tick can close it. Smoke check 10 pins the property end to end meanwhile.
 - `watermark-lag.sh` reports a lag over 24 h as "no watermark yet", which is misleading during a history replay.
 - **Clock step-back.** The Docker VM's wall clock stepped back about 100 ms once, and Flink refused a MiniCluster task start (`SubTaskInitializationMetrics`: endTs >= startTs). On Colima it follows host sleep, so `make test-java` can flake after a sleep. In a live job it costs a restart, with a freeze of up to 60 s.
+
+- **Checkpoint size in the eval summaries.** The summaries record it, and §6 reads state size from it. With a hashmap backend it is not the size of a RocksDB state, so §6 needs one run on RocksDB instead.
+- **Busy times from the eval runs** (Task 15): the `scorer` and `region-grouper` busy times belong in the throughput write-up.
+- **Scorer writes.** Check whether the Scorer's unchanged machine-state writes were removed, or are still written every minute (see `m1-followups.md`, milestone 5).
+- **`live.*` topics carry event time.** The `live.*` output topics are stamped with event time, so the broker's 7-day retention deletes backfilled rows within hours of the write (seen on the demo stack: `live.alerts` starting at offset 8). The forwarder's rebuild from the start of `live.alerts` then misses them. Give `live.*` `LogAppendTime` too, or say why not.
 
 ## Milestone 6 (README and design doc)
 
@@ -60,3 +33,11 @@ Planning material, like the rest of `docs/superpowers/`. These are review findin
 - `RegionGrouper.java` is about 670 lines. Unit status is separable; extract it when the file is next touched.
 - No end-to-end run has seen a regional alert resolve (check 12 stops the generator first). Consider a smoke check, without lengthening the run much.
 - `smoke.sh`'s `check_inhibit` prints a Python traceback on every poll while Alertmanager is down.
+- **Cold-bucket resolve of a seasonal volume alert, as documented behaviour.** A firing seasonal volume alert resolves on entering a cold bucket, because `ZeroTraffic` turns UNSCORED into CALM when a trailing expectation exists. It re-fires in the next warm bucket. It needs a key with warm and cold volume buckets at once. The eval worlds never have one: a key is cold in every bucket for two weeks and warm in every bucket after. Say so in the design doc.
+- **For `docs/design.md`, from milestone 4:**
+  - the eval world's composition (48 keys, not "about 60", and why);
+  - the placement builder's calls (scenario spacing, the eligibility rules, the thresholds mask);
+  - the scoring builder's calls (what counts as a page, a match and a false page);
+  - the owner's decisions of the plan (expected-signal recall as the selection and headline measure, the mask amendment, the seed protocol).
+- **Open items from `m1-followups.md`:** tests for non-JSON webhook bodies, and the script items (the default submit misses jobs in CREATED or INITIALIZING; `make ci` and `ci.yml` are kept in sync by hand; the Flink CLI prints `Unknown module: jdk.compiler` from the image).
+- **`check-paths.json` timing.** Its `total` uses the host's monotonic clock, which stops during a host sleep, while the job seconds come from Flink's wall clock. After a sleep, `total` can be smaller than one job's time.

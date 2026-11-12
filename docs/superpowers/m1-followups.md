@@ -2,13 +2,6 @@
 
 Planning material, like the rest of `docs/superpowers/`. These are review findings from milestone 1 that were deferred on purpose, each with the milestone where it should land. None blocked the merge.
 
-## Before milestone 4 runs a second job on the cluster
-
-- `scripts/submit-job.sh` restores from the newest checkpoint of *any* job. Scope checkpoint directories per namespace (for example `-Dexecution.checkpointing.dir=file:///flink-data/checkpoints/<ns>`).
-- `ThresholdsFile`: reject unknown signal names and missing fields with a message that names the set, check fire vs resolve order per direction, and reject duplicate active detector/setting pairs. Close a firing alert when its set's `valid_to` passes. Also reject a `/` in a detector name (see `m3-followups.md`, milestone 4).
-- `EventJson`: reject a tenant, region or unit containing `|`, so keys stay unambiguous for per-key threshold maps.
-- `LatencyHistogram`: choose a policy for `p95` when counts sum below `n`, and for NaN or negative latencies. The Python aggregator in the milestone 4 equivalence check must match it.
-
 ## Milestone 5
 
 - Measure pipeline delay from `min(emitted_at)` on the non-`FINAL` alert log. Re-emitted alerts carry a later `emitted_at`, and `FINAL` keeps the later row.
@@ -27,18 +20,3 @@ Planning material, like the rest of `docs/superpowers/`. These are review findin
 - `uv sync` in CI and `make ci` should use `--locked`.
 - The shaded jar keeps merged NOTICE files but drops bundled dependencies' own LICENSE files (zstd-jni is BSD). Add a third-party notice file before the jar is ever published.
 - The forwarder posts all due alerts in one request, so one rejected entry blocks the batch. Post per alert, or log the response body.
-
-## When the code is next touched
-
-- **Tests:**
-  - late events not re-aggregated after a later watermark;
-  - `@Timeout` in separate-thread mode;
-  - dimension fields on emitted minutes;
-  - an on-time out-of-order event;
-  - `Watermarks.replay()` and `live()` factories;
-  - per-key overrides and validity windows;
-  - non-JSON webhook bodies.
-- **Scripts:**
-  - the default submit misses jobs in CREATED or INITIALIZING;
-  - `make ci` and `ci.yml` are kept in sync by hand;
-  - the Flink CLI prints `Unknown module: jdk.compiler` from the image.

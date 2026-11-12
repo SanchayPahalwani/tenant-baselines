@@ -2,7 +2,7 @@
 
 A small reference pipeline for anomaly alerting on multi-tenant service traffic, sized to run on one laptop. Request events go through Kafka into a Flink job, which builds per-minute aggregates for each tenant, region and unit, checks them against thresholds and writes alerts back to Kafka. ClickHouse and Grafana show the aggregates and the alert log, and Prometheus Alertmanager routes the alerts. The question the project is built to test is whether a baseline per key and hour of the week catches more incidents and pages less than fixed thresholds when traffic follows working hours.
 
-Work in progress: milestone 3 of 6. A seasonal detector scores each key's minute against the median and spread of the same hour of the week over the key's last four weeks, falling back to the region's and then the global baseline for error rate and latency while a key is new; it pages through Alertmanager, and the static thresholds run beside it. Every tenant alert is held for 2 minutes. If at least half of a region's active tenants (at least three) alert on the same signal when the hold ends, one regional alert forms and usually absorbs the other tenants' alerts; a tenant alert sent before it formed has already paged, and in the measured run below the burst's tenant page (18:44 UTC) went out before the regional alert (18:51 UTC). Unit status is only published to `tb.unit_status`; nothing acts on it. Drains cover error rate and latency, never volume: a dedicated unit drains on one tenant's sent alert, a shared unit when two tenants alert on the same signal, and no unit is drained during a regional alert. There are no eval results yet.
+Work in progress: milestone 4 of 6. A seasonal detector scores each key's minute against the median and spread of the same hour of the week over the key's last four weeks, falling back to the region's and then the global baseline for error rate and latency while a key is new; it pages through Alertmanager, and the static thresholds run beside it. Every tenant alert is held for 2 minutes. If at least half of a region's active tenants (at least three) alert on the same signal when the hold ends, one regional alert forms and usually absorbs the other tenants' alerts; a tenant alert sent before it formed has already paged, and in the measured run below the burst's tenant page (18:44 UTC) went out before the regional alert (18:51 UTC). Unit status is only published to `tb.unit_status`; nothing acts on it. Drains cover error rate and latency, never volume: a dedicated unit drains on one tenant's sent alert, a shared unit when two tenants alert on the same signal, and no unit is drained during a regional alert. Milestone 4 adds the detection eval, described under Eval below.
 
 **Synthetic data only.** Every event comes from the generator in `py/`; none of it describes a real system.
 
@@ -30,8 +30,28 @@ Keep the machine awake during the demo: a sleep freezes the Docker VM, the job s
 
 The ClickHouse user `tb` with password `tb-local` is a local demo credential, not a secret.
 
+## Eval
+
+The eval compares three detectors on labelled, synthetic replays: the seasonal baseline, a static threshold per key, and one global static threshold per signal. Each has four settings, and each seed picks its own setting on week 4 of a five-week replay. The result below is that setting on week 5. Five seeds run at three day/night amplitudes (1.5:1, 6:1 and 12:1). Recall counts a scenario when a page lands on the signal the scenario moves. The scenario table was fixed before any run.
+
+**What the result shows.** All traffic is synthetic, and it follows working hours because the generator says so. The eval tests whether this implementation delivers the benefit when that assumption holds, and how the benefit changes as seasonality weakens. It is not evidence about any real fleet, and it makes no claim of production use.
+
+At the main amplitude (6:1), pooled over the 5 seeds (copied from [docs/results.md](docs/results.md)):
+
+| Family | Expected-signal recall, pooled k/n (interval) | False pages per day, pooled |
+|---|---|---|
+| seasonal | 45/50 (0.79–0.96) | 9.63 |
+| per key static | 38/50 (0.63–0.86) | 21.20 |
+| global static | 31/50 (0.48–0.74) | 12.69 |
+
+At 6:1 the seasonal detector found more scenarios than either static detector and paged less than both. The recall intervals of seasonal and per key static overlap, so with 5 seeds that recall gap is not settled. At 1.5:1 the seasonal detector found every scenario (50/50), but the global static detector paged less (12.46 against 13.63 false pages per day, pooled). The full tables, the sweep, every setting and the per-scenario results are in [docs/results.md](docs/results.md).
+
+`make eval` runs the 15 official runs (5 seeds at 3 amplitudes) and renders `docs/results.md`. It took 40.5 minutes on this machine (an Apple M3 Pro laptop), from the first run's start to the last run's end in `docs/results/official-runs.jsonl`. `make check-paths` sends one synthetic world through the job as events and as pre-built minute aggregates. At the freeze commit both alert logs and both sets of aggregates were identical ([docs/results/check-paths.json](docs/results/check-paths.json)). It checks that the two paths agree, not that the detectors are right.
+
+The plan for this milestone is [docs/superpowers/plans/2026-11-12-m4-eval.md](docs/superpowers/plans/2026-11-12-m4-eval.md).
+
 ## Design
 
-The design and its reasons are in [docs/superpowers/specs/2026-11-09-tenant-baselines-design.md](docs/superpowers/specs/2026-11-09-tenant-baselines-design.md), the milestone 1 plan is in [docs/superpowers/plans/2026-11-09-m1-static-end-to-end.md](docs/superpowers/plans/2026-11-09-m1-static-end-to-end.md), the milestone 2 plan is in [docs/superpowers/plans/2026-11-10-m2-seasonal-baselines.md](docs/superpowers/plans/2026-11-10-m2-seasonal-baselines.md), and the milestone 3 plan is in [docs/superpowers/plans/2026-11-11-m3-alert-noise-control.md](docs/superpowers/plans/2026-11-11-m3-alert-noise-control.md).
+The design and its reasons are in [docs/superpowers/specs/2026-11-09-tenant-baselines-design.md](docs/superpowers/specs/2026-11-09-tenant-baselines-design.md), the milestone 1 plan is in [docs/superpowers/plans/2026-11-09-m1-static-end-to-end.md](docs/superpowers/plans/2026-11-09-m1-static-end-to-end.md), the milestone 2 plan is in [docs/superpowers/plans/2026-11-10-m2-seasonal-baselines.md](docs/superpowers/plans/2026-11-10-m2-seasonal-baselines.md), the milestone 3 plan is in [docs/superpowers/plans/2026-11-11-m3-alert-noise-control.md](docs/superpowers/plans/2026-11-11-m3-alert-noise-control.md), and the milestone 4 plan is in [docs/superpowers/plans/2026-11-12-m4-eval.md](docs/superpowers/plans/2026-11-12-m4-eval.md).
 
 Licensed under Apache-2.0.
