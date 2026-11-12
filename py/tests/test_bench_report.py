@@ -1051,6 +1051,16 @@ def test_extrapolation_table_is_inside_the_render():
     assert out.index("## Extrapolation, not measured") < out.index(table)
 
 
+def test_the_time_to_page_sentence_names_the_headline_setting():
+    # The count under five minutes is the headline setting's; the other settings have their own.
+    out = br._delay(delay())
+    assert (
+        "For the headline setting, seasonal/k4, the measured minimum is 263.4 s, and 31 of 57"
+        " matched incidents were paged in under five minutes from their start." in out
+    )
+    assert "The measured minimum is" not in out
+
+
 def test_the_delay_section_does_not_point_at_the_readme():
     out = br._delay(delay())
     assert "README" not in out

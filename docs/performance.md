@@ -124,7 +124,7 @@ Pipeline delay is the time from a row's event time, which for a tenant alert is 
 
 The delay world's keys have no per-key entry in `thresholds-demo.json`, so `per_key_static` falls back to the global level and its row equals `global_static`'s.
 
-How time-to-page is built (configured, not measured): the detector fires after 3 scored minutes in a row, and the alert is then held for 120 s. Both are counted from the start of the first breaching minute, not from the incident's start. A spike of this size is expected to breach in the minute it starts in, so the count often starts up to a minute before the incident. The measured minimum is 269.4 s, and 35 of 60 matched incidents were paged in under five minutes from their start.
+How time-to-page is built (configured, not measured): the detector fires after 3 scored minutes in a row, and the alert is then held for 120 s. Both are counted from the start of the first breaching minute, not from the incident's start. A spike of this size is expected to breach in the minute it starts in, so the count often starts up to a minute before the incident. For the headline setting, seasonal/k4, the measured minimum is 269.4 s, and 35 of 60 matched incidents were paged in under five minutes from their start.
 
 The watermark lag, measured during the run and corrected by the VM clock's offset (before 0.068 s, after 0.096 s): minimum 21.3 s, median 21.8 s, maximum 23.1 s over 68 samples. By design (configured, not measured), the lag is the 20 s watermark bound plus the age of the newest event on the slowest partition that is not idle. This benchmark sends at a fixed rate, so every partition is busy. A sparse partition adds up to 60 s (the idleness timeout, configured); that case was not measured here.
 
