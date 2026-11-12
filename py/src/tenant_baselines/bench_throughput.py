@@ -381,7 +381,7 @@ def _summarise(run_id: str, job_id: str, total: int, samples: list[dict], pilot:
 
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="Throughput benchmark (synthetic data)")
-    ap.add_argument("--minutes", type=int, default=60)
+    ap.add_argument("--minutes", type=int, default=120)
     ap.add_argument("--rpm", type=float, default=120)
     ap.add_argument("--runs", type=int, default=2)
     ap.add_argument("--seed", type=int, default=1)
