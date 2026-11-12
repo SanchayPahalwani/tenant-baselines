@@ -128,7 +128,7 @@ How time-to-page is built (configured, not measured): the detector fires after 3
 
 The watermark lag, measured during the run and corrected by the VM clock's offset (before 0.068 s, after 0.096 s): minimum 21.3 s, median 21.8 s, maximum 23.1 s over 68 samples. By design (configured, not measured), the lag is the 20 s watermark bound plus the age of the newest event on the slowest partition that is not idle. This benchmark sends at a fixed rate, so every partition is busy. A sparse partition adds up to 60 s (the idleness timeout, configured); that case was not measured here.
 
-Both figures end at the append to the alerts topic. The forwarder and Alertmanager's `group_wait` (30 s, configured) come after it. The README's milestone 3 page times were measured at the webhook, from the incident's start minute, and are not comparable.
+Both figures end at the append to the alerts topic. The forwarder and Alertmanager's `group_wait` (30 s, configured) come after it. Page times read at the webhook include the forwarder and `group_wait`, and are not comparable.
 
 The split of the headline pipeline delay, in seconds: decision to emit 21.6 at p50 and 22.5 at p95; emit to append 0.0 at p50 and 0.0 at p95.
 

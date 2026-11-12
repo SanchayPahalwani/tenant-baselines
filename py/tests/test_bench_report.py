@@ -1023,3 +1023,48 @@ def test_two_battery_spans_in_the_delay_run_set_the_pilot_beside_it_once():
     out = br.render(throughput(), delay(), state(), power=p, pilots=pilots())
     assert out.count("The delay pilot delay-p was on battery") == 1
     assert out.count("had the charger out from") == 2
+
+
+def test_readme_block_carries_the_fixtures_figures():
+    block = br.readme_block(throughput(), delay(), state())
+    for text in ("123,457", "98.7", "263.4", "23.9", "765,432"):
+        assert text in block
+    assert len(block.splitlines()) == 7
+    assert "synthetic" in block
+    assert "mean over 48 keys" in block.splitlines()[-1]
+    assert "after 5 replayed weeks" in block.splitlines()[-1]
+    assert "4-week" not in block
+
+
+def test_readme_block_refuses_an_invalid_result():
+    d = delay()
+    d["valid"] = False
+    d["invalid_reasons"] = ["the job restarted 1 time(s)"]
+    with pytest.raises(br.ReportRefused):
+        br.readme_block(throughput(), d, state())
+
+
+def test_extrapolation_table_is_inside_the_render():
+    table = br.extrapolation_table(state())
+    out = render()
+    assert table in out
+    assert out.index("## Extrapolation, not measured") < out.index(table)
+
+
+def test_the_delay_section_does_not_point_at_the_readme():
+    out = br._delay(delay())
+    assert "README" not in out
+    assert "Page times read at the webhook" in out
+
+
+def test_main_prints_the_blocks_and_writes_no_file(tmp_path, capsys):
+    res = tmp_path / "performance"
+    res.mkdir()
+    for name, doc in (("throughput", throughput()), ("delay", delay()), ("state", state())):
+        (res / f"{name}.json").write_text(json.dumps(doc))
+    out = tmp_path / "performance.md"
+    br.main(["--results", str(res), "--out", str(out), "--readme-block"])
+    assert capsys.readouterr().out.strip() == br.readme_block(throughput(), delay(), state())
+    br.main(["--results", str(res), "--out", str(out), "--extrapolation-table"])
+    assert capsys.readouterr().out.strip() == br.extrapolation_table(state())
+    assert not out.exists()

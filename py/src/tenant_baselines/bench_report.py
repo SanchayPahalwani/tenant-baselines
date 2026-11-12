@@ -697,9 +697,9 @@ def _delay(d: dict) -> str:
         f" {count(dz['idleness_s'])} s (the idleness timeout, configured); that case was not"
         " measured here.\n\n"
         "Both figures end at the append to the alerts topic. The forwarder and Alertmanager's"
-        f" `group_wait` ({count(dz['group_wait_s'])} s, configured) come after it. The README's"
-        " milestone 3 page times were measured at the webhook, from the incident's start minute,"
-        " and are not comparable.\n\n"
+        f" `group_wait` ({count(dz['group_wait_s'])} s, configured) come after it."
+        " Page times read at the webhook include the forwarder and `group_wait`, and are not"
+        " comparable.\n\n"
         "The split of the headline pipeline delay, in seconds: decision to emit"
         f" {n(h['emit_delay_s']['p50'])} at p50 and {n(h['emit_delay_s']['p95'])} at p95; emit to"
         f" append {n(h['sink_delay_s']['p50'])} at p50 and {n(h['sink_delay_s']['p95'])} at"
@@ -801,15 +801,20 @@ def _state(s: dict, throughput_settings: int) -> str:
     )
 
 
-def _extrapolation(s: dict) -> str:
+def extrapolation_table(s: dict) -> str:
+    """The Markdown table of the state extrapolation, and nothing else."""
     ex = s["extrapolation"]
-    w = s["world"]
     backends = [b for b in ex if b != "label"]
     keys = [r["keys"] for r in ex[backends[0]]]
     rows = [
         [count(k), *(count(next(r["bytes"] for r in ex[b] if r["keys"] == k)) for b in backends)]
         for k in keys
     ]
+    return table(["Keys", *(f"{b} (bytes)" for b in backends)], rows)
+
+
+def _extrapolation(s: dict) -> str:
+    w = s["world"]
     short = w["keys"] - w["keys_with_five_weeks"]
     divisor = (
         f" {count(short)} of the {count(w['keys'])} measured keys ran fewer weeks, so the per-key"
@@ -820,13 +825,50 @@ def _extrapolation(s: dict) -> str:
     return (
         "## Extrapolation, not measured\n\n"
         "This section is an extrapolation from synthetic measurements, not a measurement. Bytes"
-        " are the scorer's bytes per key times the key count.\n\n"
-        + table(["Keys", *(f"{b} (bytes)" for b in backends)], rows)
-        + "\n\n"
+        " are the scorer's bytes per key times the key count.\n\n" + extrapolation_table(s) + "\n\n"
         f"It assumes every key has a full {count(w['weeks'])}-week history and that state grows"
         f" linearly with keys.{divisor} Neither assumption was tested above the measured key"
         " count. It leaves out the region grouper's per-key activity, the minute aggregator's"
         " state in events mode and the population baselines.\n"
+    )
+
+
+def readme_block(throughput: dict, delay: dict, state: dict) -> str:
+    """The README's performance table; every value comes from the three result files."""
+    check_results({"throughput": throughput, "delay": delay, "state": state})
+    try:
+        fill, h, lag = throughput["fill"], delay["headline"], delay["watermark_lag_s"]
+        rates = " and ".join(n(r["events_per_s"], 0) for r in throughput["runs"])
+        pd, tp = h["pipeline_delay_s"], h["time_to_page_s"]
+        run = next(r for r in state["runs"] if r["backend"] == state["headline_backend"])
+        rows = [
+            [
+                f"Sustained throughput of the live job, {count(fill['keys'])} keys",
+                f"{rates} events a second ({count(len(throughput['runs']))} runs)",
+            ],
+            [
+                f"Pipeline delay, {h['detector']}/{h['setting']}",
+                f"p50 {n(pd['p50'])} s, p95 {n(pd['p95'])} s (n={count(pd['n'])})",
+            ],
+            [
+                "Time to page, incident start to the alerts topic",
+                f"p50 {n(tp['p50'])} s, p95 {n(tp['p95'])} s, minimum {n(tp['min'])} s"
+                f" (n={count(tp['n'])})",
+            ],
+            [
+                "Watermark lag during the delay run",
+                f"median {n(lag['median'])} s ({n(lag['min'])} to {n(lag['max'])})",
+            ],
+            [
+                f"Scorer state per key, mean over {count(run['keys'])} keys after"
+                f" {count(state['world']['weeks'])} replayed weeks ({state['headline_backend']})",
+                f"{n(run['per_key']['per_key_bytes'], 0)} bytes",
+            ],
+        ]
+    except (KeyError, StopIteration, TypeError, IndexError) as e:
+        raise ReportRefused(f"the README block: a result file lacks a field ({e!r})") from e
+    return "| Measurement (synthetic data, one laptop) | Figure |\n|---|---|\n" + "\n".join(
+        "| " + " | ".join(r) + " |" for r in rows
     )
 
 
@@ -1039,8 +1081,20 @@ def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="Render docs/performance.md from the result files")
     ap.add_argument("--results", default=str(REPO / "docs" / "performance"))
     ap.add_argument("--out", default=str(REPO / "docs" / "performance.md"))
+    ap.add_argument("--readme-block", action="store_true", help="print the README's table")
+    ap.add_argument(
+        "--extrapolation-table", action="store_true", help="print the state extrapolation table"
+    )
     args = ap.parse_args(argv)
-    text = render(**load_results(args.results))
+    loaded = load_results(args.results)
+    if args.readme_block:
+        print(readme_block(loaded["throughput"], loaded["delay"], loaded["state"]))
+        return
+    if args.extrapolation_table:
+        check_results({k: loaded[k] for k in NAMES})
+        print(extrapolation_table(loaded["state"]))
+        return
+    text = render(**loaded)
     Path(args.out).write_text(text)
     print(f"bench-report: wrote {args.out}")
 
