@@ -66,3 +66,27 @@ def test_eval_demo_and_paths_worlds_are_unchanged():
     assert len(build_world("eval", 7).keys) == 48
     assert len(build_world("demo", 1).keys) == 22
     assert len(build_world("paths", 7).keys) == 10
+
+
+def test_delay_world_has_twelve_tenants_a_region():
+    from tenant_baselines.gen_live import LiveGenerator
+
+    w = bench_world.build("delay", 1)
+    assert len(w.keys) == len({k.key for k in w.keys}) == 36
+    assert len(w.tenants) == 36
+    assert [t.name for t in w.tenants][:2] == ["d01", "d02"]
+    for r in w.regions:
+        assert sum(k.region == r.name for k in w.keys) == 12
+    units = {u.name: u.base_latency_ms for u in w.units}
+    assert len(units) == 6
+    assert sorted(units.values()) == [70.0] * 3 + [90.0] * 3
+    for i, t in enumerate(w.tenants):
+        mine = [k for k in w.keys if k.tenant == t.name]
+        assert len(mine) == 1
+        assert t.steady and t.peak_rpm == 40.0
+        assert t.home_region == w.regions[i % 3].name == mine[0].region
+        suffix = "-s1" if (i // 3) % 2 == 0 else "-s2"
+        assert mine[0].unit == f"{t.home_region}{suffix}"
+    assert w == bench_world.build("delay", 99)
+    gen = LiveGenerator(w, 1, [])
+    assert {gen.partition_of(k.key, 8) for k in w.keys} == set(range(8))

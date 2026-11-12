@@ -3,7 +3,8 @@ import sys
 import orjson
 import pytest
 
-from tenant_baselines.gen_live import DeliveryStats, LiveGenerator, main, next_step
+from tenant_baselines import bench_world
+from tenant_baselines.gen_live import DeliveryStats, LiveGenerator, main, next_step, take_step
 from tenant_baselines.incidents import Incident
 from tenant_baselines.traffic import shape
 from tenant_baselines.world import build_world
@@ -143,3 +144,37 @@ def test_live_generator_rejects_non_demo_worlds(monkeypatch, world):
     with pytest.raises(SystemExit) as exc:
         main()
     assert exc.value.code == 2
+
+
+def test_steps_cross_the_seam_without_gap_or_overlap():
+    clock = [1_800_000_000_000 + 150_000]
+    next_ms = 1_800_000_000_000
+    spans = []
+    while True:
+        step, start, nxt = take_step(next_ms, clock[0])
+        if step == "wait":
+            assert start == nxt == next_ms
+            break
+        if step == "minute":
+            assert start % 60_000 == 0
+            clock[0] += 7000
+        spans.append((start, nxt))
+        next_ms = nxt
+    assert spans[0][0] == 1_800_000_000_000
+    assert all(a[1] == b[0] for a, b in zip(spans, spans[1:], strict=False))
+    assert abs(clock[0] - spans[-1][1]) <= 1000
+
+
+def test_bench_script_needs_labels_out(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["gen_live", "--world", "delay", "--script", "bench"])
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 2
+    assert "--labels-out" in capsys.readouterr().err
+
+
+def test_delay_world_tick_rate():
+    w = bench_world.build("delay", 1)
+    gen = LiveGenerator(w, 5, [])
+    n = sum(len(gen.tick(T + i * 1000)) for i in range(2000))
+    assert n / 2000 / len(w.keys) == pytest.approx(40 / 60, rel=0.10)

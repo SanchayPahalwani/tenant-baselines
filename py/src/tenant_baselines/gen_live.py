@@ -1,14 +1,18 @@
 """Live event generator: one second of synthetic events per tick, written to Kafka."""
 
 import argparse
+import json
 import logging
+import os
 import signal
 import sys
 import time
+from pathlib import Path
 from typing import Literal
 
 import numpy as np
 
+from tenant_baselines import bench_delay, bench_world
 from tenant_baselines.events import encode
 from tenant_baselines.incidents import Incident, demo_script, effects
 from tenant_baselines.traffic import (
@@ -31,6 +35,22 @@ def next_step(next_ms: int, now_ms: int) -> Literal["minute", "second", "wait"]:
     if next_ms + 1000 <= now_ms:
         return "second"
     return "wait"
+
+
+def take_step(next_ms: int, now_ms: int) -> tuple[str, int, int]:
+    """`(step, start_ms, next_ms after it)`; for "wait" the last two are both `next_ms`."""
+    step = next_step(next_ms, now_ms)
+    if step == "minute":
+        return step, next_ms, next_ms + 60_000
+    if step == "second":
+        return step, next_ms, next_ms + 1000
+    return step, next_ms, next_ms
+
+
+def _build(name: str, seed: int) -> World:
+    if name in ("bench", "delay"):
+        return bench_world.build(name, seed)
+    return build_world(name, seed)
 
 
 class LiveGenerator:
@@ -139,31 +159,44 @@ def _fmt_utc(ms: int) -> str:
     return time.strftime("%H:%M", time.gmtime(ms / 1000))
 
 
+def _write_labels(path: Path, labels: dict) -> None:
+    """Write beside `path` and rename onto it, so a reader never sees half a file."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(labels, sort_keys=True, allow_nan=False))
+    os.replace(tmp, path)
+
+
 def main() -> None:
     from confluent_kafka import Producer
 
     ap = argparse.ArgumentParser(description="Generate synthetic live events into Kafka")
     ap.add_argument("--bootstrap", default="localhost:9092")
     ap.add_argument("--topic", default="live.events")
-    ap.add_argument("--world", default="demo", choices=["demo"])
+    ap.add_argument("--world", default="demo", choices=["demo", "delay"])
     ap.add_argument("--seed", type=int, default=1)
-    ap.add_argument("--script", choices=["demo", "none"], default="demo")
+    ap.add_argument("--script", choices=["demo", "none", "bench"], default="demo")
+    ap.add_argument("--bench-incidents", type=int, default=60)
+    ap.add_argument("--labels-out", type=Path)
     ap.add_argument("--history-days", type=int, default=21)
     ap.add_argument("--partitions", type=int, default=8)
     args = ap.parse_args()
+    if args.script == "bench" and args.labels_out is None:
+        ap.error("--script bench needs --labels-out")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
-    world = build_world(args.world, args.seed)
+    world = _build(args.world, args.seed)
     gen = LiveGenerator(world, args.seed, [])
-    producer = Producer(
-        {
-            "bootstrap.servers": args.bootstrap,
-            "linger.ms": 50,
-            "compression.type": "zstd",
-            # A retry must not reorder messages within a partition.
-            "enable.idempotence": True,
-        }
-    )
+    conf = {
+        "bootstrap.servers": args.bootstrap,
+        "linger.ms": 50,
+        "compression.type": "zstd",
+        # A retry must not reorder messages within a partition.
+        "enable.idempotence": True,
+    }
+    if args.script == "bench":
+        # A send that cannot be delivered fails within a minute instead of retrying for good.
+        conf["delivery.timeout.ms"] = 60_000
+    producer = Producer(conf)
 
     def stop(signum, frame) -> None:
         producer.flush(10)
@@ -192,7 +225,7 @@ def main() -> None:
     last_log = time.monotonic()
     while True:
         now_ms = int(time.time() * 1000)
-        step = next_step(next_ms, now_ms)
+        step, batch_start, next_after = take_step(next_ms, now_ms)
         if step == "wait":
             if catching_up:
                 catching_up = False
@@ -215,6 +248,21 @@ def main() -> None:
                         _fmt_utc(spike.start_ms),
                         _fmt_utc(spike.end_ms),
                     )
+                elif args.script == "bench":
+                    incidents = bench_delay.schedule(
+                        world, next_ms, args.bench_incidents, args.seed
+                    )
+                    gen.set_incidents(incidents)
+                    _write_labels(args.labels_out, bench_delay.labels(incidents, world, next_ms))
+                    log.info(
+                        "caught up after %.0f s, %d events; bench script: %d incidents "
+                        "from %s to %s UTC",
+                        time.monotonic() - history_start,
+                        history_events,
+                        len(incidents),
+                        _fmt_utc(min(i.start_ms for i in incidents)),
+                        _fmt_utc(max(i.end_ms for i in incidents)),
+                    )
                 else:
                     log.info(
                         "caught up after %.0f s, %d events",
@@ -223,12 +271,8 @@ def main() -> None:
                     )
             time.sleep(max(0.0, (next_ms + 1000 - now_ms) / 1000))
             continue
-        if step == "minute":
-            batch = gen.minute(next_ms)
-            next_ms += 60_000
-        else:
-            batch = gen.tick(next_ms)
-            next_ms += 1000
+        batch = gen.minute(batch_start) if step == "minute" else gen.tick(batch_start)
+        next_ms = next_after
         for key, payload in batch:
             while True:
                 try:
@@ -265,6 +309,9 @@ def main() -> None:
                     stats.failed - last_failed,
                     sent_total,
                 )
+            if args.script == "bench" and stats.failed > 0:
+                log.error("%d deliveries failed; the bench run is spoiled", stats.failed)
+                sys.exit(1)
             sent = 0
             last_delivered, last_failed = stats.delivered, stats.failed
             last_log = time.monotonic()
