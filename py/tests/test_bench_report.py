@@ -1012,3 +1012,14 @@ def test_committed_page_is_the_render_of_the_committed_results():
     if not page.is_file():
         pytest.skip("no docs/performance.md in this checkout")
     assert br.render(**br.load_results(docs / "performance")) == page.read_text()
+
+
+def test_two_battery_spans_in_the_delay_run_set_the_pilot_beside_it_once():
+    p = power()
+    p["runs"]["delay"]["intervals"] += [
+        iv("Battery Power", "22:00:00", "22:01:00", 60.0),
+        iv("AC Power", "22:01:00", "22:44:24", 2004.0),
+    ]
+    out = br.render(throughput(), delay(), state(), power=p, pilots=pilots())
+    assert out.count("The delay pilot delay-p was on battery") == 1
+    assert out.count("had the charger out from") == 2

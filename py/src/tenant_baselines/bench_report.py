@@ -276,7 +276,7 @@ def _battery_pilot(delay: dict, pilots: dict[str, dict]) -> str:
     return " ".join(out)
 
 
-def _delay_battery(run: dict, iv: dict, zone: str, delay: dict, pilots: dict) -> str:
+def _delay_battery(run: dict, iv: dict, zone: str) -> str:
     """What the delay run was doing while it was on battery, from its own records."""
     a = max(_dt(iv["from"]), _dt(run["start"])).isoformat()
     b = min(_dt(iv["to"]), _dt(run["end"])).isoformat() if iv["to"] else run["end"]
@@ -313,8 +313,7 @@ def _delay_battery(run: dict, iv: dict, zone: str, delay: dict, pilots: dict) ->
         )
     else:
         text += " The records cannot rule out a page appended on battery."
-    pilot = _battery_pilot(delay, pilots)
-    return f"{text} {pilot}" if pilot else text
+    return text
 
 
 def _power(power: dict | None, docs: dict[str, dict], pilots: dict[str, dict]) -> str:
@@ -334,7 +333,7 @@ def _power(power: dict | None, docs: dict[str, dict], pilots: dict[str, dict]) -
         ]
         for k, r in runs.items()
     ]
-    notes = []
+    notes, last_delay = [], None
     for k, r in runs.items():
         if not r["covered_by_log"]:
             notes.append(f"The log does not cover the whole of the {k} run ({r['run_id']}).")
@@ -342,7 +341,8 @@ def _power(power: dict | None, docs: dict[str, dict], pilots: dict[str, dict]) -
             if iv["source"] == "AC Power":
                 continue
             if k == "delay":
-                notes.append(_delay_battery(r, iv, zone, docs["delay"], pilots))
+                notes.append(_delay_battery(r, iv, zone))
+                last_delay = len(notes) - 1
             else:
                 a = max(_dt(iv["from"]), _dt(r["start"])).isoformat()
                 b = min(_dt(iv["to"]), _dt(r["end"])).isoformat() if iv["to"] else r["end"]
@@ -352,6 +352,9 @@ def _power(power: dict | None, docs: dict[str, dict], pilots: dict[str, dict]) -
                 )
     if not any(iv["source"] != "AC Power" for r in runs.values() for iv in r["intervals"]):
         notes.append("The log shows AC Power throughout every run.")
+    pilot = _battery_pilot(docs["delay"], pilots)
+    if last_delay is not None and pilot:  # once, after the delay run's last battery span
+        notes[last_delay] += f" {pilot}"
     return (
         f"{head} above, not about the data. The drivers read the power source only when a run"
         " starts and when it ends. The OS also logs every change of power source: this section"
