@@ -9,5 +9,7 @@ Planning material, like the rest of `docs/superpowers/`. These are review findin
 
 ## Milestone 6
 
+Decided in the milestone 6 plan's follow-up table (`docs/superpowers/plans/2026-11-13-m6-readme-design.md`). What stays open is in `open-items.md`.
+
 - The band panel has no per-signal units, and the cold-key lower line comes from `greatest()` with a NULL median.
 - `demo.sh` counts its 15-minute give-up from the submit, not from the start, and prints the refusal on stdout.

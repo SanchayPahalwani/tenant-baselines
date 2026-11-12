@@ -12,6 +12,8 @@ Planning material, like the rest of `docs/superpowers/`. These are review findin
 
 ## Milestone 6 (README and compose pass)
 
+Decided in the milestone 6 plan's follow-up table (`docs/superpowers/plans/2026-11-13-m6-readme-design.md`). What stays open is in `open-items.md`.
+
 - Alertmanager state lives on an anonymous volume, so silences are lost when the container is recreated.
 - `tb.ingest_errors` has no TTL.
 - The Python image runs as root.

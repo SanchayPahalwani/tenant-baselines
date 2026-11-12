@@ -26,6 +26,8 @@ From the milestone 4 final review:
 
 ## Milestone 6 (README and design doc)
 
+Decided in the milestone 6 plan's follow-up table (`docs/superpowers/plans/2026-11-13-m6-readme-design.md`). What stays open is in `open-items.md`.
+
 - **Live watermark, for `docs/design.md`:**
   - Ticks use the TaskManager's clock; events use the producers' clocks. After a silence, producers more than about 20 s behind the TaskManager lose their first events.
   - A forward step of the TaskManager's clock while partitions are idle closes minutes early.

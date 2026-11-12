@@ -1,0 +1,58 @@
+# Open items
+
+Planning material; nothing in it blocked a milestone. Each line is a follow-up that milestone 6 did not do, with the reason. The decisions are in the milestone 6 plan's follow-up table (`plans/2026-11-13-m6-readme-design.md`). The sources are `m1-followups.md`, `m2-followups.md` and `m3-followups.md`.
+
+## Job code
+
+- `PopulationBaselines` keeps stale week-4 histogram entries when a bucket's hour gets no scored minute for a week. A sweep of weeks below `w - 4` changes the job and the jar, which the sealed eval forbids. (m2; design doc section 12 names it.)
+- `unit-tenants` state removes stale unit/tenant pairs only lazily. This is job code. No bench world makes a pair stale, so it is not measured. (m3; design doc section 12 names it.)
+- Unit status is separable from `RegionGrouper.java` (about 670 lines). Job code; extract it when the file is next touched.
+- Java minors in `ThresholdsFile`, `AggregateJson` and `Scorer.onTimer` (a non-object node, a non-integer `valid_from_ms`, the overlap message, one long line, an unbounded error message, an untested `fin && due > replayEndMs` branch). Job code; they change the jar.
+- A test that a drained unit keeps its first signal and reason until it undrains. The behaviour is stated in the design doc, from the code. No Java test is added in this milestone.
+- Connector 5.1.0. Stays open until it is released; the design doc states the rule for a replay-mode run that hits FLINK-39728.
+- The shaded jar keeps merged NOTICE files but drops bundled dependencies' own LICENSE files. A fix edits `pom.xml` and changes the jar. The jar is not published.
+- The live job's retained checkpoints are not deleted. `submit-job.sh` restores from them, and a change needs `make smoke`. `make reset` removes them.
+
+## Compose and infra (measured paths)
+
+- Alertmanager state is on an anonymous volume, so silences do not survive `make down`. Edits `docker-compose.yml`, a measured path.
+- `tb.ingest_errors` has no TTL. Edits a measured `infra/` file.
+- The `live.*` topics are stamped with event time, so the 7-day retention can delete backfilled rows. `LogAppendTime` would edit `infra/kafka`, a measured path. The design doc states the effect.
+- The Python image runs as root. A non-root user needs the `pager-data` volume re-owned, which is a compose change.
+- `create-topics.sh --if-not-exists` keeps an old stack's topic configs. Measured path.
+
+## Eval driver and report
+
+- A reader cannot reproduce an official run. A `repro` kind (an official seed, a local build, output under `data/eval/repro-*`, a comparison of `selected_week5` with the committed summary) is not built. The README says a reader can run dev seeds with `make eval-dev`.
+- No false-page breakdown script (bursts, day factors, the rest). The README keeps "this eval does not measure the split".
+- After a bug re-run, the "measured code equals the freeze" line still compares HEAD with the freeze commit, and any `bug:` entry accepts a "no". Measured Python module; any edit breaks the freeze line.
+- After a bug fix, a failed re-run can only be repeated under `bug:`, not `infrastructure:`. Same reason.
+- With a selection that matches no planned pair, the driver prints "all 0 official runs are finished". Same reason.
+- A dev render prints the official runs' machine-facts source line. Same reason.
+- `eval_report.py` defines its own `REPO`; it should import it from `freeze`. Same reason.
+- The test resource `thresholds-eval-dev-s7-a6.json` cannot carry a "synthetic" label, because the format has no field for one.
+- `eval_run`'s poll retries can overshoot `timeout_s` by about a minute.
+
+## Scripts and tests
+
+- The default `submit-job.sh` misses jobs in CREATED or INITIALIZING. `make demo` submits once on an empty cluster. A change needs smoke checks 11 and 12 read again.
+- `submit-job.sh` writes the checkpoint path twice.
+- The forwarder posts all due alerts in one request, so one rejected entry hides which one failed. The body log is not added; no reader sees it.
+- `smoke.sh`'s `check_inhibit` prints a Python traceback on every poll while Alertmanager is down.
+- The demo generator's delivery timeout is 300 s; only `--script bench` has the shorter one. A change to the live producer's settings wants its own smoke run.
+- `watermark-lag.sh` has no offset correction. Its header says the lag is against the host's clock.
+- The benchmark driver reads power only at its start and end. It should sample `pmset -g ps` at every poll, record the changes in the result and decide the rule (refuse the run, or print the change). Changing the driver is not worth it without a re-run, and no benchmark is re-run. `docs/performance.md` prints the stopgap from `docs/performance/power.json`. (M5 C1.)
+- The result files record a start but no end. `power.json` takes the end from the write time of `data/bench/<run_id>/result.json`, which is not in git. A fix changes the driver and the result format. (M5 C2.)
+- Shared private helpers (`bench_throughput._load`, `_settings`, `_wait_running`, `bench_flink._json`, `bench_env._sh`, `_power_line`) should move into `bench_env` and `bench_flink`. A refactor with no behaviour change; left alone. (M5 C3.)
+- One read-twice helper for `sample`, `late_events` and `watermark_lag_sample`. Same reason. (M5 C4.)
+- Two restart edges that end as `RunFailed`: a restart before the first checkpoint, and one after the last sample. They need a run to see. (M5 C5.)
+- Load as more than two instants: sample `docker stats` during a throughput run. It needs a new throughput run. (M5 C7.)
+- The stale-read path has not been seen live under the current code. Needs a new delay run, or an old pilot's samples kept as a test fixture. (M5 C8.)
+- A warmed-up throughput run (history first, then the dense fill), so the cold-baseline caveat becomes a figure. Needs a new run. (M5 C9.)
+- Two test nits from milestone 5 Task 6: `test_measure_run_fails_when_no_checkpoint_is_in_the_last_share` matches a message both failures contain, and `measure_run` reads `/checkpoints` and `/checkpoints/config` twice each.
+
+## To state in the documents (removed in Task 7)
+
+- Time-to-page is counted from the start of the first breaching minute, so the spec's "at least about 5 minutes" (6) does not hold for an incident that breaches in its start minute. `docs/design.md` section 10 (the plan's disagreement 6); `docs/performance/delay.json` has the measured minimum.
+- Machine facts per run: `docs/results/machine.json` holds the host and Docker VM facts once, for the 15 official runs; the summaries do not record them per run. `docs/design.md` section 9, and one line in the README's notes. `docs/performance.md` carries its own machine facts.
+- `check_paths.py`'s `total` uses the host's monotonic clock, which stops during a host sleep, so after a sleep it can be smaller than one job's time. `docs/design.md` section 9, where `check-paths.json` is cited.
