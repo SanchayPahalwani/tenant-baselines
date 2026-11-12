@@ -333,6 +333,7 @@ def test_load_record_splits_this_projects_cpu_from_the_others():
         {
             "sysctl -n vm.loadavg": "{ 3.52 2.10 1.90 }\n",
             "docker compose ps -q": f"{ours}\n",
+            "docker info --format {{.NCPU}}": "8\n",
             "docker stats --no-stream --no-trunc --format {{.ID}} {{.CPUPerc}}": (
                 f"{ours} 150.50%\n{other1} 20.25%\n{other2[:12]} 0.25%\n"
             ),
@@ -343,6 +344,8 @@ def test_load_record_splits_this_projects_cpu_from_the_others():
         "host_load_1m": 3.52,
         "project_containers_cpu_pct": 150.5,
         "other_containers_cpu_pct": 20.5,
+        "vm_cpus": 8,
+        "cpu_pct_unit": "percent of one CPU",
     }
 
 

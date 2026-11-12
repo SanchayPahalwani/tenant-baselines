@@ -317,11 +317,39 @@ def power_reasons(runs: list[dict], on_battery: bool) -> list[str]:
     ]
 
 
+def _load() -> dict:
+    """The machine's load; a failed read is recorded as the error, never fails the run."""
+    try:
+        return bench_env.load_record()
+    except Exception as e:
+        return {
+            "host_load_1m": None,
+            "project_containers_cpu_pct": None,
+            "other_containers_cpu_pct": None,
+            "error": str(e),
+        }
+
+
+def _aborted(run_id, job_id, total, reason, restarts, samples, load_start, load_end) -> dict:
+    return {
+        "run_id": run_id,
+        "job_id": job_id,
+        "events": total,
+        "aborted": reason,
+        "restarts": restarts,
+        "late_events": None,  # not read: the job did not finish
+        "stale_samples": sum(x["stale"] for x in samples),
+        "host_sleep_gaps_s": _gaps(samples),
+        "load_start": load_start,
+        "load_end": load_end,
+    }
+
+
 def _one_run(n: int, fill_id: str, total: int, args, run_dir: Path) -> dict:
     run_id = f"{fill_id}-r{n}"
     topic = f"{fill_id}.events"
     alerts_from = kafka_io.end_offsets(ALERTS_TOPIC)
-    load_start = bench_env.load_record()
+    load_start = _load()
     job_id = bench_flink.submit(run_id, topic)
     samples: list[dict] = []
     timeout_s = max(MIN_RUN_TIMEOUT_S, total / MIN_EVENTS_PER_S)
@@ -335,31 +363,29 @@ def _one_run(n: int, fill_id: str, total: int, args, run_dir: Path) -> dict:
         kind, stop = _poll_source(job_id, src, samples, total, time.monotonic() + timeout_s)
         if kind == "deadline":
             raise RunFailed(f"{run_id}: {stop}")
-        load_end = bench_env.load_record()
+        load_end = _load()
         if kind:
             restarts = bench_flink.restarts(job_id)
             if kind == "restarted" and restarts == 0:
                 restarts = 1  # the count fell, so the job did restart; the history lags
             bench_flink.cancel_and_clean(job_id, run_id)
-            return {
-                "run_id": run_id,
-                "job_id": job_id,
-                "events": total,
-                "aborted": stop,
-                "restarts": restarts,
-                "late_events": None,  # not read: the job did not finish
-                "load_start": load_start,
-                "load_end": load_end,
-                "stale_samples": sum(x["stale"] for x in samples),
-                "host_sleep_gaps_s": _gaps(samples),
-            }
+            return _aborted(run_id, job_id, total, stop, restarts, samples, load_start, load_end)
         check_final_count(samples[-1]["count"], total)
         time.sleep(METRIC_CACHE_WAIT_S)
         fresh = [x for x in samples if not x["stale"]]
         if not fresh:
             raise RunFailed(f"{run_id}: no sample was fresh; cannot check the late events")
         fresh_after = (src["id"], src["parallelism"], fresh[-1])
-        late = bench_flink.late_events(job_id, fresh_after=fresh_after)
+        try:
+            late = bench_flink.late_events(job_id, fresh_after=fresh_after)
+        except RunFailed:
+            restarts = bench_flink.restarts(job_id)
+            if not restarts:
+                raise
+            # a restart reset the clock, so the late-events read looked stale
+            bench_flink.cancel_and_clean(job_id, run_id)
+            reason = f"the job restarted {restarts} time(s); the late-events read was stale"
+            return _aborted(run_id, job_id, total, reason, restarts, samples, load_start, load_end)
         restarts = bench_flink.restarts(job_id)
         history = bench_flink.checkpoint_history(job_id)
         ck = bench_flink.latest_before(history, None)

@@ -154,9 +154,13 @@ def _same_container(a: str, b: str) -> bool:
 
 def load_record(run: Callable = _sh) -> dict:
     """What the machine is doing: the host's 1-minute load, and the CPU% of this project's
-    containers and of all the others on the VM (summed; never named). Not a validity rule."""
+    containers and of all the others on the VM (summed; never named). Not a validity rule.
+
+    CPU% is Docker's: 100 is one CPU, so the VM's total is `vm_cpus x 100`.
+    """
     load = _out(run, ["sysctl", "-n", "vm.loadavg"]).strip("{} \n").split()[0]
     ours = _out(run, ["docker", "compose", "ps", "-q"]).split()
+    vm_cpus = int(_out(run, ["docker", "info", "--format", "{{.NCPU}}"]))
     fmt = "{{.ID}} {{.CPUPerc}}"
     stats = _out(run, ["docker", "stats", "--no-stream", "--no-trunc", "--format", fmt])
     mine = other = 0.0
@@ -171,6 +175,8 @@ def load_record(run: Callable = _sh) -> dict:
         "host_load_1m": float(load),
         "project_containers_cpu_pct": round(mine, 1),
         "other_containers_cpu_pct": round(other, 1),
+        "vm_cpus": vm_cpus,
+        "cpu_pct_unit": "percent of one CPU",
     }
 
 

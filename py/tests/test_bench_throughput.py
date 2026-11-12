@@ -258,8 +258,18 @@ def test_poll_gives_up_at_the_deadline():
     assert kind[0] == "deadline"
 
 
-def one_run(monkeypatch, tmp_path, poll_result, restarts=0, script=None):
+LOAD = {
+    "host_load_1m": 1.5,
+    "project_containers_cpu_pct": 10.0,
+    "other_containers_cpu_pct": 20.0,
+    "vm_cpus": 8,
+    "cpu_pct_unit": "percent of one CPU",
+}
+
+
+def one_run(monkeypatch, tmp_path, poll_result, restarts=0, script=None, load=None):
     calls = []
+    monkeypatch.setattr(bt.bench_env, "load_record", load or (lambda: LOAD))
     monkeypatch.setattr(bt.kafka_io, "end_offsets", lambda topic: {0: 0})
     monkeypatch.setattr(bt.bench_flink, "submit", lambda run_id, topic: "j" * 32)
     monkeypatch.setattr(bt, "_wait_running", lambda job_id: None)
@@ -299,6 +309,35 @@ def test_a_real_restart_ends_the_run_as_restarted_with_its_samples(monkeypatch, 
     assert calls and len(json.loads((tmp_path / "samples-r1.json").read_text())) == 3
     ok, reasons = bench_env.validity(r["restarts"], 0, [], [f"run {r['run_id']}: {r['aborted']}"])
     assert not ok and any("restarted" in x for x in reasons)
+
+
+def test_a_failed_load_record_does_not_kill_the_run(monkeypatch, tmp_path):
+    def broken():
+        raise RuntimeError("`sysctl -n vm.loadavg` exited 1: boom")
+
+    r, _ = one_run(monkeypatch, tmp_path, ("restarted", "fell"), load=broken)
+    assert r["load_start"]["host_load_1m"] is None and "boom" in r["load_start"]["error"]
+    assert "boom" in r["load_end"]["error"] and r["restarts"] == 1
+
+
+def test_a_stale_late_events_read_after_a_restart_ends_the_run_as_restarted(monkeypatch, tmp_path):
+    def stale(*a, **k):
+        raise bt.bench_flink.RunFailed("the late-events read is stale")
+
+    monkeypatch.setattr(bt.bench_flink, "late_events", stale)
+    final = [sampled(5, 3_000_000)]
+    r, calls = one_run(monkeypatch, tmp_path, None, restarts=2, script=final)
+    assert r["restarts"] == 2 and "restarted" in r["aborted"] and r["late_events"] is None
+    assert calls and (tmp_path / "samples-r1.json").exists()
+
+
+def test_a_stale_late_events_read_without_a_restart_still_fails(monkeypatch, tmp_path):
+    def stale(*a, **k):
+        raise bt.bench_flink.RunFailed("the late-events read is stale")
+
+    monkeypatch.setattr(bt.bench_flink, "late_events", stale)
+    with pytest.raises(bt.RunFailed, match="stale"):
+        one_run(monkeypatch, tmp_path, None, restarts=0, script=[sampled(5, 3_000_000)])
 
 
 def test_a_run_whose_metrics_vanish_is_invalid_with_the_reason(monkeypatch, tmp_path):
