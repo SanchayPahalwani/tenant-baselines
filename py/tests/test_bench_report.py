@@ -1002,3 +1002,13 @@ def test_main_reads_power_json_and_the_pilots(tmp_path):
     assert out.read_text() == br.render(
         throughput(), delay(), state(), power=power(), pilots=pilots()
     )
+
+
+def test_committed_page_is_the_render_of_the_committed_results():
+    from tenant_baselines import freeze
+
+    docs = freeze.REPO / "docs"
+    page = docs / "performance.md"
+    if not page.is_file():
+        pytest.skip("no docs/performance.md in this checkout")
+    assert br.render(**br.load_results(docs / "performance")) == page.read_text()
