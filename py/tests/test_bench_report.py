@@ -554,3 +554,24 @@ def test_state_wording_and_after_tasks_finish():
     assert "before the source finished" not in sec
     assert "checkpoints after tasks finish: true" in sec
     assert "checkpoints after tasks finish: not recorded" in sec
+
+
+def test_no_alert_rows_prints_a_sentence_not_an_empty_table():
+    t = throughput()
+    for r in t["runs"]:
+        r["alert_rows"] = {}
+    out = render(t=t)
+    assert "No run wrote an alert row: the bench world stays under every fire level." in out
+    assert "| Detector / setting / scope |" not in out
+    # with rows, the table stays
+    assert "| Detector / setting / scope |" in render()
+
+
+def test_spread_names_the_faster_run_and_does_not_assume_the_first_is_colder():
+    out = render()
+    assert "tp-x-r2 was the faster" in out
+    t = throughput()
+    t["runs"][0]["events_per_s"] = 200_000.0
+    out = render(t=t)
+    assert "tp-x-r1 was the faster" in out
+    assert "is the colder one" not in out

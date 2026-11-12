@@ -244,10 +244,14 @@ def _throughput(t: dict) -> str:
     ticks = "; ".join(f"{r['run_id']}: {pct(r['drop_ticks_busy'])}" for r in runs)
     errors = "; ".join(f"{r['run_id']}: {n(r['timing_error_pct'])}%" for r in runs)
     alert_keys = sorted({k for r in runs for k in r["alert_rows"]})
-    alerts = table(
-        ["Detector / setting / scope", *(r["run_id"] for r in runs)],
-        [[k, *(count(r["alert_rows"].get(k, 0)) for r in runs)] for k in alert_keys],
-    )
+    if alert_keys:
+        alerts = table(
+            ["Detector / setting / scope", *(r["run_id"] for r in runs)],
+            [[k, *(count(r["alert_rows"].get(k, 0)) for r in runs)] for k in alert_keys],
+        )
+    else:
+        alerts = "No run wrote an alert row: the bench world stays under every fire level."
+    faster = max(runs, key=lambda r: r["events_per_s"])["run_id"]
     mem = "\n".join(
         f"- {r['run_id']}: {r['taskmanager_memory']['used_bytes'] / _GIB:.2f} GiB of"
         f" {r['taskmanager_memory']['limit_bytes'] / _GIB:.2f} GiB"
@@ -290,7 +294,8 @@ def _throughput(t: dict) -> str:
         )
         + "\n\n"
         f"The two runs differ by {n(t['spread_pct'])}% of their mean. The first job on a"
-        " TaskManager is the colder one. The source's own clock is a cross-check that does not"
+        f" TaskManager starts colder; {faster} was the faster run here. The source's own clock is"
+        " a cross-check that does not"
         " depend on the host's timing. A source that is neither busy nor back-pressured would be"
         " waiting on the broker; the idle share above shows whether that happened.\n\n"
         f"`timing_error_pct` is a bound, computed from the longest measured read delay at the"
@@ -344,7 +349,7 @@ def _delay(d: dict) -> str:
     return (
         "## Delay\n\n"
         "This section uses synthetic data. "
-        f"The world has {count(w['keys'])} keys at up to {count(w['rpm_per_key'])} requests a"
+        f"The world has {count(w['keys'])} keys at up to {n(w['rpm_per_key'], 0)} requests a"
         f" minute per key, in {count(w['partitions'])} partitions, with"
         f" {count(w['history_days'])} days of history before live traffic."
         f" The run injected {count(d['incidents'])} incidents, each"
