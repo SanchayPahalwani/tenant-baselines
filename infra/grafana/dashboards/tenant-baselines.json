@@ -87,7 +87,14 @@
         "multi": true,
         "includeAll": true,
         "hide": 2,
-        "current": {},
+        "current": {
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
         "options": []
       }
     ]

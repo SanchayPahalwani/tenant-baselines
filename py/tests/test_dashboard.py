@@ -61,6 +61,9 @@ def test_variables():
     region = DASHBOARD["templating"]["list"][2]
     assert region["type"] == "query"
     assert region["multi"] and region["includeAll"] and region["hide"] == 2
+    # All regions are selected when the dashboard opens, so panel 3 repeats once per region;
+    # an empty `current` would let Grafana pick only the first one.
+    assert region["current"] == {"text": ["All"], "value": ["$__all"]}
     assert (
         "SELECT DISTINCT region FROM tb.scores WHERE ns = 'live' ORDER BY region" in region["query"]
     )
