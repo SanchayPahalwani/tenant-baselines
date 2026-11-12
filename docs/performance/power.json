@@ -8,6 +8,7 @@
         "caught_up": "2026-11-12T21:20:54+05:30",
         "earliest_page": "2026-11-12T21:31:09.400000+05:30",
         "first_incident_start": "2026-11-12T21:26:40+05:30",
+        "job_caught_up": "2026-11-12T21:25:29.693549+05:30",
         "matched_page_on_battery": false,
         "settle_s": 300,
         "shortest_time_to_page_s": 269.4

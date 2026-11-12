@@ -19,6 +19,7 @@ import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from tenant_baselines.bench_delay_run import CAUGHT_UP_LAG_S
 from tenant_baselines.freeze import REPO
 
 __all__ = [
@@ -135,9 +136,22 @@ def save_logs(results: Path, runs: Path, logs: Path) -> None:
         (Path(logs) / f"{run_dir.name}.log").write_text(extract(excerpt.read_text()))
 
 
+def _job_caught_up(run_dir: Path, tz) -> str | None:
+    """When the delay job caught up on the history, by the driver's own rule: the first fresh
+    watermark-lag sample under CAUGHT_UP_LAG_S (from the run's `samples-lag.json`)."""
+    path = run_dir / "samples-lag.json"
+    if not path.is_file():
+        return None
+    for s in json.loads(path.read_text())["lag"]:
+        if not s["stale"] and s["lag_s"] is not None and s["lag_s"] < CAUGHT_UP_LAG_S:
+            return datetime.fromtimestamp(s["t"], tz).isoformat()
+    return None
+
+
 def _incidents(doc: dict, run_dir: Path, ivs: list[dict], end: str, tz) -> dict | None:
-    """When the delay run could first append a page matched to an incident: the first incident's
-    start (from the run's labels) plus the shortest time-to-page of any setting. A battery
+    """The delay run's moments, from its own records: the generator's and the job's catch-up,
+    the first incident's start (from the run's labels), and when a page matched to an incident
+    could first be appended: that start plus the shortest time-to-page of any setting. A battery
     interval after that moment means the records cannot rule a page on battery out (None)."""
     labels = run_dir / "labels.json"
     shortest = [
@@ -154,6 +168,7 @@ def _incidents(doc: dict, run_dir: Path, ivs: list[dict], end: str, tz) -> dict 
     caught_up = datetime.fromtimestamp(doc["generator"]["caught_up_ms"] / 1000, tz)
     return {
         "caught_up": caught_up.isoformat(),
+        "job_caught_up": _job_caught_up(run_dir, tz),
         "settle_s": doc["schedule"]["settle_s"],
         "first_incident_start": first.isoformat(),
         "shortest_time_to_page_s": min(shortest),

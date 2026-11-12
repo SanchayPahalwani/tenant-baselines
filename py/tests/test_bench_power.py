@@ -137,6 +137,16 @@ def setup_files(tmp_path, write_labels=True):
         start = int(datetime(2026, 11, 12, 15, 56, 40, tzinfo=UTC).timestamp() * 1000)
         incidents = [{"start_ms": start + 60_000}, {"start_ms": start}]
         (runs / "delay-x" / "labels.json").write_text(json.dumps({"incidents": incidents}))
+        at = datetime(2026, 11, 12, 15, 55, 0, tzinfo=UTC).timestamp()
+        lag = [
+            {"t": at - 60, "lag_s": 900_000.0, "stale": False},
+            {"t": at - 30, "lag_s": 30.0, "stale": True},  # stale: not the catch-up
+            {"t": at - 20, "lag_s": None, "stale": False},  # no watermark yet
+            {"t": at, "lag_s": 21.5, "stale": False},
+            {"t": at + 30, "lag_s": 21.7, "stale": False},
+        ]
+        samples = {"polls": [], "polls_slept": [], "lag": lag}
+        (runs / "delay-x" / "samples-lag.json").write_text(json.dumps(samples))
     return results, runs, logs
 
 
@@ -161,6 +171,7 @@ def test_build_records_when_the_delay_run_could_first_page(tmp_path):
     bp.save_logs(results, runs, logs)
     inc = bp.build(results, logs, runs)["runs"]["delay"]["incidents"]
     assert inc["caught_up"] == "2026-11-12T21:20:54+05:30"
+    assert inc["job_caught_up"] == "2026-11-12T21:25:00+05:30"  # the first fresh lag under 60 s
     assert inc["settle_s"] == 300
     assert inc["first_incident_start"] == "2026-11-12T21:26:40+05:30"
     assert inc["shortest_time_to_page_s"] == 269.4  # the shortest over every setting
