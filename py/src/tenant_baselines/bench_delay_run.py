@@ -376,18 +376,26 @@ def _execute(args, run_id: str, run_dir: Path, env: dict, before: dict, polls: P
         )
         watch(reader, when["read_at_ms"], offset, polls=polls, check=check)
 
+        # The end phase: a tick after each step, so no gap between two polls nears the stall
+        # limit, even with a late-events retry, and the sleep window covers it too.
+        polls.tick(time)
         alerts_to = kafka_io.end_offsets(ALERTS_TOPIC)
         records = rows_of_run(bench_env.read_stamped(ALERTS_TOPIC, alerts_from, alerts_to), run_id)
+        polls.tick(time)
         time.sleep(METRIC_CACHE_WAIT_S)
-        late, restarts = _late_and_restarts(job_id, src, reader)
+        late, restarts = _late_and_restarts(job_id, src, reader, tick=lambda: polls.tick(time))
         stopped = run(["docker", "stop", name])
+        polls.tick(time)
         failed = _save_generator_log(name, run, run_dir)
+        polls.tick(time)
         _remove_generator(name, run)
+        polls.tick(time)
         if stopped.returncode != 0:
             raise RunFailed(f"could not stop the generator: {stopped.stderr.strip()}")
         bench_flink.cancel_and_clean(job_id, run_id)
+        polls.tick(time)
         after = bench_env.vm_clock_offset()
-        polls.tick(time)  # the sleep window covers the end phase too
+        polls.tick(time)
         load_end = bench_throughput._load()
         power_end = bench_env._power_line(run)
     except BaseException:
@@ -456,9 +464,11 @@ def _execute(args, run_id: str, run_dir: Path, env: dict, before: dict, polls: P
     }
 
 
-def _late_and_restarts(job_id: str, src: dict, reader: LagReader) -> tuple[int | None, int]:
+def _late_and_restarts(
+    job_id: str, src: dict, reader: LagReader, tick: Callable[[], None] = lambda: None
+) -> tuple[int | None, int]:
     """The late events, read fresh against the last fresh lag sample; None when a restart left no
-    fresh read."""
+    fresh read. `tick` records a poll before each read and after the last."""
     fresh = [s for s in reader.samples if not s["stale"]]
     if not fresh:
         restarts = bench_flink.restarts(job_id)
@@ -467,8 +477,10 @@ def _late_and_restarts(job_id: str, src: dict, reader: LagReader) -> tuple[int |
         raise RunFailed("no lag sample was fresh; cannot check the late events")
     after = (src["id"], src["parallelism"], fresh[-1])
     for attempt in (0, 1):
+        tick()
         try:
             late = bench_flink.late_events(job_id, fresh_after=after)
+            tick()
             break
         except RunFailed:
             restarts = bench_flink.restarts(job_id)

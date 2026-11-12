@@ -707,3 +707,65 @@ def test_a_sleep_seen_only_in_a_lag_sample_makes_the_run_invalid(monkeypatch, tm
     assert max(json.loads((d / "samples-lag.json").read_text())["polls_slept"]) == 0.0
     assert r["host_sleep_s"] == 300.0
     assert r["invalid_reasons"] == ["the host slept 300 s during the run"]
+
+
+def slow_end_phase(monkeypatch, h, step_s=25.0, sleep_in_offset=False):
+    """Every call of the end phase takes `step_s` on the fake clock; the first late-events read
+    is stale, so the driver retries it once."""
+    real_read, real_sh = bdr.bench_env.read_stamped, bdr.bench_env._sh
+    offsets = iter([{"offset_s": -0.7, "bracket_s": 0.1}] * 2)
+    late_calls = []
+
+    def read_stamped(topic, start, end):
+        h.clock.sleep(step_s)
+        return real_read(topic, start, end)
+
+    def late(job_id, fresh_after=None):
+        h.clock.sleep(step_s)
+        late_calls.append(1)
+        if len(late_calls) == 1:
+            raise RunFailed("the late-events read is stale")
+        return 0
+
+    def sh(cmd):
+        if cmd[:2] in (["docker", "stop"], ["docker", "logs"], ["docker", "rm"]):
+            h.clock.sleep(step_s)
+        return real_sh(cmd)
+
+    def cancel(job_id, run_id):
+        h.clock.sleep(step_s)
+        h.cancelled.append((job_id, run_id))
+
+    def offset():
+        o = next(offsets)
+        if h.cancelled:  # the reading after the run
+            h.clock.sleep(step_s)
+            if sleep_in_offset:
+                h.clock.asleep = 300.0
+        return o
+
+    monkeypatch.setattr(bdr.bench_env, "read_stamped", read_stamped)
+    monkeypatch.setattr(bdr.bench_flink, "late_events", late)
+    monkeypatch.setattr(bdr.bench_env, "_sh", sh)
+    monkeypatch.setattr(bdr.bench_flink, "cancel_and_clean", cancel)
+    monkeypatch.setattr(bdr.bench_env, "vm_clock_offset", offset)
+    return late_calls
+
+
+def test_a_slow_end_phase_with_a_late_events_retry_is_not_a_stall(monkeypatch, tmp_path):
+    h = build_harness(monkeypatch, tmp_path)
+    late_calls = slow_end_phase(monkeypatch, h)
+    r, d = run_main(h, tmp_path)
+    assert len(late_calls) == 2  # the retry happened
+    assert r["stall_gaps_s"] == [] and r["valid"] is True, r["invalid_reasons"]
+    polls = json.loads((d / "samples-lag.json").read_text())["polls"]
+    gaps = [b - a for a, b in zip(polls, polls[1:], strict=False)]
+    assert max(gaps) < 40  # well under the 60 s limit
+
+
+def test_a_sleep_during_the_last_step_of_the_end_phase_is_seen(monkeypatch, tmp_path):
+    h = build_harness(monkeypatch, tmp_path)
+    slow_end_phase(monkeypatch, h, step_s=1.0, sleep_in_offset=True)
+    r, _ = run_main(h, tmp_path)
+    assert r["host_sleep_s"] == 300.0
+    assert r["invalid_reasons"] == ["the host slept 300 s during the run"]
