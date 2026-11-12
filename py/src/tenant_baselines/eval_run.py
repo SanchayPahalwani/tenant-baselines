@@ -18,6 +18,14 @@ import httpx
 import orjson
 
 from tenant_baselines.evalmodel import EPOCH_MS, REPLAY_END_MS, TrafficParams, rates
+from tenant_baselines.freeze import (
+    AMPLITUDES,
+    DEV_SEEDS,
+    FREEZE_PATH,
+    frozen_jar_container_path,
+    load_freeze,
+    verify_frozen_jar,
+)
 from tenant_baselines.kafka_io import create_topic, end_offsets, produce_all, read_range
 from tenant_baselines.scenarios import Scenario, apply, place, write_labels
 from tenant_baselines.scoring import normalise, summarise
@@ -27,8 +35,6 @@ from tenant_baselines.world import build_world
 
 log = logging.getLogger(__name__)
 
-DEV_SEEDS = (7, 11, 13)
-AMPLITUDES = (1.5, 6.0, 12.0)
 PATHS_SEED = 7  # the equivalence check's seed (Task 14)
 
 REST = "http://127.0.0.1:8081"
@@ -138,10 +144,20 @@ def submit(
     thresholds_path: str,
     extra: Iterable[str] = (),
     replay_end_ms: int = REPLAY_END_MS,
+    jar: str | None = None,
 ) -> str:
-    """Submit the eval job inside the jobmanager; returns its job id. `thresholds_path` is the
-    path inside the container."""
-    cmd = [*_SUBMIT, run_id, mode, topic, str(replay_end_ms), thresholds_path, *extra]
+    """Submit the eval job inside the jobmanager; returns its job id. `thresholds_path` and `jar`
+    are paths inside the container; without `jar` the build in target/ is used."""
+    cmd = [
+        *_SUBMIT,
+        *(["--jar", jar] if jar else []),
+        run_id,
+        mode,
+        topic,
+        str(replay_end_ms),
+        thresholds_path,
+        *extra,
+    ]
     done = subprocess.run(cmd, cwd=REPO, stdout=subprocess.PIPE, text=True)
     lines = done.stdout.strip().splitlines()
     job_id = lines[-1] if lines else ""
@@ -301,12 +317,14 @@ def run(
     caller cannot hand it a freeze. `rid` lets the official driver log the id before the run.
     """
     t0 = time.monotonic()
-    freeze = None
+    freeze, jar = None, None
     if kind == "off":
-        from tenant_baselines import eval_official  # imports this module, so not at the top
-
-        freeze = eval_official.load_freeze(eval_official.FREEZE_PATH)
+        freeze = load_freeze(FREEZE_PATH)
+        verify_frozen_jar(freeze, REPO)  # the run uses the copy made at the freeze
+        jar = frozen_jar_container_path(freeze)
     rid = rid or run_id(kind, seed, amplitude, datetime.now(UTC))
+    if kind == "off" and not rid.startswith(f"off-s{seed}-a{amplitude:g}-"):
+        raise ValueError(f"run id {rid!r} does not belong to seed {seed} amplitude {amplitude:g}")
     out = Path(data_dir) / rid
     thresholds_path = _container_path(out / "thresholds.json")
     commit, dirty = _commit(), _dirty()
@@ -330,7 +348,7 @@ def run(
 
         stage = "submit"
         start = end_offsets(ALERTS_TOPIC)  # before the submit: the job's first row is after it
-        job_id = submit(rid, "aggregates", topic, thresholds_path)
+        job_id = submit(rid, "aggregates", topic, thresholds_path, **({"jar": jar} if jar else {}))
         log.info("run %s: %d rows produced, job %s submitted", rid, n_rows, job_id)
 
         stage = "job"

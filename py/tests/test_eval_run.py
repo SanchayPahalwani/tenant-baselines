@@ -312,8 +312,9 @@ class FakeStack:
             return self.alerts_ends.pop(0)
         return {0: self.N_ROWS}
 
-    def submit(self, rid, mode, topic, thresholds_path, extra=()):
+    def submit(self, rid, mode, topic, thresholds_path, extra=(), jar=None):
         self.calls.append(("submit", rid, mode, topic, thresholds_path))
+        self.jar = jar
         self.rid = rid
         return JOB
 
@@ -400,3 +401,26 @@ def test_run_defaults_to_the_repos_data_dir():
     default = inspect.signature(eval_run.run).parameters["data_dir"].default
     assert default == eval_run.REPO / "data" / "eval"
     assert (eval_run.REPO / "docker-compose.yml").is_file()
+
+
+def test_an_official_run_submits_the_frozen_jar(stack, monkeypatch, tmp_path):
+    import hashlib
+
+    sha = hashlib.sha256(b"jar").hexdigest()
+    frozen = tmp_path / "data" / "frozen"
+    frozen.mkdir(parents=True)
+    (frozen / f"{sha}.jar").write_bytes(b"jar")
+    fz = tmp_path / "freeze.json"
+    fz.write_text(
+        json.dumps(
+            {
+                "official_seeds": [4101, 4102, 4103, 4104, 4105],
+                "amplitudes": [1.5, 6.0, 12.0],
+                "jar_sha256": sha,
+            }
+        )
+    )
+    monkeypatch.setattr(eval_run, "FREEZE_PATH", fz)
+    rid = "off-s4101-a6-20261113T100000"
+    s = eval_run.run("off", 4101, 6.0, world_name="paths", data_dir=stack.data_dir, rid=rid)
+    assert s["run_id"] == rid and stack.jar == f"/opt/tb-data/frozen/{sha}.jar"

@@ -2,7 +2,11 @@
 # Submit one bounded eval job, detached. Runs inside the jobmanager container:
 #
 #   docker compose exec -T jobmanager bash /opt/tb-scripts/submit-eval.sh \
-#     <run_id> <mode> <input_topic> <replay_end_ms> <thresholds_path> [extra flink option...]
+#     [--jar <path>] <run_id> <mode> <input_topic> <replay_end_ms> <thresholds_path> \
+#     [extra flink option...]
+#
+# --jar names the job jar inside the container; the default is the build in target/. The official
+# runs pass the frozen copy under /opt/tb-data/frozen/.
 #
 # <mode> is aggregates or replay. Each run checkpoints under its own directory,
 # /flink-data/checkpoints/eval/<run_id>, and a run id is never reused. The extra options go to
@@ -18,8 +22,14 @@ fail() {
   exit 1
 }
 
+if [ "${1:-}" = "--jar" ]; then
+  [ "$#" -ge 2 ] || fail "--jar needs a path"
+  JAR=$2
+  shift 2
+fi
+
 if [ "$#" -lt 5 ]; then
-  echo "usage: $0 <run_id> <mode> <input_topic> <replay_end_ms> <thresholds_path> [extra...]" >&2
+  echo "usage: $0 [--jar <path>] <run_id> <mode> <input_topic> <replay_end_ms> <thresholds_path> [extra...]" >&2
   exit 2
 fi
 run_id=$1
@@ -35,7 +45,7 @@ case "$mode" in
   *) fail "mode must be aggregates or replay, got $mode" ;;
 esac
 [[ "$replay_end_ms" =~ ^[0-9]+$ ]] || fail "replay end must be epoch milliseconds, got $replay_end_ms"
-[ -f "$JAR" ] || fail "no job jar at $JAR; run make jar"
+[ -f "$JAR" ] || fail "no job jar at $JAR"
 [ -f "$thresholds" ] || fail "no thresholds file at $thresholds"
 [ ! -e "$CHECKPOINTS/$run_id" ] || fail "$CHECKPOINTS/$run_id exists; a run id is never reused"
 
