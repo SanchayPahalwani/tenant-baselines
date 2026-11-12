@@ -4,11 +4,11 @@ Planning material, like the rest of `docs/superpowers/`. These are review findin
 
 ## Milestone 5
 
-- Measure pipeline delay from `min(emitted_at)` on the non-`FINAL` alert log. Re-emitted alerts carry a later `emitted_at`, and `FINAL` keeps the later row.
-- Delete retained checkpoints of cancelled jobs.
-- Revisit the TaskManager memory (2560m) for benchmark state sizes.
-- Scorer writes machine state every minute even when nothing changed; measure before optimising.
-- Generator: delivery failures surface only after `delivery.timeout.ms` (300 s); consider `error_cb` or a lower timeout.
+- done (milestone 5): Measure pipeline delay from `min(emitted_at)` on the non-`FINAL` alert log. Re-emitted alerts carry a later `emitted_at`, and `FINAL` keeps the later row.
+- done (milestone 5): Delete retained checkpoints of cancelled jobs. (bench jobs only; the live job's retained checkpoints are moved to milestone 6, see m3-followups.)
+- done (milestone 5): Revisit the TaskManager memory (2560m) for benchmark state sizes. (measured: 76.0% and 79.6% of the limit, no restart or OOM kill; kept at 2560m.)
+- done (milestone 5): Scorer writes machine state every minute even when nothing changed; measure before optimising. (measured as busy time per vertex; no optimisation.)
+- done (milestone 5): Generator: delivery failures surface only after `delivery.timeout.ms` (300 s); consider `error_cb` or a lower timeout. (bench script only; the demo generator's timeout is moved to milestone 6.)
 
 ## Milestone 6 (README and compose pass)
 

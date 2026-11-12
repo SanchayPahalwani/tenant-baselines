@@ -4,8 +4,8 @@ Planning material, like the rest of `docs/superpowers/`. These are review findin
 
 ## Milestone 5
 
-- Stale week-4 histogram entries leak in `PopulationBaselines` when a bucket's hour gets no scored minute for a week. Sweep weeks below `w - 4` on each timer.
-- No test drives the generator's minute-to-second seam loop.
+- moved to milestone 6: Stale week-4 histogram entries leak in `PopulationBaselines` when a bucket's hour gets no scored minute for a week. Sweep weeks below `w - 4` on each timer.
+- done (milestone 5): No test drives the generator's minute-to-second seam loop. (the delay run crosses that seam.)
 
 ## Milestone 6
 

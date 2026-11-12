@@ -1,0 +1,318 @@
+{
+  "data": "synthetic",
+  "end_share": 0.9,
+  "env": {
+    "commit": "e60416eff7b5e521c6b3c08a06656624dfd7bbd2",
+    "data": "synthetic",
+    "date_utc": "2026-11-12T15:32:47+00:00",
+    "dirty": false,
+    "flink": {
+      "parallelism.default": "2",
+      "taskmanager.memory.process.size": "2560m",
+      "taskmanager.numberOfTaskSlots": "4",
+      "version": "2.2.1"
+    },
+    "host": {
+      "arch": "arm64",
+      "cores": 12,
+      "cpu": "Apple M3 Pro",
+      "memory_gb": 18.0,
+      "os": "26.5.2"
+    },
+    "images": [
+      "apache/kafka:4.4.0",
+      "apache/kafka:4.4.0",
+      "clickhouse/clickhouse-server:26.8.36.3",
+      "flink:2.2.1-java17",
+      "flink:2.2.1-java17",
+      "flink:2.2.1-java17",
+      "grafana/grafana:13.2.5",
+      "prom/alertmanager:v0.34.2",
+      "tenant-baselines-forwarder",
+      "tenant-baselines-pager-sink"
+    ],
+    "on_battery": false,
+    "other_containers": 12,
+    "power": "Now drawing from 'AC Power'",
+    "vm": {
+      "cpus": 8,
+      "memory_gb": 9.7,
+      "server_version": "28.4.0"
+    }
+  },
+  "fill": {
+    "bytes_per_event": 15.6,
+    "compression": "zstd",
+    "event_minutes": 240,
+    "events": 57590352,
+    "events_per_s": 682317.6,
+    "kafka_bytes": 896843776,
+    "keys": 2000,
+    "partitions": 8,
+    "rpm_per_key": 120,
+    "seconds": 84.4,
+    "topic": "tp-20261112T153247.events"
+  },
+  "invalid_reasons": [],
+  "runs": [
+    {
+      "alert_rows": {},
+      "busiest_vertex": "minute-aggregator -> (aggregates-sink: Writer -> aggregates-sink: Committer, late-events -> late-events-discard: Writer)",
+      "checkpoint": {
+        "checkpointed_size": 10121733,
+        "id": 12,
+        "state_size": 14069994,
+        "vertices": [
+          {
+            "checkpointed_size": 71278,
+            "name": "population-baselines",
+            "state_size": 75709
+          },
+          {
+            "checkpointed_size": 940,
+            "name": "Source: events",
+            "state_size": 940
+          },
+          {
+            "checkpointed_size": 1072163,
+            "name": "region-grouper -> (alerts-sink: Writer -> alerts-sink: Committer, unit-status-sink: Writer -> unit-status-sink: Committer)",
+            "state_size": 1513835
+          },
+          {
+            "checkpointed_size": 265,
+            "name": "Source: ticks",
+            "state_size": 265
+          },
+          {
+            "checkpointed_size": 2195403,
+            "name": "minute-aggregator -> (aggregates-sink: Writer -> aggregates-sink: Committer, late-events -> late-events-discard: Writer)",
+            "state_size": 2195403
+          },
+          {
+            "checkpointed_size": 6781684,
+            "name": "scorer -> scores-sink: Writer -> scores-sink: Committer",
+            "state_size": 10283842
+          },
+          {
+            "checkpointed_size": 0,
+            "name": "drop-ticks",
+            "state_size": 0
+          }
+        ]
+      },
+      "drop_ticks_busy": 0.0604,
+      "events": 57590352,
+      "events_per_s": 179224.2,
+      "events_per_s_source_clock": 179221.1,
+      "host_sleep_s": 0.0,
+      "intervals": 16,
+      "job_id": "fa5aa21adc4a888c29f614831fafd383",
+      "late_events": 0,
+      "load_end": {
+        "cpu_pct_unit": "percent of one CPU",
+        "host_load_1m": 7.91,
+        "other_containers_cpu_pct": 20.3,
+        "project_containers_cpu_pct": 29.9,
+        "vm_cpus": 8
+      },
+      "load_start": {
+        "cpu_pct_unit": "percent of one CPU",
+        "host_load_1m": 7.25,
+        "other_containers_cpu_pct": 65.8,
+        "project_containers_cpu_pct": 163.9,
+        "vm_cpus": 8
+      },
+      "max_interval_rate": 193694.4,
+      "max_read_s": 3.2,
+      "min_interval_rate": 132569.6,
+      "power_end": "Now drawing from 'AC Power'",
+      "reread_samples": 0,
+      "restarts": 0,
+      "run_id": "tp-20261112T153247-r1",
+      "shares": {
+        "Source: events": {
+          "backpressured": 0.8755,
+          "busy": 0.1226,
+          "idle": 0.0019
+        },
+        "Source: ticks": {
+          "backpressured": 0.0,
+          "busy": 0.0011,
+          "idle": 0.999
+        },
+        "drop-ticks": {
+          "backpressured": 0.9395,
+          "busy": 0.0604,
+          "idle": 0.0001
+        },
+        "minute-aggregator -> (aggregates-sink: Writer -> aggregates-sink: Committer, late-events -> late-events-discard: Writer)": {
+          "backpressured": 0.0,
+          "busy": 0.9865,
+          "idle": 0.0136
+        },
+        "population-baselines": {
+          "backpressured": 0.0,
+          "busy": 0.0535,
+          "idle": 0.9465
+        },
+        "region-grouper -> (alerts-sink: Writer -> alerts-sink: Committer, unit-status-sink: Writer -> unit-status-sink: Committer)": {
+          "backpressured": 0.0,
+          "busy": 0.0276,
+          "idle": 0.9724
+        },
+        "scorer -> scores-sink: Writer -> scores-sink: Committer": {
+          "backpressured": 0.0,
+          "busy": 0.1165,
+          "idle": 0.8835
+        }
+      },
+      "source": {
+        "backpressured": 0.8755,
+        "busy": 0.1226,
+        "idle": 0.0019
+      },
+      "stale_samples": 0,
+      "stall_gaps_s": [],
+      "taskmanager_memory": {
+        "limit_bytes": 2684354560,
+        "used_bytes": 2040109466
+      },
+      "timing_error_pct": 1.6,
+      "window_end_s": 264.0,
+      "window_s": 192.0,
+      "window_start_s": 72.0
+    },
+    {
+      "alert_rows": {},
+      "busiest_vertex": "minute-aggregator -> (aggregates-sink: Writer -> aggregates-sink: Committer, late-events -> late-events-discard: Writer)",
+      "checkpoint": {
+        "checkpointed_size": 13856804,
+        "id": 13,
+        "state_size": 14252003,
+        "vertices": [
+          {
+            "checkpointed_size": 65327,
+            "name": "population-baselines",
+            "state_size": 69758
+          },
+          {
+            "checkpointed_size": 940,
+            "name": "Source: events",
+            "state_size": 940
+          },
+          {
+            "checkpointed_size": 865854,
+            "name": "region-grouper -> (alerts-sink: Writer -> alerts-sink: Committer, unit-status-sink: Writer -> unit-status-sink: Committer)",
+            "state_size": 1094377
+          },
+          {
+            "checkpointed_size": 265,
+            "name": "Source: ticks",
+            "state_size": 265
+          },
+          {
+            "checkpointed_size": 2976790,
+            "name": "minute-aggregator -> (aggregates-sink: Writer -> aggregates-sink: Committer, late-events -> late-events-discard: Writer)",
+            "state_size": 2976790
+          },
+          {
+            "checkpointed_size": 9947628,
+            "name": "scorer -> scores-sink: Writer -> scores-sink: Committer",
+            "state_size": 10109873
+          },
+          {
+            "checkpointed_size": 0,
+            "name": "drop-ticks",
+            "state_size": 0
+          }
+        ]
+      },
+      "drop_ticks_busy": 0.0599,
+      "events": 57590352,
+      "events_per_s": 151897.4,
+      "events_per_s_source_clock": 151829.2,
+      "host_sleep_s": 0.0,
+      "intervals": 20,
+      "job_id": "1b1f8ab83e6c3220d0a84b0707ce7f63",
+      "late_events": 0,
+      "load_end": {
+        "cpu_pct_unit": "percent of one CPU",
+        "host_load_1m": 7.53,
+        "other_containers_cpu_pct": 16.5,
+        "project_containers_cpu_pct": 90.2,
+        "vm_cpus": 8
+      },
+      "load_start": {
+        "cpu_pct_unit": "percent of one CPU",
+        "host_load_1m": 6.47,
+        "other_containers_cpu_pct": 12.7,
+        "project_containers_cpu_pct": 21.9,
+        "vm_cpus": 8
+      },
+      "max_interval_rate": 193124.3,
+      "max_read_s": 3.3,
+      "min_interval_rate": 106655.3,
+      "power_end": "Now drawing from 'AC Power'",
+      "reread_samples": 0,
+      "restarts": 0,
+      "run_id": "tp-20261112T153247-r2",
+      "shares": {
+        "Source: events": {
+          "backpressured": 0.8722,
+          "busy": 0.1264,
+          "idle": 0.0019
+        },
+        "Source: ticks": {
+          "backpressured": 0.0,
+          "busy": 0.0016,
+          "idle": 0.9989
+        },
+        "drop-ticks": {
+          "backpressured": 0.9404,
+          "busy": 0.0599,
+          "idle": 0.0001
+        },
+        "minute-aggregator -> (aggregates-sink: Writer -> aggregates-sink: Committer, late-events -> late-events-discard: Writer)": {
+          "backpressured": 0.0,
+          "busy": 0.988,
+          "idle": 0.0125
+        },
+        "population-baselines": {
+          "backpressured": 0.0,
+          "busy": 0.0571,
+          "idle": 0.9435
+        },
+        "region-grouper -> (alerts-sink: Writer -> alerts-sink: Committer, unit-status-sink: Writer -> unit-status-sink: Committer)": {
+          "backpressured": 0.0,
+          "busy": 0.0279,
+          "idle": 0.9727
+        },
+        "scorer -> scores-sink: Writer -> scores-sink: Committer": {
+          "backpressured": 0.0,
+          "busy": 0.1172,
+          "idle": 0.8833
+        }
+      },
+      "source": {
+        "backpressured": 0.8722,
+        "busy": 0.1264,
+        "idle": 0.0019
+      },
+      "stale_samples": 0,
+      "stall_gaps_s": [],
+      "taskmanager_memory": {
+        "limit_bytes": 2684354560,
+        "used_bytes": 2136746230
+      },
+      "timing_error_pct": 1.3,
+      "window_end_s": 312.0,
+      "window_s": 240.0,
+      "window_start_s": 72.0
+    }
+  ],
+  "sample_interval_s": 12,
+  "settings": 3,
+  "spread_pct": 16.5,
+  "valid": true,
+  "warmup_s": 60
+}

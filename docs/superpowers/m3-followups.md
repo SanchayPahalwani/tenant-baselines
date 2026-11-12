@@ -4,16 +4,16 @@ Planning material, like the rest of `docs/superpowers/`. These are review findin
 
 ## Milestone 5 (throughput and delay)
 
-- The union of events and ticks adds one local channel hop per event; measure it in the benchmark.
-- The fixed-rate benchmark keeps every partition busy, so its delay figures see a watermark lag of about 21 s. The write-up must say that a sparse partition adds up to 60 s.
-- `unit-tenants` state removes stale unit/tenant pairs only lazily. Watch state size.
-- `ticksDoNotOutrunABacklog` would pass without ticks: end of input closes all three minutes. Collect one more minute so only a tick can close it. Smoke check 10 pins the property end to end meanwhile.
-- `watermark-lag.sh` reports a lag over 24 h as "no watermark yet", which is misleading during a history replay.
-- **Clock step-back.** The Docker VM's wall clock stepped back about 100 ms once, and Flink refused a MiniCluster task start (`SubTaskInitializationMetrics`: endTs >= startTs). On Colima it follows host sleep, so `make test-java` can flake after a sleep. In a live job it costs a restart, with a freeze of up to 60 s.
+- done (milestone 5): The union of events and ticks adds one local channel hop per event; measure it in the benchmark.
+- done (milestone 5): The fixed-rate benchmark keeps every partition busy, so its delay figures see a watermark lag of about 21 s. The write-up must say that a sparse partition adds up to 60 s.
+- done (milestone 5): measured, fix moved to milestone 6: `unit-tenants` state removes stale unit/tenant pairs only lazily. Watch state size.
+- done (milestone 5): `ticksDoNotOutrunABacklog` would pass without ticks: end of input closes all three minutes. Collect one more minute so only a tick can close it. Smoke check 10 pins the property end to end meanwhile.
+- done (milestone 5): `watermark-lag.sh` reports a lag over 24 h as "no watermark yet", which is misleading during a history replay.
+- done (milestone 5): guard and note; the `make test-java` flake is moved to milestone 6. **Clock step-back.** The Docker VM's wall clock stepped back about 100 ms once, and Flink refused a MiniCluster task start (`SubTaskInitializationMetrics`: endTs >= startTs). On Colima it follows host sleep, so `make test-java` can flake after a sleep. In a live job it costs a restart, with a freeze of up to 60 s.
 
-- **Checkpoint size in the eval summaries.** The summaries record it, and §6 reads state size from it. With a hashmap backend it is not the size of a RocksDB state, so §6 needs one run on RocksDB instead.
-- **Busy times from the eval runs** (Task 15): the `scorer` and `region-grouper` busy times belong in the throughput write-up.
-- **`live.*` topics carry event time.** The `live.*` output topics are stamped with event time, so the broker's 7-day retention deletes backfilled rows within hours of the write (seen on the demo stack: `live.alerts` starting at offset 8). The forwarder's rebuild from the start of `live.alerts` then misses them. Give `live.*` `LogAppendTime` too, or say why not.
+- done (milestone 5): **Checkpoint size in the eval summaries.** The summaries record it, and §6 reads state size from it. With a hashmap backend it is not the size of a RocksDB state, so §6 needs one run on RocksDB instead.
+- done (milestone 5): **Busy times from the eval runs** (Task 15): the `scorer` and `region-grouper` busy times belong in the throughput write-up.
+- moved to milestone 6: **`live.*` topics carry event time.** The `live.*` output topics are stamped with event time, so the broker's 7-day retention deletes backfilled rows within hours of the write (seen on the demo stack: `live.alerts` starting at offset 8). The forwarder's rebuild from the start of `live.alerts` then misses them. Give `live.*` `LogAppendTime` too, or say why not.
 
 From the milestone 4 final review:
 
@@ -71,3 +71,19 @@ From the milestone 4 final review:
   - `make eval` still starts the stack (`eval: up`), so "it now only renders" needs Docker.
   - `eval_report.py` still defines its own `REPO`; import it from `freeze`.
   - The test resource `thresholds-eval-dev-s7-a6.json` cannot carry a "synthetic" label: the format has no field for one. Its test says so instead.
+- **From milestone 5:**
+  - The live job's retained checkpoints are not deleted (`submit-job.sh` restores from them; a change needs `make smoke`).
+  - The `live.*` topics' retention (see above).
+  - The `PopulationBaselines` sweep of stale week-4 entries (see `m2-followups.md`).
+  - The `unit-tenants` removal of stale pairs. Milestone 5 measured `region-grouper`'s state at 2,000 keys and after five weeks; no bench world makes a pair stale.
+  - The demo generator's delivery timeout (300 s); only `--script bench` has the shorter one.
+  - One `make smoke` on `gen_live`'s loop, which now goes through `take_step`.
+  - The offset correction for `watermark-lag.sh`.
+  - The `make test-java` flake after a host sleep (README troubleshooting note).
+  - Move or link the extrapolation table into `docs/design.md`, and reconcile the key count there (48 in the eval world, 60 in the spec).
+  - A README performance block rendered from `docs/performance/`.
+  - **Power disclosure.** The published delay run (`delay-20261112T154647`) had the charger out for about 5½ minutes, 21:21:30 to 21:27 IST, seen by the controller's power watch. The driver reads power only at its start and end, both AC, so the result says AC. Sample `pmset -g ps` during runs and record any change.
+  - Move the shared private helpers (`bench_throughput._load`, `_settings`, `_wait_running`, `bench_flink._json`, `bench_env._sh`/`_power_line`) into `bench_env`/`bench_flink`.
+  - One read-twice helper for `sample`, `late_events` and `watermark_lag_sample`.
+  - The two restart edges that end as `RunFailed`: a restart before the first checkpoint, and one after the last sample.
+  - `check_paths.py`'s monotonic `total` (listed above).
