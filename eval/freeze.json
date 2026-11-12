@@ -1,0 +1,44 @@
+{
+  "frozen_on": "2026-11-12",
+  "dev_seeds": [
+    7,
+    11,
+    13
+  ],
+  "official_seeds": [
+    4101,
+    4102,
+    4103,
+    4104,
+    4105
+  ],
+  "amplitudes": [
+    1.5,
+    6.0,
+    12.0
+  ],
+  "main_amplitude": 6.0,
+  "seasonal_k": [
+    3,
+    4,
+    5,
+    6
+  ],
+  "percentiles": [
+    99,
+    99.9,
+    99.97,
+    99.99
+  ],
+  "selection": {
+    "recall": "expected_signal",
+    "ties": [
+      "false_pages_per_day",
+      "median_delay",
+      "less_sensitive"
+    ]
+  },
+  "world": "eval",
+  "jar_sha256": "1dff21f3fcc1c6ba11b72c0400843c5adf9d2a4a2a55ebd3a8371d1046e6e78e",
+  "note": "synthetic data"
+}

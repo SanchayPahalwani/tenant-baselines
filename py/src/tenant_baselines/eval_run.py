@@ -73,6 +73,10 @@ def _check_seed(kind: str, world_name: str, seed: int, freeze: dict | None) -> N
                 f"an official run uses one of the frozen seeds {freeze['official_seeds']},"
                 f" not {seed}"
             )
+        if seed in DEV_SEEDS:
+            raise SeedNotAllowed(
+                f"seed {seed} is a dev seed {DEV_SEEDS}; an official run cannot use it"
+            )
     elif kind == "paths":
         if world_name != "paths" or seed != PATHS_SEED:
             raise SeedNotAllowed(
@@ -285,15 +289,24 @@ def run(
     amplitude: float,
     world_name: str = "eval",
     data_dir: str | Path = DATA_DIR,
+    rid: str | None = None,
 ) -> dict:
     """Generate, produce, replay through the job in aggregates mode, read back, score.
 
     Writes `alerts.jsonl` (the run's alert log in normal form) and `summary.json` beside the
     files of `prepare`, in `<data_dir>/<run_id>/`, and returns the summary. A run that fails
     once its directory exists leaves `failed.json` there instead (stage, error, job id).
+
+    An official run (`kind="off"`) loads `eval/freeze.json` itself and is checked against it; a
+    caller cannot hand it a freeze. `rid` lets the official driver log the id before the run.
     """
     t0 = time.monotonic()
-    rid = run_id(kind, seed, amplitude, datetime.now(UTC))
+    freeze = None
+    if kind == "off":
+        from tenant_baselines import eval_official  # imports this module, so not at the top
+
+        freeze = eval_official.load_freeze(eval_official.FREEZE_PATH)
+    rid = rid or run_id(kind, seed, amplitude, datetime.now(UTC))
     out = Path(data_dir) / rid
     thresholds_path = _container_path(out / "thresholds.json")
     commit, dirty = _commit(), _dirty()
@@ -301,7 +314,7 @@ def run(
     stage, job_id = "generate", None
     try:
         log.info("run %s: generating", rid)
-        a, scenarios = prepare(kind, world_name, seed, amplitude, out)
+        a, scenarios = prepare(kind, world_name, seed, amplitude, out, freeze)
         t_generate = time.monotonic() - t0
 
         stage = "produce"

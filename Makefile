@@ -10,7 +10,7 @@ CI_PY_IMAGE = tenant-baselines-ci-py
 .NOTPARALLEL:
 
 .PHONY: jar test-java test-py lint-py thresholds-demo check-am test ci up down reset submit demo smoke logs \
-	eval-dev check-paths results
+	eval-dev check-paths results eval
 
 # The dev seed and amplitude of `make eval-dev`.
 SEED ?= 7
@@ -85,3 +85,19 @@ check-paths: jar up
 # Renders docs/results.md from docs/results/summaries (synthetic data).
 results:
 	cd py && uv run python -m tenant_baselines.eval_report --summaries ../docs/results/summaries --out ../docs/results.md
+
+# The official runs (synthetic data), once per (seed, amplitude), then docs/results.md. The jar is
+# the one built at the freeze, so `up` and not `jar`. Resumes after an interruption.
+# EVAL_ARGS="--only-seed 4101 --only-amplitude 6 --rerun-reason 'bug: ...'" repeats one run.
+# KEEP_AWAKE=1 wraps the driver in caffeinate; the default touches nothing about sleep.
+KEEP_AWAKE ?= 0
+ifeq ($(KEEP_AWAKE),1)
+AWAKE = caffeinate -is
+endif
+
+eval: up
+ifeq ($(KEEP_AWAKE),1)
+	@echo "caffeinate -is: no idle sleep while this runs, and no system sleep on AC power. It does not stop the sleep when the lid closes. Keep the lid open."
+endif
+	cd py && $(AWAKE) uv run python -m tenant_baselines.eval_official $(EVAL_ARGS) \
+		&& uv run python -m tenant_baselines.eval_report --summaries ../docs/results/summaries --out ../docs/results.md
