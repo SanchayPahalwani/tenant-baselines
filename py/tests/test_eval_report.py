@@ -1,5 +1,7 @@
 import copy
 import json
+import re
+import shutil
 import subprocess
 from datetime import UTC, datetime, timedelta
 
@@ -669,12 +671,15 @@ def test_measured_code_diff_lists_sorted_paths(monkeypatch):
 
 
 def test_a_measured_file_moved_into_the_dashboards_is_caught(tmp_path, monkeypatch):
+    if shutil.which("git") is None:
+        pytest.skip("git is not available")
+
     def git(*args):
-        subprocess.run(["git", "-C", str(tmp_path), *args], check=True, capture_output=True)
+        base = ["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@example.com"]
+        cmd = [*base, "-c", "commit.gpgsign=false", *args]
+        subprocess.run(cmd, check=True, capture_output=True)
 
     git("init", "-q")
-    git("config", "user.email", "t@example.com")
-    git("config", "user.name", "t")
     src = tmp_path / "infra/grafana/provisioning/datasources/clickhouse.yml"
     src.parent.mkdir(parents=True)
     src.write_text("apiVersion: 1\n" * 20)
@@ -910,13 +915,97 @@ def test_method_notes_name_every_tie_break_and_date_the_connector(summaries):
     assert "connector 5.1.0, which is not released as of 2026-11-12" in t
 
 
+DASHBOARD_PARENTS = {".", "infra", "infra/grafana", "infra/grafana/dashboards"}
+
+
+def dashboard_mounts(compose: str) -> list[str]:
+    """The services that bind-mount the dashboard directory or a parent of it, in short or long
+    (`source:`) form."""
+
+    def norm(host: str) -> str:
+        host = host.strip().strip("\"'").rstrip("/")
+        host = host[2:] if host.startswith("./") else host
+        return host or "."
+
+    services, service = [], None
+    for line in compose.splitlines():
+        m = re.match(r"^  ([\w.-]+):\s*$", line)
+        if m:
+            service = m.group(1)
+            continue
+        item = re.match(r"^\s+-\s+(?:source:\s*)?(\S+?)(?::\S*)?\s*$", line)
+        src = re.match(r"^\s+(?:-\s+)?source:\s*(\S+)\s*$", line)
+        host = src.group(1) if src else item.group(1) if item else None
+        if host is not None and norm(host) in DASHBOARD_PARENTS:
+            services.append(service)
+    return services
+
+
+def test_dashboard_mount_scan_sees_short_and_long_forms():
+    compose = """services:
+  grafana:
+    volumes:
+      - ./infra/grafana/dashboards:/etc/grafana/dashboards:ro
+  a:
+    volumes:
+      - ./infra:/x
+  b:
+    volumes:
+      - type: bind
+        source: ./infra/grafana/
+        target: /y
+  c:
+    volumes:
+      - .:/z:ro
+  d:
+    volumes:
+      - ./infra/kafka:/k
+      - kafka-data:/data
+"""
+    assert dashboard_mounts(compose) == ["grafana", "a", "b", "c"]
+
+
 def test_dashboards_are_mounted_only_into_grafana():
     """A pin: no measured service reads the dashboard directory."""
-    lines = (freeze.REPO / "docker-compose.yml").read_text().splitlines()
-    service, mounts = None, []
-    for line in lines:
-        if line.startswith("  ") and not line.startswith("   ") and line.strip().endswith(":"):
-            service = line.strip()[:-1]
-        if "infra/grafana/dashboards:" in line:
-            mounts.append(service)
-    assert mounts == ["grafana"]
+    assert dashboard_mounts((freeze.REPO / "docker-compose.yml").read_text()) == ["grafana"]
+
+
+def first_word(sql: str) -> str:
+    """The first keyword of a query, ignoring leading whitespace and -- and /* */ comments."""
+    rest = sql
+    while True:
+        rest = rest.lstrip()
+        if rest.startswith("--"):
+            rest = rest.partition("\n")[2]
+        elif rest.startswith("/*"):
+            rest = rest.partition("*/")[2]
+        else:
+            return (rest.split() or [""])[0].upper()
+
+
+def test_first_word_skips_comments():
+    assert first_word("  -- note\n /* x */ select 1") == "SELECT"
+    assert first_word("INSERT INTO t VALUES (1)") == "INSERT"
+
+
+def test_every_dashboard_query_only_reads():
+    """A pin: Grafana logs in to ClickHouse as the admin user, so the dashboards must not write."""
+
+    def queries(node):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if k == "rawSql":
+                    yield v
+                else:
+                    yield from queries(v)
+        elif isinstance(node, list):
+            for v in node:
+                yield from queries(v)
+
+    files = sorted((freeze.REPO / "infra/grafana/dashboards").glob("*.json"))
+    assert files
+    found = [q for f in files for q in queries(json.loads(f.read_text()))]
+    assert found
+    assert [q[:40] for q in found if first_word(q) not in ("SELECT", "WITH")] == []
+    doc = {"panels": [{"targets": [{"rawSql": "-- x\nINSERT INTO tb.scores VALUES (1)"}]}]}
+    assert [first_word(q) for q in queries(doc)] == ["INSERT"]
