@@ -1,5 +1,6 @@
 import pytest
 
+from tenant_baselines import bench_flink
 from tenant_baselines import bench_throughput as bt
 
 
@@ -22,7 +23,7 @@ def test_sustained_rate_excludes_warmup_and_the_last_tenth():
         "intervals": 13,
         "min_interval_rate": 100_000.0,
         "max_interval_rate": 100_000.0,
-        "timing_error_pct": 1.3,
+        "timing_error_pct": round(100 * 2 * bench_flink.REFRESH_WAIT_S / 156, 1),
     }
 
 

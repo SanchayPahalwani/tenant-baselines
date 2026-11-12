@@ -121,7 +121,7 @@ endif
 	cd py && $(AWAKE) uv run python -m tenant_baselines.eval_official $(EVAL_ARGS) \
 		&& uv run python -m tenant_baselines.eval_report --summaries ../docs/results/summaries --out ../docs/results.md
 
-BENCH_MINUTES ?= 150
+BENCH_MINUTES ?= 60
 # The throughput benchmark (synthetic data): pre-fills a topic, then reads it twice with the
 # live job. Needs AC power, no other job on the cluster, and the Flink web UI closed.
 bench-throughput: jar up

@@ -100,7 +100,7 @@ def sustained_rate(
         "intervals": intervals,
         "min_interval_rate": round(min(rates), 1),
         "max_interval_rate": round(max(rates), 1),
-        "timing_error_pct": round(100 * 2 * 1 / span, 1),
+        "timing_error_pct": round(100 * 2 * bench_flink.REFRESH_WAIT_S / span, 1),
     }
 
 
@@ -302,7 +302,7 @@ def _summarise(run_id: str, job_id: str, total: int, samples: list[dict], pilot:
 
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="Throughput benchmark (synthetic data)")
-    ap.add_argument("--minutes", type=int, default=150)
+    ap.add_argument("--minutes", type=int, default=60)
     ap.add_argument("--rpm", type=float, default=120)
     ap.add_argument("--runs", type=int, default=2)
     ap.add_argument("--seed", type=int, default=1)
