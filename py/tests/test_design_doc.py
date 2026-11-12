@@ -54,6 +54,8 @@ NOT_FIGURES = (
 )
 EXCUSED = re.compile(r"\bspec \d|\bconfigured\b|\bestimate")
 SPEC_REF = re.compile(r"\bspec \d+(?:\.\d+)?")
+SENTENCE_END = re.compile(r"(?<=[.;])\s+")
+CODE_SPAN = re.compile(r"`[^`]*`")
 
 
 def text() -> str:
@@ -102,12 +104,18 @@ def prose_lines() -> list[str]:
 
 
 def measured_looking(line: str) -> bool:
-    """Whether the line carries a number that could be a measured figure and is not excused."""
-    for pattern in NOT_FIGURES:
-        line = pattern.sub("", line)
-    if EXCUSED.search(line):
+    """Whether a sentence of the line carries a number that could be a measured figure and is
+    not excused. Each sentence is judged alone, so a spec citation excuses only its own."""
+    line = NOT_FIGURES[0].sub("", line)
+    return any(_sentence_measured_looking(s) for s in SENTENCE_END.split(line))
+
+
+def _sentence_measured_looking(sentence: str) -> bool:
+    for pattern in NOT_FIGURES[1:]:
+        sentence = pattern.sub("", sentence)
+    if EXCUSED.search(sentence):
         return False
-    for token in tokens(line):
+    for token in tokens(sentence):
         for part in token.split("/"):
             if "." in part or len(part.replace(",", "")) >= 4:
                 return True
@@ -162,16 +170,25 @@ def test_the_diagram():
         assert list(main.rglob(f"{cls}.java")), cls
         assert cls in fence, cls
     assert "agg --> grp" in fence
+    assert 'pg -. "notifications panel" .-> ch' in fence
+
+
+def _cells(line: str) -> list[str]:
+    return [c.strip() for c in line.strip().strip("|").split("|")]
 
 
 def test_the_headline_block_is_the_results():
-    rows = [
-        tuple(c.strip() for c in line.strip().strip("|").split("|"))
-        for line in block("headline").splitlines()
-        if line.startswith("| ") and not line.startswith("| Family")
-    ]
+    results = (DOCS / "results.md").read_text()
+    lines = block("headline").splitlines()
+    source = next(
+        line
+        for line in results[results.index("## Headline") :].splitlines()
+        if line.startswith("| Family")
+    )
+    assert _cells(lines[0]) == [_cells(source)[i] for i in (0, 2, 5)]
+    rows = [tuple(_cells(line)) for line in lines if line.startswith("| ") and line != lines[0]]
     assert len(rows) == 3
-    assert rows == headline_rows((DOCS / "results.md").read_text())
+    assert rows == headline_rows(results)
 
 
 def _performance_files() -> dict[str, dict]:
@@ -218,6 +235,16 @@ def test_tagged_lines_carry_only_their_sources_figures():
     assert tagged >= 3
 
 
+def test_every_tag_ends_its_line():
+    """A tag that does not end its line, a full stop after it say, would switch off the check."""
+    misplaced = [
+        line
+        for line in prose_lines()
+        if any(tag in CODE_SPAN.sub("", line) for tag in TAGS) and tag_of(line) is None
+    ]
+    assert misplaced == []
+
+
 def test_untagged_lines_carry_no_measured_looking_number():
     offending = [line for line in prose_lines() if tag_of(line) is None and measured_looking(line)]
     assert offending == []
@@ -229,6 +256,8 @@ def test_the_number_rule_on_literal_lines():
     assert measured_looking("a specific 9.63")
     assert not measured_looking("p99.9 at 1.5:1 on connector 5.0.0-2.2")
     assert not measured_looking("1.4826 × MAD (spec 4.3)")
+    assert measured_looking("Recall was 9.63. See spec 4.3.")
+    assert not measured_looking("Recall is about 2.3 (spec 4.3); the bound is 20 s.")
 
 
 def test_the_world_is_48_keys():

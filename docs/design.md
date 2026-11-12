@@ -18,7 +18,7 @@ This document gives the reason for each choice in [the spec](superpowers/specs/2
 - "(owner's call)" marks a decision of the owner: one of the spec's §10 decisions, or a dated amendment in the spec.
 - "(builder's call)" marks a decision made while building. Each is recorded in the spec or in a milestone plan.
 - Each choice is stated, then its reason, then what it costs.
-- Measured figures sit in three blocks. Each is pasted unchanged from a script's output, and a test compares the two. They are the eval headline (§9), the performance table (§10) and the state extrapolation (§10).
+- Figures sit in three blocks. Each is pasted unchanged from a script's output, and a test compares the two. The eval headline (§9) and the performance table (§10) are measured. The state extrapolation (§10) is arithmetic on a measurement, not a measurement.
 - A few other figures sit on lines that end with a source tag, `([results](results.md))` or `([performance](performance.md))`. A test checks that every number on such a line appears in the file the tag names.
 - A value marked "configured" is set in the code or in the stack's configuration. It is a design value, not a measurement. "spec 4.3" cites a section of the spec.
 - The milestone plans hold the detail behind the builder's calls: [milestone 1](superpowers/plans/2026-11-09-m1-static-end-to-end.md), [milestone 2](superpowers/plans/2026-11-10-m2-seasonal-baselines.md), [milestone 3](superpowers/plans/2026-11-11-m3-alert-noise-control.md), [milestone 4](superpowers/plans/2026-11-12-m4-eval.md), [milestone 5](superpowers/plans/2026-11-12-m5-throughput-delay.md) and [milestone 6](superpowers/plans/2026-11-13-m6-readme-design.md). What the build left open is in [the open items](superpowers/open-items.md).
@@ -73,7 +73,7 @@ flowchart LR
 - **The replay watermark** (spec 4.2): a bound of 20 s, idleness after 30 s and watermark alignment across partitions (configured). The generator writes in time order per partition. Out-of-order writes would be dropped as late.
 - **The live watermark** (spec 4.2). Each events partition has a bound of 20 s and goes idle after 60 s without an event (configured).
 - A second source emits one tick a second, stamped with the TaskManager's wall clock, with the same bound. The two streams are unioned, and the ticks are dropped before `MinuteAggregator`. Its watermark is then the lower of the two.
-- While the job is behind, after a backfill or a restore, that is pure event time. Once it has caught up, it is the wall clock less the bound, held back by the newest event of the slowest partition that is not idle.
+- While the job is behind, after a backfill or a restore, that is pure event time. Once it has caught up, it is the wall clock less the bound. The newest event of the slowest partition that is not idle can hold it back further.
 - When every producer is silent, the partitions go idle and the ticks keep minutes closing. *Reason:* a total outage is exactly when minutes must keep closing, and a restore during the outage must not stop them.
 - **The 2026-11-11 amendment** (owner's call). The tick source replaced a custom generator that latched to the wall clock. That generator could not advance after a restore during a total outage. It could also hand over to the wall clock while a partition still had unread events. *Cost:* the live watermark trusts two clocks, the producers' and the TaskManager's. The list below is what that costs.
 
@@ -92,9 +92,9 @@ flowchart LR
 - **Buckets** (owner's call, spec 4.3). Each key has 168 hour-of-week buckets per signal, in UTC.
 - Each bucket keeps one-minute values from the last 4 weeks, not counting the current week, in a ring of 5 weekly slots (`BucketHistory`). *Reason:* traffic that follows working hours repeats every week, and an hour of the week holds enough values for robust statistics. *Cost:* an hour bucket blurs changes within the hour (see "Known limits").
 - **The statistic** (owner's call): the median, and a spread of 1.4826 × MAD (spec 4.3). *Reason:* robust statistics are the point. An outage last week barely moves the median. *Cost:* the bucket must keep its values, not a running sum. That history is most of a key's state (§10).
-- **Every minute feeds the baseline** (owner's call), including minutes while an alert fires. *Reason:* the baseline then does not depend on what the detector decided, and the median keeps a short incident from moving it. *Cost:* a lasting problem is absorbed in about 2 weeks (spec 4.3), and its alert then resolves silently. The static opponents get the opposite treatment: their fit leaves incidents out (§6).
+- **Every minute feeds the baseline** (owner's call), including minutes while an alert fires. *Reason:* the baseline then does not depend on what the detector decided, and a short incident barely moves the median (spec 4.3). *Cost:* a lasting problem is absorbed in about 2 weeks (spec 4.3), and its alert then resolves silently. The static opponents get the opposite treatment: their fit leaves incidents out (§6).
 - **A score** is the distance from the baseline in units of spread, in the bad direction only (spec 4.3).
-- **Error rate up** (builder's call on the floor). The spread is the larger of 1.4826 × MAD and √(p₀(1−p₀)/n), with p₀ the larger of the median and 0.5%, and n the minute's request count (spec 4.3). *Reason:* the second term is binomial sampling noise. Without it, MAD is 0 on most keys and a single error looks infinite. At n = 37, one error scores about 2.3 and two score about 4.6 (spec 4.3).
+- **Error rate up** (builder's call on the floor). The spread is the larger of 1.4826 × MAD and √(p₀(1−p₀)/n) (spec 4.3). Here p₀ is the larger of the median and 0.5%, and n is the minute's request count (spec 4.3). *Reason:* the second term is binomial sampling noise. Without it, MAD is 0 on most keys and a single error looks infinite. At n = 37, one error scores about 2.3 and two score about 4.6 (spec 4.3).
 - **Latency up** (p95; builder's call on the floor). The spread is the larger of 1.4826 × MAD and 5% of the median (spec 4.3). *Reason:* MAD already holds the p95's sampling noise, because the history's minutes have similar counts. The 5% floor keeps a flat history from making a small rise look large.
 - **Volume down, on the trailing 5-minute sum** (builder's call on the window). Expected is the sum of the five minutes' bucket medians.
 - The spread is the larger of the square root of the five minutes' summed squared spreads and √expected (`VolumeRing.spread`). That equals the spec's √5 · 1.4826·MAD when the five minutes share a bucket (spec 4.3). *Reason:* per-minute volume cannot see silence on small keys. Silence scores √median, which reaches 4 only at 16 requests a minute. The 5-minute sum reaches 4 at about 3.2 requests a minute (spec 4.3). *Cost:* the sum carries a scenario's effect for 4 more minutes, which the static fit's mask follows (§6).
@@ -117,14 +117,14 @@ flowchart LR
 ## 5. Cold start
 
 - **When a key falls back** (owner's call, spec 4.4). A key uses a fallback in a bucket while it has fewer than 2 weeks of data there. A week of data is at least 30 scored minutes in that bucket that week (configured, `BucketHistory`).
-- **Error rate and latency fall back** to the region's baseline, then to the global one (`Scorer.baselineFor`). *Reason:* a new key in a region usually sees that region's error rate and latency. A population baseline is better than none.
+- **Error rate and latency fall back** to the region's baseline, then to the global one (`Scorer.baselineFor`). *Reason:* a new key has no history of its own, and a population baseline is better than none. For latency it is a broad one: latency follows the unit (spec 5.2), and the region's baseline mixes its units.
 - **Volume waits** for the key's own 2 weeks, and the zero-traffic rule covers it meanwhile. *Reason:* a key's volume is its own size, and other keys say nothing about it.
 - **How the fallbacks are built** (builder's call). `PopulationBaselines` runs at parallelism 1. It keeps a log-bucket histogram of every key's minute values, per region and globally, per hour-of-week bucket and per week. Median and MAD are read from the histogram. *Reason:* a histogram has a fixed size whatever the number of keys. *Cost:* one subtask sees every minute aggregate (§11).
 - When a bucket's hour ends, the operator broadcasts that bucket's baseline for next week, built from the last 4 weeks, the ending one included.
 - **Why the broadcast cannot race.** The broadcast input is not ordered against the keyed input. An update arrives a week of event time before it is used, so it is in place when the bucket comes round. *Cost:* a fallback baseline is a week old.
 - **The cold-start burst** (spec 5.4) is an error burst on a tenant that onboarded at the start of week 4. The owner had it placed literally, at any time in the week (milestone 4 plan).
-- It has no volume rule, so it can land in minutes the seasonal detector does not score (milestone 4).
-- At the selected settings on week 5, the cold-start burst was found on its expected signal in 2/5 scenarios by seasonal, 3/5 by per key static and 4/5 by global static ([results](results.md))
+- It has no volume rule, so it can land in minutes with fewer than 20 requests, which no family scores (minimum evidence, spec 4.3). The families share that rule, so it does not explain why their counts below differ.
+- Cold-start bursts found at the selected settings on week 5: 2/5 for seasonal, 3/5 for per key static and 4/5 for global static ([results](results.md))
 
 ## 6. Fire, resolve and the static opponents
 
@@ -144,7 +144,7 @@ flowchart LR
 - Per-key and global static use the percentiles {99, 99.9, 99.97, 99.99} for the up signals, mirrored as {1, 0.1, 0.03, 0.01} for volume (spec 4.6).
 - The grids were fixed in the spec before any detector code existed, and frozen in `eval/freeze.json`.
 - **The inclusive fire comparison** (milestone 4 ruling). Every detector fires at or past its level, as spec 4.5 says (`Level.judge`).
-- The values are discrete: bucketed p95, error counts over request counts, whole 5-minute sums. So a static threshold is breached on calibration minutes more often than its nominal percentile, and static false pages run somewhat higher than the percentile alone suggests. *Why it was not changed:* spec 4.5 applies one state machine to every detector, and spec 4.6 says only the reference differs. A change would be a detector change after the freeze. `docs/results.md` states the effect in its method notes.
+- The values are discrete: bucketed p95, error counts over request counts, whole 5-minute sums. So a static threshold is breached on calibration minutes more often than its nominal percentile. Static false pages then run somewhat higher than the percentile alone suggests. *Why it was not changed:* spec 4.5 applies one state machine to every detector, and spec 4.6 says only the reference differs. A change would be a detector change after the freeze. `docs/results.md` states the effect in its method notes.
 
 ## 7. Regional grouping and unit status
 
@@ -158,8 +158,10 @@ flowchart LR
 - **Alerts already sent stay sent.** A tenant alert sent before the regional alert formed has already paged. The eval counts it.
 - In the demo, an Alertmanager inhibit rule mutes its repeats while the regional alert fires, as a backstop (owner's call).
 - **Night outages** (spec 4.7). At night few tenants may be active, so a regional outage can turn into several tenant pages. The eval reports whether a regional alert formed and how many pages there were.
-- At the selected settings, a regional alert formed in all 5/5 week-5 outages in every family, with 3.00 pages per detected outage for seasonal, 2.20 for per key static and 2.40 for global static ([results](results.md))
-- The two night outages, at Fri 05:08 and Wed 00:08 local time, formed a regional alert in every family, and the seasonal setting sent 1 and 4 pages for them ([results](results.md))
+- At the selected settings, a regional alert formed in all 5/5 week-5 outages, in every family ([results](results.md))
+- Pages per detected outage were 3.00 for seasonal, 2.20 for per key static and 2.40 for global static ([results](results.md))
+- The two night outages started at Fri 05:08 and Wed 00:08 local time, and each formed a regional alert in every family ([results](results.md))
+- For those two outages, the seasonal setting sent 1 and 4 pages ([results](results.md))
 - **Unit status is published only** (owner's call, spec 4.8). The grouper writes `drain` and `undrain` events to the compacted topic `<ns>.unit-status`, shown in Grafana. Nothing acts on them. *Reason:* moving traffic is out of scope (§12). Publishing shows what the rule would do.
 - **The drain rule** (builder's call). A unit drains while its keys show a sent error-rate or latency alert of the live setting. A held or absorbed alert does not count.
 - On a dedicated unit, one tenant's alert is enough. The grouper counts a unit as dedicated when only one tenant sent it a request in the expiry period. On a shared unit, at least 2 tenants must alert on the same signal.
@@ -167,7 +169,7 @@ flowchart LR
 - **No drain on volume down.** *Reason:* the cause of a traffic drop is often upstream of the unit.
 - **No drain during a regional alert.** *Reason:* draining a whole region moves traffic nowhere. While the live setting has a regional alert on any signal, every drained unit of the region undrains with reason `regional`.
 - **What a drained unit keeps**, read from `RegionGrouper.publishUnitStatus`. The grouper stores only the signal a unit was drained for, and emits no new drain while the unit is still called for.
-- So a drained unit keeps the signal and reason it was first drained for until it undrains, even when what calls for it now is another signal or another reason. Its undrain names that first signal. No test pins this behaviour; the test is an open item.
+- So a drained unit keeps the signal and reason it was first drained for, until it undrains. That holds even when another signal or reason now calls for it. Its undrain names that first signal. No test pins this behaviour; the test is an open item.
 - **An alert absorbed twice.** A tenant alert absorbed by two regional alerts writes two `absorbed` events with one `(alert_id, state)`. `tb.alert_log` keeps the later one. The eval reads the topic, so it sees both, and absorbed rows are not pages.
 - **Two determinism edges** (milestone 3 ruling). First: the grouper records a unit's tenants as each minute arrives, not in a timer. A tenant whose first request falls between a timer and the watermark can count at that timer.
 - Second: at a replay's tail, with another setting's regional alert at streak 0, a drain that an expiry makes possible moves to the region's next input timer.
@@ -184,7 +186,7 @@ flowchart LR
 - **ClickHouse pulls from Kafka** (owner's call, spec 4.9). *Reason:* no connector to run or configure. *Cost:* a row that fails to parse goes to `tb.ingest_errors`, which has no TTL (§12).
 - **Topics are never deleted** (spec 4.9). Each eval run has its own input topic and a `run_id` on every record. So the Kafka-engine tables never point at a missing topic. *Cost:* topics pile up until `make reset` removes the volume.
 - **Append-time stamps on `eval` and `bench`** (builder's call, milestone 4). Their output topics use `LogAppendTime`. *Reason:* a replay's event times are months old, and retention would delete the output before it is read.
-- **The `live.*` topics are stamped with event time.** The broker's retention then deletes backfilled rows early, and the forwarder's rebuild from the start of `live.alerts` misses them.
+- **The `live.*` topics are stamped with event time.** The broker's retention then deletes backfilled rows early. The forwarder's rebuild from the start of `live.alerts` then misses them.
 - Those rows were never pages: the forwarder skips any alert decided more than 10 minutes after its event time. `LogAppendTime` on `live.*` would edit `infra/kafka`, a measured path (§9), so it stays open.
 
 ### Why a single OLAP store
@@ -214,7 +216,7 @@ flowchart LR
 - **The notifications panel** reads pager-sink's log over HTTP (`GET /notifications`), through ClickHouse's `url()` table function, on each refresh. pager-sink reads the whole log for each call and returns the flattened rows of its last 500 records (configured). *Reason:* a Kafka topic, a ClickHouse table or a new plugin would each edit a measured path or add a dependency (builder's call, milestone 6). *Cost:* reading the whole log on every refresh suits a demo and nothing larger.
 - **The demo** (spec 4.10). `make demo` runs one continuous timeline: three weeks of synthetic history at full speed, then live traffic in real time. With no seam between them, there is no false volume drop at the switch.
 - The demo's static thresholds come from the same script, run on the demo history. After catch-up, the generator injects a scripted sequence of incidents.
-- The demo world has three small tenants with a flat traffic profile in one region, so a regional alert can form at any hour (2026-11-11 amendment, builder's call).
+- The demo world has three small tenants with a flat traffic profile in one region. So a regional alert can form at any hour (2026-11-11 amendment, builder's call).
 
 ## 9. The eval
 
@@ -226,14 +228,18 @@ flowchart LR
 ### 5.2 Traffic model
 
 - **The world: 48 keys, not "about 60"** (builder's call, milestone 4). The spec's sentences on the world do not add up, so the build chose a world that keeps the time-zone rule.
-- The world has 3 regions, 24 tenants (8 per region) and 48 keys, on 6 shared units and 6 dedicated units. The 18 shared tenants have a key on each of the two shared units of their region (36 keys), and the 6 dedicated tenants have their own unit and one key on the region's first shared unit (12 keys) ([results](results.md))
+- The world has 3 regions, 24 tenants (8 per region) and 48 keys ([results](results.md))
+- The keys are on 6 shared units and 6 dedicated units ([results](results.md))
+- The 18 shared tenants have a key on each of their region's two shared units: 36 keys ([results](results.md))
+- The 6 dedicated tenants have their own unit and one key on the region's first shared unit: 12 keys ([results](results.md))
 - The spec says about 60 keys, but its two sentences give 42 ([results](results.md))
 - *Reason:* reaching 60 would need a third shared unit or keys across regions. Keys across regions would put half the tenants partly out of their time zone, far more than spec 5.2 allows.
-- Five of the 24 tenants keep the hours of another region's time zone, where spec 5.2 asks for about 20% ([results](results.md))
+- Five of the 24 tenants keep the hours of another region's time zone ([results](results.md))
+- The spec asks for about 20% of tenants to be served from a region outside their own time zone (spec 5.2).
 - The dedicated tenants' key on a shared unit departs from the spec's "or". *Reason:* it keeps them in the shared units' population. No tenant has a key outside its home region.
 - **Load is per key, not per tenant** (builder's call). Each key has its own size. Its load is its expected rate over its weekday peak, scenario volume included. So a surge to three times the traffic gets whatever latency the load curve gives (spec 5.2).
-- **The model was kept as specified.** At the freeze, the owner reserved the decision on the traffic model and the spreads, then delegated it to the builder.
-- The builder left spec 5.2 and spec 4.3 as written. *Reason:* changing them after seeing dev results would be tuning, which spec 5.3 forbids. *Cost:* false pages dominate every family's result (below).
+- **The model was kept as specified.** At the freeze, the owner reserved the decision on the traffic model and the spreads. The owner then delegated it to the builder.
+- The builder left spec 5.2 and spec 4.3 as written. *Reason:* changing the world after seeing how the detectors did on it would tune the eval to the detectors (milestone 4 plan). *Cost:* false pages dominate every family's result, and the model's unlabelled nuisance is their expected cause (below).
 
 ### 5.3 Weeks, seeds and the sweep
 
@@ -244,7 +250,7 @@ flowchart LR
 - **What the driver enforces.** A dev run refuses any seed outside the dev seeds. An official run needs the freeze file and uses only its seeds. It refuses a seed and amplitude that already has an official run, and a tree that differs from the freeze apart from its own registry line.
 - Caveat (spec 5.3): dev and official seeds come from one generator. Official seeds test fresh draws, not a different world.
 - **The exit rule** (owner's call, spec 5.3). Whatever the official runs show is published. A bug, meaning code that disagrees with the spec, may be fixed and re-run on the same seeds. Anything else is a setting change and is not allowed.
-- **The run log** is `docs/results/run-log.jsonl`: commit, date, what changed, why, and the old and new headline. It has one entry, the first official run.
+- **The run log** is the last section of `docs/results.md`: commit, date, what changed, why, and the old and new headline. Its one entry, the first official run, is built from the registry, `docs/results/official-runs.jsonl`. A bug re-run would add a line to `docs/results/run-log.jsonl`, which is empty.
 - `docs/results/machine.json` holds the host and Docker VM facts once, for the 15 official runs; the summaries do not record them per run ([results](results.md))
 
 ### 5.4 Scenarios
@@ -305,41 +311,50 @@ flowchart LR
 
 - At the main amplitude the seasonal detector found more scenarios than either static detector and had the fewest false pages per day, pooled. Per seed, and in the recall intervals, some of those gaps are not settled with 5 seeds; `docs/results.md` gives the ranges.
 - At the weakest seasonality, the seasonal detector's recall held up, but global static had fewer false pages per day than seasonal, pooled. The figures are in the sweep table of [`docs/results.md`](results.md).
-- Most pages are false in every family: at the selected settings, 73 of 410 pages matched a scenario (seasonal), 60 of 802 (per key static) and 51 of 495 (global static) ([results](results.md))
+- Most pages are false in every family.
+- Matched over all pages, at the selected settings: 73 of 410 (seasonal), 60 of 802 (per key static) and 51 of 495 (global static) ([results](results.md))
 - The traffic model's unlabelled bursts and per-day level factors (spec 5.2) are the expected cause. This eval does not measure the split.
 
 ## 10. Performance
 
-- **Three measurements** (builder's calls, spec 6): how fast the live job reads a filled topic, how long an alert takes to reach the alerts topic, and how much state the job keeps per key. Each is built to measure the job, not the harness.
+- **Three measurements** (builder's calls, spec 6): the live job's read rate on a filled topic, an alert's time to the alerts topic, and the state kept per key. Each is built to measure the job, not the harness.
 - **Throughput.** The topic is filled before the job starts, and nothing produces during the run. The driver checks that the topic holds exactly the events produced. *Reason:* the rate is then the job's, not the generator's.
 - Each fill has its own topic, `<fill_id>.events`, not `bench.events`. *Reason:* a second fill on the same day would sit behind the first, and a job reading from the earliest offset would read both.
 - The job runs in live mode, as the demo does. *Reason:* replay mode's alignment caps a backlog read. While a live job is behind, its watermark is pure event time.
 - The rate is the rise of the source's record counter over a window. The window leaves out the job's start and the fill's last tenth. Two runs on one fill give the run-to-run spread.
 - The fill had 2,000 keys at 120 requests a minute each, for 240 event minutes: 57,590,352 events in 8 partitions ([performance](performance.md))
 - The source was back-pressured 87.5% and 87.2% of the window in the two runs, so the job set the pace, not the broker ([performance](performance.md))
-- The fill is 240 event minutes, so no key has the history the seasonal detector needs, and every key is scored against the fallback baselines ([performance](performance.md))
-- **The shared VM.** Throughput depends strongly on what else the VM is doing. Other projects' containers share the VM, and the drivers read its load only at a run's start and end.
+- The fill is 240 event minutes, so every key is scored against the fallback baselines, not its own history ([performance](performance.md))
+- **Run to run.** The rate moves between runs. Other projects' containers share the VM, and the drivers read its load only at a run's start and end.
 - At the throughput readings, other projects' containers used 12.7 to 65.8 percent of one CPU, out of the VM's 8 CPUs ([performance](performance.md))
-- The valid throughput pilots, on earlier commits of the drivers and some on battery, read from 13,102 to 66,533 events a second ([performance](performance.md))
+- The valid throughput pilots read from 13,102 to 66,533 events a second ([performance](performance.md))
+- The pilots ran on earlier commits of the drivers, some on battery, and with other projects' containers busier. The range has no single cause, and no run measured which of these moved it.
 - **Delay.** A live generator sends at a fixed rate from the compose image, with injected incidents. *Reason:* event time comes from the generator's clock and append time from the broker's, and in one VM they share a clock.
-- The delay world has 36 keys at up to 40 requests a minute per key, in 8 partitions, with 21 days of history before live traffic, and the run injected 60 incidents, each an error-rate rise of 20 points on one key for 360 s ([performance](performance.md))
+- The delay world has 36 keys at up to 40 requests a minute per key, in 8 partitions ([performance](performance.md))
+- It had 21 days of history before live traffic ([performance](performance.md))
+- The run injected 60 incidents, each an error-rate rise of 20 points on one key for 360 s ([performance](performance.md))
 - **Pipeline delay** is the broker's append time of an alert row minus the row's event time. For a tenant alert, the event time is the end of its hold. It is the system's own overhead: the watermark bound, the minute close, processing and Kafka.
 - **Time to page** is the append time of the first matching row minus the incident's start. Both figures end at the append to the alerts topic. The forwarder and Alertmanager's `group_wait` come after it and are in neither.
 - **Time to page against spec 6.** The spec says time to page is at least about 5 minutes for every detector. That does not hold.
 - An alert's streak starts at the first breaching minute (`AlertStateMachine`). The 3 confirmation minutes and the 2-minute hold (both configured) are counted from that minute's start, and the row is stamped at the hold's end (`RegionGrouper`).
 - An incident usually starts partway into a minute and breaches in that minute. Its page then comes about 5 minutes (configured) after the minute's start, plus the pipeline delay. When the incident starts later in its minute than the pipeline delay, it is paged in under 5 minutes of its own start.
-- The measured minimum is 269.4 s, and 35 of 60 matched incidents were paged in under five minutes from their start ([performance](performance.md))
+- The measured minimum is 269.4 s for every setting, and for the headline setting, seasonal/k4, 35 of 60 matched incidents were paged in under five minutes from their start ([performance](performance.md))
 - **Watermark lag** was sampled once a minute during the delay run, against the VM's clock. By design it is the 20 s bound plus the age of the newest event on the slowest busy partition (configured). The run kept every partition busy, so a sparse partition was not measured.
 - **Sleep and power.** The drivers read the power source only at a run's start and end; the OS power log shows what came between. On macOS, `time.monotonic` stops while the machine sleeps, so its intervals cannot show a lid-close sleep.
 - The drivers read the OS sleep counter at every poll: `CLOCK_MONOTONIC_RAW` minus `CLOCK_UPTIME_RAW` (`bench_env.slept_s`). A run in which it rises by more than 1 s (configured) is invalid. So is a run in which the job restarted or dropped an event as late.
-- The charger was out during the published delay run for 330 s, from 21:21:33 to 21:27:03 IST; the OS power log, read into `docs/performance/power.json`, records it, and no incident was paged on battery ([performance](performance.md))
-- **State.** The state run sends the eval world's five weeks through an aggregates-mode job, at a checkpoint interval of 5 s (configured). *Reason:* the job is bounded and ends within minutes, and at the stack's 30 s the last checkpoint could fall long before the end of week 5.
+- The charger was out during the published delay run for 330 s, from 21:21:33 to 21:27:03 IST ([performance](performance.md))
+- The OS power log, read into `docs/performance/power.json`, records it. No incident was paged on battery.
+- **State.** The state run sends the eval world's five weeks through an aggregates-mode job, at a checkpoint interval of 5 s (configured). *Reason:* the job is bounded and ends within minutes. At the stack's 30 s interval, the last checkpoint could fall long before the end of week 5.
 - The reported checkpoint is the latest completed one triggered before the source vertex was reported finished, in the last 15% of the run (configured). *Reason:* a checkpoint taken after tasks finish may hold less.
 - Hashmap is the per-key headline: a full snapshot of the serialized state. RocksDB with incremental checkpoints, the stack's backend, is measured beside it.
-- The state run used the eval world (seed 7, amplitude 6.0) with 48 keys, 46 of which run all 5 weeks, and 2,358,720 aggregate rows went through the job ([performance](performance.md))
+- The state run used the eval world (seed 7, amplitude 6.0) with 48 keys, 46 of which ran all 5 weeks ([performance](performance.md))
+- 2,358,720 aggregate rows went through the job ([performance](performance.md))
 - The per-key figure is the scorer's bytes over all keys, a mean over keys that did not all run every week.
-- The hashmap figure is 2.2 times the RocksDB figure, since RocksDB keeps its SST files compressed: Flink's default for `state.backend.rocksdb.compression.per.level` is `SNAPPY_COMPRESSION` on every level, and this stack does not set it ([performance](performance.md))
-- The spec's estimate is 604,800 bytes per key (spec 4.3); the state job ran 12 settings where the live job runs 3, and the baseline history, which all settings share, is most of a key's state ([performance](performance.md))
+- The hashmap figure is 2.2 times the RocksDB figure ([performance](performance.md))
+- The two backends store the same state in different formats. RocksDB also keeps its SST files compressed: Flink's default for `state.backend.rocksdb.compression.per.level` is `SNAPPY_COMPRESSION` on every level, and this stack does not set it. That is a documented default; how much of the gap it explains was not measured.
+- The spec's estimate is 604,800 bytes per key ([performance](performance.md))
+- The state job ran 12 settings, where the live job runs 3 ([performance](performance.md))
+- The baseline history, which all settings share, is most of a key's state.
 
 The measured figures, from the three result files under `docs/performance/`:
 
@@ -380,17 +395,18 @@ Design reasoning, not measured. Nothing in this section was built or run.
 - The job sets no maximum parallelism, so Flink's default number of key groups applies.
 - `Pipeline.java` sets parallelism 1 on `PopulationBaselines` and on nothing else. The tick source and the aggregates source also run at 1 (`Ticks`, `TenantBaselinesJob`).
 - The grouper is keyed by region. With three regions, three keys carry all of it.
-- **At scale.** Partition the input topic by the same key, so a key's events stay in order on one partition.
+- The generator already sends each key to one partition, by the key's index in the world's key list (`gen_live.partition_of`).
+- **At scale.** Producers would partition by a hash of the key. A key's events then stay in order on one partition, with no shared key list.
 - Raise the parallelism, and set a maximum parallelism with enough key groups to rescale later without losing state.
 - Build the population histograms per subtask and merge them in a small final step. Log-bucket histograms add, so the merge is exact.
-- Feed the grouper per-region counts, not every tenant alert and aggregate. It needs only how many tenants are active and how many alert, per signal.
+- Feed the grouper per-region activity counts instead of every minute aggregate. It still needs every tenant alert, since it holds and releases each one. It needs the aggregates only to count active tenants.
 
 ### Hot tenants
 
 - A key's state is fixed in size: a ring of weekly slots per bucket. So a hot key costs CPU in the minute aggregator, one histogram update per request, not state.
 - **Aggregate before the job.** Aggregates mode already takes per-minute rows. A large tenant's own services could send minutes instead of requests.
 - **Two-stage aggregation.** Salt the key, aggregate each part, then merge the parts per minute. The latency histogram allows it, because bucket counts add.
-- Skew in the grouper comes from a large region, not from a tenant. The per-region counts above bound it.
+- Skew in the grouper comes from a large region, not from a tenant. Pre-counted activity leaves that region's subtask with its tenant alerts and a few counts a minute.
 
 ### Older data on cheaper storage
 
@@ -408,7 +424,7 @@ Design reasoning, not measured. Nothing in this section was built or run.
 - Local disks for RocksDB's working files, since its reads are random.
 - Upgrades through savepoints. Every operator already has a stable `uid`, so state maps to the new job.
 - The autoscaler, against a job whose load follows working hours: it could scale down at night. Each rescale restores state and pauses output, which delays alerts, so it should not rescale often.
-- TaskManager clocks kept in step, because the tick source reads them. A clock step closes minutes early (§3).
+- TaskManager clocks kept in step, because the tick source reads them. A forward step of that clock closes minutes early (§3).
 - The spec lists the operator on a local cluster as a stretch item, dropped first (spec 2).
 
 ## 12. What the repo does not do
@@ -433,17 +449,18 @@ Design reasoning, not measured. Nothing in this section was built or run.
 - No failover, sparse partition or multi-broker setup was measured.
 - A reader cannot repeat the official runs: `make eval` is sealed, and a rebuilt jar has another hash. A reader can run the dev seeds with `make eval-dev`.
 - The eval does not split false pages by cause (§9).
-- Machine facts are recorded once for the official runs, not per run (§9). Time to page is not "at least about 5 minutes" (§10).
+- Machine facts are recorded once for the official runs, not per run (§9).
+- Time to page is not "at least about 5 minutes" (§10).
 
 ## 13. Where the build departs from the spec
 
 1. **48 keys.** The eval world has 48 keys, where spec 5.2 says "about 60" and spec 6 says 60. The dedicated tenants also have a key on a shared unit (§9).
-2. **A topic per bench run.** In spec 6 the benchmark fills `bench.events`; each throughput fill has its own topic (§10).
-3. **State from a checkpoint run.** In spec 6 state is read from an eval run's checkpoint statistics. Those hold only the latest checkpoint at the stack's 30 s, so state comes from a run with a 5 s checkpoint interval (configured, §10).
-4. **Time to page.** In spec 6 it is at least about 5 minutes; the code counts from the start of the first breaching minute. Both delay figures end at the alerts topic, before the forwarder and Alertmanager (§10).
-5. **Notifications.** In spec 4.10 notifications are in Grafana; they exist only in pager-sink's log, which the panel reads over HTTP, not from a table (§8).
-6. **The score panel.** In spec 4.10 it is a score heatmap by region; the build has a status-history panel per region, one row per key (§8).
+2. **A topic per bench run.** Spec 6 fills `bench.events`. Each throughput fill has its own topic instead (§10).
+3. **State from a checkpoint run.** Spec 6 reads state from an eval run's checkpoint statistics. Those hold only the latest checkpoint, taken at the stack's 30 s interval. So state comes from a run with a 5 s checkpoint interval (configured, §10).
+4. **Time to page.** Spec 6 says at least about 5 minutes; the code counts from the start of the first breaching minute. Both delay figures end at the alerts topic, before the forwarder and Alertmanager (§10).
+5. **Notifications.** The spec puts them in Grafana (spec 4.10). They exist only in pager-sink's log, which the panel reads over HTTP, not from a table (§8).
+6. **The score panel.** The spec names a score heatmap by region (spec 4.10). The build has a status-history panel per region, one row per key (§8).
 7. **The grouper's second input.** The picture in spec 4.1 has no line from the minute aggregates to the grouper. The code has one, for the active-tenant rule (§2, §7).
-8. **Expected-signal recall.** In spec 5.5 two recalls are reported, and spec 5.6 does not say which one selects. The owner chose expected-signal recall for the selection and the headline (§9).
-9. **The mask amendment.** At first, spec 4.6 masked labelled incident minutes only. The 2026-11-12 amendment masks every labelled scenario but the Monday peak (§6).
-10. **Amendments already in the spec.** The live watermark's tick source (2026-11-11, spec 4.2), the forwarder's stale rule (2026-11-10, spec 4.10) and the demo world's flat tenants (2026-11-11, spec 4.10).
+8. **Expected-signal recall.** Two recalls are reported (spec 5.5), and spec 5.6 does not say which one selects. The owner chose expected-signal recall for the selection and the headline (§9).
+9. **The mask amendment.** The spec first masked labelled incident minutes only (spec 4.6). The 2026-11-12 amendment masks every labelled scenario but the Monday peak (§6).
+10. **Amendments already in the spec.** They are the live watermark's tick source (2026-11-11, spec 4.2) and the forwarder's stale rule (2026-11-10, spec 4.10). The demo world's flat tenants are a third (2026-11-11, spec 4.10).
