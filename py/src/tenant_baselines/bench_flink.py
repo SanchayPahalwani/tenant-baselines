@@ -224,7 +224,8 @@ def cancel_and_clean(
     is already over is only cleaned."""
     if _json(get, f"/jobs/{job_id}")["state"] not in _TERMINAL:
         r = patch(f"{REST}/jobs/{job_id}", params={"mode": "cancel"}, timeout=10)
-        if r.status_code != 202:
+        # 409: the job finished on its own meanwhile; the wait below sees its state
+        if r.status_code not in (202, 409):
             raise RunFailed(f"cancelling job {job_id} returned HTTP {r.status_code}, not 202")
         deadline = monotonic() + CANCEL_WAIT_S
         while (state := _json(get, f"/jobs/{job_id}")["state"]) not in _TERMINAL:

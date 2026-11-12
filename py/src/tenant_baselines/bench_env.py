@@ -108,7 +108,8 @@ def collect(on_battery: bool, run: Callable = _sh, get: Callable = httpx.get) ->
     status = _out(run, ["git", "status", "--porcelain", "-z"], strip=False)
     dirty = [p for p in dirty_paths("bench", status) if not _result_file(p)]
     info = json.loads(_out(run, ["docker", "info", "--format", "{{json .}}"]))
-    running = set(_out(run, ["docker", "ps", "-q"]).split())
+    # full ids on both sides: `docker ps -q` alone prints 12 characters, compose prints 64
+    running = set(_out(run, ["docker", "ps", "-q", "--no-trunc"]).split())
     ours = set(_out(run, ["docker", "compose", "ps", "-q"]).split())
     cfg = {e["key"]: e["value"] for e in _json(get, "/jobmanager/config")}
     wanted = (

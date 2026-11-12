@@ -110,10 +110,17 @@ def test_watermark_lag_none_before_first_watermark():
 def test_watermark_lag_adds_the_offset():
     routes = watermark_routes([980_000, 978_000])
     clock = iter([1000.0, 1005.0, 1010.0, 1015.0])  # only the first reading is the request time
+    seq: list = []
+
+    def now():
+        seq.append("now")
+        return next(clock)
+
     got = bench_flink.watermark_lag_s(
-        "j", -0.7, get=getter(routes), now=lambda: next(clock), sleep=lambda s: None
+        "j", -0.7, get=getter(routes, seq), now=now, sleep=lambda s: None
     )
     assert got == pytest.approx(21.3)
+    assert seq[0] == "now" and seq[1] == "/jobs/j"  # read before the burst's first request
 
 
 def test_late_events_sums_the_subtasks():
@@ -230,6 +237,15 @@ def test_cancel_and_clean_waits_then_removes_the_directory():
     )  # fmt: skip
     assert patched == [("http://127.0.0.1:8081/jobs/j", {"mode": "cancel"})]
     assert cmds[0][-3:] == ["rm", "-rf", "/flink-data/checkpoints/bench/r1"]
+
+
+def test_cancel_and_clean_treats_a_409_as_a_job_that_is_over():
+    cmds = []
+    bench_flink.cancel_and_clean(
+        "j", "r1", get=cancel_world(["RUNNING", "FINISHED"]),
+        patch=lambda *a, **k: Resp({}, 409), run=ok(cmds), sleep=lambda s: None,
+    )  # fmt: skip
+    assert len(cmds) == 1
 
 
 def test_cancel_and_clean_raises_when_the_cancel_is_refused():

@@ -64,7 +64,9 @@ class Shell:
                 json.dumps({"NCPU": 8, "MemTotal": 10 * 1024**3, "ServerVersion": "28.0.1"})
             )
         if cmd[:3] == ["docker", "ps", "-q"]:
-            return done(self.running)
+            # like docker: 12-character ids unless asked for the full ones
+            ids = self.running.split()
+            return done("\n".join(i if "--no-trunc" in cmd else i[:12] for i in ids))
         if cmd[:4] == ["docker", "compose", "ps", "-q"]:
             return done(self.ours)
         if cmd[:3] == ["docker", "compose", "config"]:
@@ -139,13 +141,19 @@ FLINK = {
 }
 
 
+def cid(name: str) -> str:
+    return (name * 64)[:64]
+
+
 def test_collect_counts_other_containers_without_names(monkeypatch):
     monkeypatch.setattr(bench_env, "head_commit", lambda: "abc")
     got = bench_env.collect(
-        False, run=Shell(running="x1\nus1\nx2\nus2\nx3\n", ours="us1\nus2\n"), get=getter(FLINK)
+        False,
+        run=Shell(running=" ".join(map(cid, "AUBVC")), ours=" ".join(map(cid, "UV"))),
+        get=getter(FLINK),
     )
     assert got["other_containers"] == 3  # foreign ones first, mid-list and last
-    assert "x1" not in json.dumps(got)
+    assert cid("A") not in json.dumps(got)
     assert set(got) == {
         "data", "date_utc", "commit", "dirty", "on_battery", "host", "power", "vm",
         "other_containers", "images", "flink",
@@ -166,8 +174,8 @@ def test_collect_counts_other_containers_without_names(monkeypatch):
 
 def test_collect_counts_a_lone_foreign_container_at_either_end(monkeypatch):
     monkeypatch.setattr(bench_env, "head_commit", lambda: "abc")
-    for running in ("x1\nus1\n", "us1\nx1\n"):
-        got = bench_env.collect(False, run=Shell(running=running, ours="us1\n"), get=getter(FLINK))
+    for running in (f"{cid('X')} {cid('U')}", f"{cid('U')} {cid('X')}"):
+        got = bench_env.collect(False, run=Shell(running=running, ours=cid("U")), get=getter(FLINK))
         assert got["other_containers"] == 1
 
 
@@ -192,7 +200,6 @@ def test_clock_offset_takes_the_tightest_bracket():
     host = iter([100.0, 100.4, 101.0, 101.1, 102.0, 102.6])
     vm = iter(["100.900000000", "101.750000000", "103.500000000"])
     got = bench_env.vm_clock_offset(run=lambda cmd: done(next(vm)), now=lambda: next(host), tries=3)
-    # offsets of the three tries: 0.7, 0.7, 1.2 would not tell them apart; these differ
     assert got["offset_s"] == pytest.approx(0.70)
     assert got["bracket_s"] == pytest.approx(0.1)
 
