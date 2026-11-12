@@ -28,7 +28,7 @@ __all__ = [
     "window_shares",
 ]
 
-BYTES_PER_EVENT = 60  # an estimate; the pilot replaces it
+BYTES_PER_EVENT = 20  # measured 15.7 in the pilot, rounded up to the next 10
 EVENTS_PER_MINUTE = 240_000  # 2,000 keys at 120 requests a minute
 PARTITIONS = 8
 SAMPLE_INTERVAL_S = 12
