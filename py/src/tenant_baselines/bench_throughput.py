@@ -23,6 +23,7 @@ from tenant_baselines.freeze import REPO
 __all__ = [
     "WindowTooShort",
     "alert_counts",
+    "build_result",
     "check_final_count",
     "next_due",
     "main",
@@ -481,6 +482,39 @@ def _summarise(run_id: str, job_id: str, total: int, samples: list[dict], pilot:
     return out
 
 
+def build_result(env: dict, fill: dict, runs: list[dict], on_battery: bool) -> dict:
+    """The result file's content: the validity verdict over every run, and the spread of the
+    rates. A run that was not read to its end has `late_events` None, counted as none."""
+    extra = [f"run {r['run_id']}: {r['window_error']}" for r in runs if "window_error" in r]
+    extra += [f"run {r['run_id']}: {r['aborted']}" for r in runs if "aborted" in r]
+    extra += power_reasons(runs, on_battery)
+    stalls = [g for r in runs for g in r["stall_gaps_s"]]
+    valid, reasons = bench_env.validity(
+        sum(r["restarts"] for r in runs),
+        sum(r["late_events"] or 0 for r in runs),
+        stalls,
+        extra,
+        host_sleep_s=sum(r["host_sleep_s"] for r in runs),
+    )
+    rates = [r["events_per_s"] for r in runs if "events_per_s" in r]
+    spread = (
+        round((max(rates) - min(rates)) / (sum(rates) / len(rates)) * 100, 1) if rates else None
+    )
+    return {
+        "data": "synthetic",
+        "env": env,
+        "valid": valid,
+        "invalid_reasons": reasons,
+        "fill": fill,
+        "warmup_s": WARMUP_S,
+        "end_share": END_SHARE,
+        "sample_interval_s": SAMPLE_INTERVAL_S,
+        "settings": _settings(),
+        "runs": runs,
+        "spread_pct": spread,
+    }
+
+
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="Throughput benchmark (synthetic data)")
     ap.add_argument("--minutes", type=int, default=240)
@@ -515,36 +549,10 @@ def main(argv: list[str] | None = None) -> None:
             f" {(r['source'] or {}).get('idle')}, busiest {r['busiest_vertex']}, stale samples"
             f" {r['stale_samples']}, min interval rate {r.get('min_interval_rate')}"
         )
-    extra = [f"run {r['run_id']}: {r['window_error']}" for r in runs if "window_error" in r]
-    extra += [f"run {r['run_id']}: {r['aborted']}" for r in runs if "aborted" in r]
-    extra += power_reasons(runs, args.on_battery)
-    stalls = [g for r in runs for g in r["stall_gaps_s"]]
-    valid, reasons = bench_env.validity(
-        sum(r["restarts"] for r in runs),
-        sum(r["late_events"] or 0 for r in runs),
-        stalls,
-        extra,
-        host_sleep_s=sum(r["host_sleep_s"] for r in runs),
-    )
-    rates = [r["events_per_s"] for r in runs if "events_per_s" in r]
-    spread = (
-        round((max(rates) - min(rates)) / (sum(rates) / len(rates)) * 100, 1) if rates else None
-    )
-    result = {
-        "data": "synthetic",
-        "env": env,
-        "valid": valid,
-        "invalid_reasons": reasons,
-        "fill": fill,
-        "warmup_s": WARMUP_S,
-        "end_share": END_SHARE,
-        "sample_interval_s": SAMPLE_INTERVAL_S,
-        "settings": _settings(),
-        "runs": runs,
-        "spread_pct": spread,
-    }
+    result = build_result(env, fill, runs, args.on_battery)
     path = bench_env.write_result("throughput", result, run_dir, args.pilot)
-    print(f"bench: wrote {path}{'' if valid else ' (INVALID: ' + '; '.join(reasons) + ')'}")
+    why = "" if result["valid"] else " (INVALID: " + "; ".join(result["invalid_reasons"]) + ")"
+    print(f"bench: wrote {path}{why}")
 
 
 if __name__ == "__main__":

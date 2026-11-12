@@ -194,8 +194,95 @@ def test_summarise_pilot_with_one_fresh_sample_or_none_does_not_divide_by_zero()
         bt._summarise("r1", "j1", 1_000_000_000, none, pilot=False)
 
 
-def test_validity_skips_a_late_events_that_was_not_read():
-    assert bench_env.validity(0, None, [], []) == (True, [])
+AC = "Now drawing from 'AC Power'"
+BATTERY = "Now drawing from 'Battery Power'"
+
+
+def done_run(run_id="tp-x-r1", **edit):
+    """A finished run's record, as `_one_run` returns it and `main` adds `power_end` to."""
+    r = {
+        "run_id": run_id,
+        "restarts": 0,
+        "late_events": 0,
+        "stall_gaps_s": [],
+        "host_sleep_s": 0.0,
+        "events_per_s": 100_000.0,
+        "power_end": AC,
+        "source": {"idle": 0.001},
+        "busiest_vertex": "scorer",
+        "stale_samples": 0,
+    }
+    return r | edit
+
+
+def test_build_result_of_clean_runs_is_valid_with_the_spread():
+    runs = [done_run(), done_run("tp-x-r2", events_per_s=110_000.0)]
+    r = bt.build_result({"data": "synthetic"}, {"events": 1000}, runs, on_battery=False)
+    assert r["valid"] is True and r["invalid_reasons"] == []
+    assert r["data"] == "synthetic" and r["env"] == {"data": "synthetic"}
+    assert r["fill"] == {"events": 1000} and r["runs"] == runs
+    assert r["spread_pct"] == 9.5  # 10,000 of the mean 105,000
+    assert (r["warmup_s"], r["end_share"], r["sample_interval_s"]) == (60, 0.9, 12)
+    assert r["settings"] == bt._settings()
+
+
+@pytest.mark.parametrize(
+    ("edit", "reason"),
+    [
+        ({"host_sleep_s": 3.0}, "the host slept 3 s during the run"),
+        ({"stall_gaps_s": [75.0]}, "the driver stalled for 75 s between two polls"),
+        ({"restarts": 1}, "the job restarted 1 time(s)"),
+        ({"late_events": 3}, "3 event(s) were dropped as late"),
+        ({"aborted": "the source count fell", "late_events": None},
+         "run tp-x-r2: the source count fell"),
+        ({"power_end": BATTERY}, "the laptop went to battery during the run tp-x-r2"),
+        ({"window_error": "the window is 60 s"}, "run tp-x-r2: the window is 60 s"),
+    ],
+)  # fmt: skip
+def test_build_result_names_each_reason_a_run_is_invalid(edit, reason):
+    runs = [done_run(), done_run("tp-x-r2", **edit)]
+    r = bt.build_result({}, {"events": 1000}, runs, on_battery=False)
+    assert r["valid"] is False and r["invalid_reasons"] == [reason]
+
+
+def test_build_result_sums_the_sleep_over_the_runs_and_allows_one_second():
+    runs = [done_run(host_sleep_s=0.5), done_run("tp-x-r2", host_sleep_s=0.5)]
+    assert bt.build_result({}, {}, runs, on_battery=False)["valid"] is True
+    runs[1]["host_sleep_s"] = 0.6
+    assert bt.build_result({}, {}, runs, on_battery=False)["invalid_reasons"] == [
+        "the host slept 1 s during the run"
+    ]
+
+
+def test_build_result_allows_battery_with_on_battery():
+    runs = [done_run(power_end=BATTERY)]
+    assert bt.build_result({}, {}, runs, on_battery=True)["valid"] is True
+
+
+def test_main_writes_the_verdict_of_its_runs(monkeypatch, tmp_path):
+    written = {}
+    monkeypatch.setattr(bt.bench_env, "preflight", lambda on_battery: None)
+    monkeypatch.setattr(bt.bench_env, "collect", lambda on_battery: {"data": "synthetic"})
+    monkeypatch.setattr(bt, "DATA_BENCH", tmp_path)
+    monkeypatch.setattr(bt, "_fill", lambda args, fill_id, run: {"events": 1000, "seconds": 1.0})
+    runs = iter([done_run("tp-x-r1"), done_run("tp-x-r2", stall_gaps_s=[75.0])])
+    monkeypatch.setattr(bt, "_one_run", lambda n, fill_id, total, args, run_dir: next(runs))
+    power = iter([AC, BATTERY])
+    monkeypatch.setattr(bt.bench_env, "_power_line", lambda run: next(power))
+
+    def write(name, result, run_dir, pilot):
+        written.update(name=name, result=result)
+        return run_dir / "result.json"
+
+    monkeypatch.setattr(bt.bench_env, "write_result", write)
+    bt.main(["--minutes", "10"])
+    r = written["result"]
+    assert written["name"] == "throughput" and r["valid"] is False
+    assert r["invalid_reasons"] == [
+        "the driver stalled for 75 s between two polls",
+        "the laptop went to battery during the run tp-x-r2",
+    ]
+    assert [x["power_end"] for x in r["runs"]] == [AC, BATTERY]
 
 
 def scripted(items, previous_seen):
