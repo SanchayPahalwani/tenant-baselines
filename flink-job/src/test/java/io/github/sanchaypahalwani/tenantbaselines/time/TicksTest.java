@@ -108,7 +108,10 @@ class TicksTest {
 
   /**
    * Three whole minutes of history, decades behind the ticks. If the ticks set the watermark,
-   * every event would be late and no minute would close.
+   * every event would be late and no minute would close. The events source ends, so its final
+   * watermark closes the three full minutes with or without ticks. The fourth, empty minute is
+   * closed only by a watermark that keeps advancing after the input ends, and the aggregator does
+   * not re-register at {@code Long.MAX_VALUE}, so only a tick can close it.
    */
   @Test
   void ticksDoNotOutrunABacklog() {
@@ -122,10 +125,13 @@ class TicksTest {
             .assignTimestampsAndWatermarks(Watermarks.ticks(Duration.ofSeconds(20)));
     DataStream<Event> ticks = Ticks.source(env, 20, Duration.ofSeconds(20));
 
-    assertThat(firstMinutes(events, ticks, 3))
+    assertThat(firstMinutes(events, ticks, 4))
         .extracting(MinuteAgg::minuteMs, MinuteAgg::count)
         .containsExactly(
-            tuple(MON, 60L), tuple(MON + MINUTE_MS, 60L), tuple(MON + 2 * MINUTE_MS, 60L));
+            tuple(MON, 60L),
+            tuple(MON + MINUTE_MS, 60L),
+            tuple(MON + 2 * MINUTE_MS, 60L),
+            tuple(MON + 3 * MINUTE_MS, 0L));
   }
 
   /** The filter drops ticks: a pass-through would aggregate a tick's null key. */
