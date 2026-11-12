@@ -1,5 +1,6 @@
 import inspect
 import json
+import subprocess
 from datetime import UTC, datetime, timedelta, timezone
 
 import httpx
@@ -7,6 +8,7 @@ import numpy as np
 import pytest
 
 from tenant_baselines import eval_run, kafka_io
+from tenant_baselines import freeze as freeze_mod
 from tenant_baselines.eval_run import (
     ALERTS_TOPIC,
     DEV_SEEDS,
@@ -337,6 +339,7 @@ class FakeStack:
 def stack(tmp_path, monkeypatch):
     fake = FakeStack(tmp_path / "data" / "eval")
     monkeypatch.setattr(eval_run, "REPO", tmp_path)
+    monkeypatch.setattr(freeze_mod, "REPO", tmp_path)  # container paths are under its data/
     for name in ("create_topic", "produce_all", "end_offsets", "submit", "wait_finished"):
         monkeypatch.setattr(eval_run, name, getattr(fake, name))
     monkeypatch.setattr(eval_run, "read_range", fake.read_range)
@@ -344,7 +347,7 @@ def stack(tmp_path, monkeypatch):
         eval_run, "_checkpoint", lambda job_id: {"state_size": 7, "external_path": "p"}
     )
     monkeypatch.setattr(eval_run, "_commit", lambda: "c0ffee")
-    monkeypatch.setattr(eval_run, "_dirty", lambda: True)
+    monkeypatch.setattr(eval_run, "_dirty", lambda kind: fake.calls.append(("dirty", kind)) or True)
     return fake
 
 
@@ -353,6 +356,7 @@ def test_run_reads_from_the_offsets_before_submit_and_filters_after_the_read(sta
     rid = stack.rid
     topic = f"{rid}.aggregates-in"
     assert stack.calls == [
+        ("dirty", "paths"),
         ("create_topic", topic, 1),
         ("produce_all", topic),
         ("end_offsets", topic),
@@ -394,7 +398,7 @@ def test_failed_json_never_lands_in_another_runs_directory(stack, monkeypatch):
     with pytest.raises(FileExistsError):
         eval_run.run("dev", 7, 6.0, data_dir=stack.data_dir)
     assert [p.name for p in taken.iterdir()] == ["labels.json"]
-    assert stack.calls == []
+    assert stack.calls == [("dirty", "dev")]
 
 
 def test_run_defaults_to_the_repos_data_dir():
@@ -424,3 +428,38 @@ def test_an_official_run_submits_the_frozen_jar(stack, monkeypatch, tmp_path):
     rid = "off-s4101-a6-20261113T100000"
     s = eval_run.run("off", 4101, 6.0, world_name="paths", data_dir=stack.data_dir, rid=rid)
     assert s["run_id"] == rid and stack.jar == f"/opt/tb-data/frozen/{sha}.jar"
+
+
+def porcelain(*lines: str) -> str:
+    return "".join(line + "\0" for line in lines)
+
+
+@pytest.mark.parametrize(
+    "status,off,dev",
+    [
+        (porcelain(" M docs/results/official-runs.jsonl"), False, True),
+        (porcelain(" M docs/results.md", "?? docs/results/summaries/"), False, True),
+        (porcelain(" M docs/results/official-runs.jsonl", " M py/src/x.py"), True, True),
+        (porcelain(" M docs/results.md.bak"), True, True),
+        ("", False, False),
+    ],
+)
+def test_an_official_run_is_not_dirtied_by_the_drivers_own_files(monkeypatch, status, off, dev):
+    seen = []
+
+    def git(cmd, **kw):
+        seen.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, status, "")
+
+    monkeypatch.setattr(freeze_mod.subprocess, "run", git)
+    assert eval_run._dirty("off") is off
+    assert eval_run._dirty("dev") is dev
+    assert eval_run._dirty("paths") is dev
+    assert seen[0] == ["git", "status", "--porcelain", "-z"]
+
+
+def test_repo_paths_are_defined_once():
+    assert eval_run.REPO is freeze_mod.REPO
+    assert not hasattr(eval_run, "_CONTAINER_DATA")
+    assert eval_run._container_path is freeze_mod.container_path
+    assert eval_run._commit is freeze_mod.head_commit

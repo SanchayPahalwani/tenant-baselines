@@ -1,0 +1,11 @@
+{
+  "cores": 12,
+  "cpu": "Apple M3 Pro",
+  "docker_cpus": 8,
+  "docker_memory_gib": 9.7,
+  "docker_version": "28.4.0",
+  "memory_gib": 18.0,
+  "numpy": "2.5.4",
+  "python": "3.12.15",
+  "source": "from the Setup block that `make eval` rendered right after the official runs on 2026-11-12 (`docs/results.md` at commit `7fba0be`, whose Setup names commit `b97503c`)"
+}

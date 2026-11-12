@@ -22,10 +22,16 @@ from tenant_baselines.freeze import (
     AMPLITUDES,
     DEV_SEEDS,
     FREEZE_PATH,
+    REPO,
     frozen_jar_container_path,
     load_freeze,
     verify_frozen_jar,
 )
+
+# `run` calls these by its own names, so its body stays as the official runs measured it.
+from tenant_baselines.freeze import container_path as _container_path
+from tenant_baselines.freeze import head_commit as _commit
+from tenant_baselines.freeze import tree_dirty as _dirty
 from tenant_baselines.kafka_io import create_topic, end_offsets, produce_all, read_range
 from tenant_baselines.scenarios import Scenario, apply, place, write_labels
 from tenant_baselines.scoring import normalise, summarise
@@ -41,9 +47,7 @@ REST = "http://127.0.0.1:8081"
 POLL_S = 2.0
 POLL_ATTEMPTS = 5  # tries of one poll before the run is given up
 ALERTS_TOPIC = "eval.alerts"
-REPO = Path(__file__).resolve().parents[3]
 DATA_DIR = REPO / "data" / "eval"
-_CONTAINER_DATA = "/opt/tb-data"  # the jobmanager's read-only mount of the repo's data/
 _SUBMIT = (
     *("docker", "compose", "exec", "-T", "jobmanager"),
     *("bash", "/opt/tb-scripts/submit-eval.sh"),
@@ -241,15 +245,6 @@ def wait_finished(
         time.sleep(POLL_S)
 
 
-def _container_path(path: Path) -> str:
-    """The jobmanager's path of a file under the repo's data/ directory."""
-    try:
-        rel = path.resolve().relative_to(REPO / "data")
-    except ValueError:
-        raise ValueError(f"{path} is not under {REPO / 'data'}, the jobmanager's mount") from None
-    return f"{_CONTAINER_DATA}/{rel.as_posix()}"
-
-
 def _checkpoint(job_id: str) -> dict:
     body = httpx.get(f"{REST}/jobs/{job_id}/checkpoints", timeout=10).raise_for_status().json()
     latest = (body.get("latest") or {}).get("completed")
@@ -273,21 +268,6 @@ def _vertex_times(vertices: list[dict]) -> list[dict]:
             }
         )
     return out
-
-
-def _commit() -> str:
-    return subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=REPO, check=True, capture_output=True, text=True
-    ).stdout.strip()
-
-
-def _dirty() -> bool:
-    """Whether the working tree differs from HEAD (data/ is ignored, so a run's own files are not
-    counted). Dev runs record it; official runs refuse a dirty tree (Task 17)."""
-    status = subprocess.run(
-        ["git", "status", "--porcelain"], cwd=REPO, check=True, capture_output=True, text=True
-    ).stdout
-    return bool(status.strip())
 
 
 def _write_failed(out: Path, rid: str, stage: str, job_id: str | None, e: BaseException) -> None:
@@ -327,7 +307,7 @@ def run(
         raise ValueError(f"run id {rid!r} does not belong to seed {seed} amplitude {amplitude:g}")
     out = Path(data_dir) / rid
     thresholds_path = _container_path(out / "thresholds.json")
-    commit, dirty = _commit(), _dirty()
+    commit, dirty = _commit(), _dirty(kind)
     existed = out.exists()  # prepare refuses it; failed.json must not land in another run's files
     stage, job_id = "generate", None
     try:

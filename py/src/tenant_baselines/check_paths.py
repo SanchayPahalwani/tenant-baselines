@@ -21,16 +21,14 @@ import orjson
 from tenant_baselines.eval_run import (
     ALERTS_TOPIC,
     PATHS_SEED,
-    REPO,
     RunFailed,
-    _commit,
-    _container_path,
     prepare,
     run_id,
     submit,
     wait_finished,
 )
 from tenant_baselines.evalmodel import EPOCH_MS, MINUTE_MS, REPLAY_END_MS, TrafficParams, rates
+from tenant_baselines.freeze import REPO, container_path, head_commit, sha256_of, tree_dirty
 from tenant_baselines.kafka_io import create_topic, end_offsets, produce_all, read_range
 from tenant_baselines.replay_events import partition_events, partition_of
 from tenant_baselines.scenarios import Scenario, apply
@@ -47,6 +45,7 @@ AGGREGATES_TOPIC = "eval.aggregates"
 DIFF_LINES = 20
 DATA_DIR = REPO / "data" / "eval"
 RESULTS = REPO / "docs" / "results" / "check-paths.json"
+JAR = REPO / "flink-job" / "target" / "tenant-baselines-job.jar"  # the jobmanager's default jar
 _DAY_MINUTES = 1440
 
 
@@ -126,9 +125,15 @@ def diff_aggregates(job_rows: Iterable[dict], a: Aggregates) -> list[str]:
 
 
 def verdict(
-    log_ev: list[dict], log_ag: list[dict], n_job_rows: int, n_py_rows: int, agg_diffs: list[str]
+    log_ev: list[dict],
+    log_ag: list[dict],
+    n_job_rows: int,
+    n_py_rows: int,
+    agg_diffs: list[str],
+    log_diffs: list[str],
 ) -> list[str]:
-    """Why the check fails, one reason per failed condition; empty when it passes."""
+    """Why the check fails, one reason per failed condition; empty when it passes.
+    `log_diffs` is `diff_logs(log_ev, log_ag)`, computed once by the caller."""
     reasons = []
     if not log_ev:
         reasons.append("the events path's alert log is empty")
@@ -136,7 +141,6 @@ def verdict(
         reasons.append("the aggregates path's alert log is empty")
     if not any(_regional_pages(log_) for log_ in (log_ev, log_ag)):
         reasons.append("neither alert log has a firing row of scope region")
-    log_diffs = diff_logs(log_ev, log_ag)
     if log_diffs:
         reasons.append(f"the alert logs differ, first at: {log_diffs[0]}")
     if n_job_rows != n_py_rows:
@@ -211,16 +215,21 @@ def _regional_pages(log_: list[dict]) -> int:
     return sum(1 for r in log_ if r["state"] == "firing" and r["scope"] == "region")
 
 
-def check(data_dir: Path = DATA_DIR, results: Path = RESULTS) -> int:
-    """Both paths end to end; writes the results file and returns the exit code."""
+def check(data_dir: Path = DATA_DIR, results: Path = RESULTS, jar: Path = JAR) -> int:
+    """Both paths end to end; writes the results file and returns the exit code.
+
+    The commit, the tree's state and the jar's hash are read before anything runs: a commit made
+    while the jobs run must not be recorded as the one they ran on."""
     t0 = time.monotonic()
+    commit, dirty = head_commit(), tree_dirty("paths")
+    jar_sha256 = sha256_of(jar) if Path(jar).is_file() else None
     rid = run_id("paths", PATHS_SEED, AMPLITUDE, datetime.now(UTC))
     out = Path(data_dir) / rid
     log.info("run %s: generating", rid)
     a, scenarios = prepare("paths", "paths", PATHS_SEED, AMPLITUDE, out)
     world = build_world("paths", PATHS_SEED)
     draws = _draws(world, a, scenarios)
-    thresholds = _container_path(out / "thresholds.json")
+    thresholds = container_path(out / "thresholds.json")
     t_generate = time.monotonic() - t0
 
     t1 = time.monotonic()
@@ -244,10 +253,14 @@ def check(data_dir: Path = DATA_DIR, results: Path = RESULTS) -> int:
     _write_log(out / "alerts-ag.jsonl", log_ag)
     log_diffs = diff_logs(log_ev, log_ag)
     agg_diffs = diff_aggregates(aggregates_ev, a)
-    reasons = verdict(log_ev, log_ag, len(aggregates_ev), n_rows, agg_diffs)
+    reasons = verdict(log_ev, log_ag, len(aggregates_ev), n_rows, agg_diffs, log_diffs)
 
     result = {
-        "commit": _commit(),
+        "commit": commit,
+        "dirty": dirty,
+        "run_id": rid,
+        "jar_sha256": jar_sha256,
+        "passed": not reasons,
         "date_utc": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "world": "paths (synthetic)",
         "events": n_events,
@@ -294,7 +307,7 @@ def time_slice(days: int, data_dir: Path = DATA_DIR) -> int:
     topic = f"{rid}.events-{days}d"
     n = _produce_events(topic, world, draws)
     end_ms = EPOCH_MS + days * _DAY_MINUTES * MINUTE_MS
-    thresholds = _container_path(out / "thresholds.json")
+    thresholds = container_path(out / "thresholds.json")
     job, _, _ = _run_job(f"{rid}-slice", "replay", topic, thresholds, replay_end_ms=end_ms)
     s = job["job_seconds"]
     print(f"check-paths: {days}-day slice, {n} events: job {s:.1f} s, {n / s:,.0f} events/s")

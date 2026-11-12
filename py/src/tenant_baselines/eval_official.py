@@ -10,6 +10,7 @@ with the host's. A rerun needs a reason: `bug:` or `infrastructure:`, with text 
 import argparse
 import json
 import logging
+import re
 import shutil
 import subprocess
 import sys
@@ -19,12 +20,18 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from tenant_baselines import eval_run
-from tenant_baselines.eval_run import AMPLITUDES, DATA_DIR, REPO, RunFailed
+from tenant_baselines.eval_run import AMPLITUDES, DATA_DIR, RunFailed
 from tenant_baselines.evalmodel import TrafficParams, rates
 from tenant_baselines.freeze import (
     FREEZE_PATH,
+    REPO,
     FrozenJarError,
+    changed_paths,
+    driver_writes,
+    head_commit,
     load_freeze,
+    planned,
+    sha256_of,
     verify_frozen_jar,
 )
 from tenant_baselines.kafka_io import IncompleteRead, topics
@@ -37,8 +44,8 @@ REGISTRY_PATH = REPO / "docs" / "results" / "official-runs.jsonl"
 RUN_LOG_PATH = REPO / "docs" / "results" / "run-log.jsonl"
 SUMMARIES_DIR = REPO / "docs" / "results" / "summaries"
 SUPERSEDED_DIR = REPO / "docs" / "results" / "superseded"
-# Paths the driver writes between runs. results.md is rendered by `make eval` after the loop.
-WRITABLE = ("docs/results/", "docs/results.md")
+# The driver writes docs/results/ between runs (`freeze.driver_writes`); results.md is rendered
+# by `make eval` after the loop.
 # The whole tree is frozen except what the driver writes, and the freeze file (its `commit` key
 # is set after the freeze commit; the rest is compared separately).
 EXCLUDED = (":(exclude)docs/results", ":(exclude)docs/results.md", ":(exclude)eval/freeze.json")
@@ -62,21 +69,17 @@ class PreflightFailed(Exception):
 
 
 def reason_kind(reason: str | None) -> str | None:
-    """`bug`, `infrastructure`, or None for no reason. A bare prefix is rejected."""
-    r = (reason or "").strip()
+    """`bug`, `infrastructure`, or None for no reason. Any other reason is rejected: one with
+    another prefix, and a bare prefix."""
+    if not reason:
+        return None
+    r = reason.strip()
     for kind in ("bug", "infrastructure"):
         if r.startswith(f"{kind}:"):
             if not r[len(kind) + 1 :].strip():
                 raise BadReason(f"--rerun-reason '{kind}:' needs a few words after the colon")
             return kind
-    return None
-
-
-def planned(freeze: dict) -> list[tuple[int, float]]:
-    """(seed, amplitude) pairs: the main amplitude first, then the others, seeds in file order."""
-    main = freeze["main_amplitude"]
-    order = [main] + [a for a in freeze["amplitudes"] if a != main]
-    return [(seed, amp) for amp in order for seed in freeze["official_seeds"]]
+    raise BadReason(f"--rerun-reason must start with 'bug:' or 'infrastructure:', not {reason!r}")
 
 
 # ---------------------------------------------------------------- the registry
@@ -120,17 +123,18 @@ class Registry:
             }
         )
 
-    def finished(self, run_id: str, timings: dict) -> None:
+    def finished(self, run_id: str, timings: dict, summary_sha256: str | None = None) -> None:
         seed, amplitude = _pair_of(run_id)
-        self._append(
-            {
-                "event": "finished",
-                "seed": seed,
-                "amplitude": amplitude,
-                "run_id": run_id,
-                "timings": timings,
-            }
-        )
+        entry = {
+            "event": "finished",
+            "seed": seed,
+            "amplitude": amplitude,
+            "run_id": run_id,
+            "timings": timings,
+        }
+        if summary_sha256 is not None:
+            entry["summary_sha256"] = summary_sha256
+        self._append(entry)
 
     def failed(self, run_id: str, why: str) -> None:
         seed, amplitude = _pair_of(run_id)
@@ -203,21 +207,35 @@ def _sh(cmd: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, cwd=REPO, capture_output=True, text=True)
 
 
-def _changed_paths(porcelain_z: str) -> list[str]:
-    """Every path in `git status --porcelain -z` output; a rename or copy lists both sides."""
-    tokens = porcelain_z.split("\0")
-    paths, i = [], 0
-    while i < len(tokens):
-        t = tokens[i]
-        i += 1
-        if len(t) < 4:
-            continue
-        paths.append(t[3:])
-        if "R" in t[:2] or "C" in t[:2]:
-            if i < len(tokens) and tokens[i]:
-                paths.append(tokens[i])
-            i += 1
-    return paths
+def _extends_committed(
+    git: Callable[..., subprocess.CompletedProcess], rel: str, path: Path, what: str
+) -> str:
+    """The committed text of an append-only file; raise unless the working copy extends it."""
+    committed = git("show", f"HEAD:{rel}")
+    if committed.returncode != 0:
+        raise PreflightFailed(f"{rel} is not committed at HEAD")
+    current = path.read_text() if path.is_file() else ""
+    if not current.startswith(committed.stdout):
+        raise PreflightFailed(
+            f"{rel} does not extend the committed file; {what} is append-only. Restore it from"
+            " git and log what happened in run-log.jsonl"
+        )
+    return committed.stdout
+
+
+def _official_start_commits(committed_registry: str) -> list[str]:
+    """The commits of the committed `started` lines that ran under no reason."""
+    try:
+        lines = [json.loads(x) for x in committed_registry.splitlines() if x.strip()]
+    except json.JSONDecodeError as e:
+        raise PreflightFailed(f"the committed registry is not JSON lines: {e}") from None
+    return sorted(
+        {
+            e["commit"]
+            for e in lines
+            if e.get("event") == "started" and e.get("reason") is None and e.get("commit")
+        }
+    )
 
 
 def check_machine(
@@ -260,12 +278,15 @@ def preflight(
     repo: Path | None = None,
     registry_path: Path | None = None,
     host_time: Callable[[], float] = time.time,
+    run_log_path: Path | None = None,
 ) -> str:
     """Raise PreflightFailed, naming the fix, unless the next run may start. Returns the SHA-256
     of the frozen jar."""
     repo = Path(repo or REPO)
     registry_path = Path(registry_path or REGISTRY_PATH)
-    bug = reason_kind(rerun_reason) == "bug"
+    run_log_path = Path(run_log_path or RUN_LOG_PATH)
+    kind = reason_kind(rerun_reason)
+    bug = kind == "bug"
 
     def git(*args: str) -> subprocess.CompletedProcess:
         try:
@@ -276,27 +297,26 @@ def preflight(
     status = git("status", "--porcelain", "-z")
     if status.returncode != 0:
         raise PreflightFailed(f"git status failed: {status.stderr.strip()}")
-    dirty = [p for p in _changed_paths(status.stdout) if not p.startswith(WRITABLE)]
+    dirty = [p for p in changed_paths(status.stdout) if not driver_writes(p)]
     if dirty:
         raise PreflightFailed(
             f"the working tree has changes outside docs/results/: {dirty[:5]}; commit or"
             " discard them"
         )
 
-    committed = git("show", "HEAD:docs/results/official-runs.jsonl")
-    if committed.returncode != 0:
-        raise PreflightFailed("docs/results/official-runs.jsonl is not committed at HEAD")
-    current = registry_path.read_text() if registry_path.is_file() else ""
-    if not current.startswith(committed.stdout):
-        raise PreflightFailed(
-            "docs/results/official-runs.jsonl does not extend the committed file; the registry"
-            " is append-only. Restore it from git and log what happened in run-log.jsonl"
-        )
+    committed = _extends_committed(
+        git, "docs/results/official-runs.jsonl", registry_path, "the registry"
+    )
+    _extends_committed(git, "docs/results/run-log.jsonl", run_log_path, "the run log")
 
     if not bug:
         c = freeze.get("commit")
         if not c:
             raise PreflightFailed("eval/freeze.json has no `commit`; record the freeze commit")
+        if not re.fullmatch(r"[0-9a-f]{40}", str(c)):
+            raise PreflightFailed(
+                f"eval/freeze.json's `commit` must be a full 40-character commit hash, not {c!r}"
+            )
         diff = git("diff", "--quiet", c, "HEAD", "--", ".", *EXCLUDED)
         if diff.returncode != 0:
             raise PreflightFailed(
@@ -314,9 +334,18 @@ def preflight(
                 f"eval/freeze.json differs from the file at the freeze commit {c[:7]} by more than"
                 " its `commit` key; restore it, or rerun with --rerun-reason 'bug: ...'"
             )
+        # The registry is committed and append-only: the anchor must equal what already ran.
+        for ran in _official_start_commits(committed):
+            same = git("diff", "--quiet", ran, c, "--", ".", *EXCLUDED)
+            if same.returncode != 0:
+                raise PreflightFailed(
+                    f"the freeze commit {c[:7]} in eval/freeze.json does not match the commit the"
+                    f" official runs started on, {ran[:7]} (git diff exit {same.returncode});"
+                    " restore its `commit` key"
+                )
 
     try:
-        sha = verify_frozen_jar(freeze, repo)
+        sha = verify_frozen_jar(freeze, repo, kind)
     except FrozenJarError as e:
         raise PreflightFailed(str(e)) from None
 
@@ -338,8 +367,8 @@ def place_all(pairs: list[tuple[int, float]], world_name: str = "eval") -> None:
             raise PlacementError(f"seed {seed} amplitude {amp:g}: {e}") from e
 
 
-def _old_summaries(summaries_dir: Path, prefix: str, keep: str | None = None) -> list[Path]:
-    return sorted(d for d in summaries_dir.glob(f"{prefix}*") if d.is_dir() and d.name != keep)
+def _old_summaries(summaries_dir: Path, prefix: str) -> list[Path]:
+    return sorted(d for d in summaries_dir.glob(f"{prefix}*") if d.is_dir())
 
 
 def _copy_summary(rid: str, data_dir: Path, summaries_dir: Path) -> None:
@@ -357,21 +386,21 @@ def _supersede(old: list[Path], superseded_dir: Path) -> None:
 
 
 def _commit_hash() -> str:
-    return eval_run._commit()
+    return head_commit()
 
 
 def _append_run_log(path: Path, rid: str, reason: str, superseded: list[str]) -> None:
+    """The run log line of a run under a reason, written before the run. `supersedes` names the
+    summaries the run replaces once it finishes; the report derives the headlines, so `old` and
+    `new` stay null."""
     entry = {
         "commit": _commit_hash(),
         "date": datetime.now(UTC).date().isoformat(),
         "what": f"run under a reason: official run {rid}",
         "why": reason,
-        "old": (
-            "superseded, moved to docs/results/superseded/: " + ", ".join(superseded)
-            if superseded
-            else "to be completed"
-        ),
-        "new": "to be completed",
+        "old": None,
+        "new": None,
+        "supersedes": superseded,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a") as f:
@@ -390,6 +419,10 @@ def _history(seed: int, amp: float) -> tuple[bool, bool]:
     return numbers, trace
 
 
+def _all_finished(entries: list[dict], pairs: list[tuple[int, float]]) -> bool:
+    return all((e := last_entry(entries, s, a)) and e["event"] == "finished" for s, a in pairs)
+
+
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="Run the official (seed, amplitude) pairs once each")
     ap.add_argument("--only-seed", type=int)
@@ -405,11 +438,16 @@ def main(argv: list[str] | None = None) -> None:
         ap.error("--rerun-reason names one run: pass --only-seed and --only-amplitude with it")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    try:
+        _drive(args)
+    except (PreflightFailed, NeedsReason, NumbersMayExist) as e:
+        print(f"eval-official: {e}", file=sys.stderr)
+        sys.exit(2)
 
+
+def _drive(args: argparse.Namespace) -> None:
     freeze = load_freeze(FREEZE_PATH)
-    preflight(freeze, args.rerun_reason, on_battery=args.on_battery)
     pairs = planned(freeze)
-    place_all(pairs)  # before any run starts: a seed that cannot be placed stops everything
     selected = [
         (s, a)
         for s, a in pairs
@@ -417,6 +455,14 @@ def main(argv: list[str] | None = None) -> None:
         and (args.only_amplitude is None or a == args.only_amplitude)
     ]
     reg = Registry()
+    if not args.rerun_reason and _all_finished(reg.entries(), selected):
+        print(
+            f"eval-official: all {len(selected)} official runs are finished; nothing to run"
+            " (`make results` renders; a re-run needs --rerun-reason 'bug: ...')"
+        )
+        return
+    preflight(freeze, args.rerun_reason, on_battery=args.on_battery)
+    place_all(pairs)  # before any run starts: a seed that cannot be placed stops everything
     t_start = time.monotonic()
     left = len(selected)
     for seed, amp in selected:
@@ -442,7 +488,7 @@ def main(argv: list[str] | None = None) -> None:
             print(f"eval-official: {rid} FAILED: {e}")
             status = "FAILED"
         else:
-            reg.finished(rid, s["timings"])
+            reg.finished(rid, s["timings"], sha256_of(SUMMARIES_DIR / rid / "summary.json"))
             status = "done"
         left -= 1
         print(

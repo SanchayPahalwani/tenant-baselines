@@ -15,6 +15,7 @@ from tenant_baselines.eval_official import (
     may_run,
     planned,
     preflight,
+    reason_kind,
 )
 from tenant_baselines.eval_run import SeedNotAllowed, prepare
 from tenant_baselines.freeze import load_freeze
@@ -89,7 +90,7 @@ def test_a_failed_run_may_repeat_as_infrastructure():
     assert may_run(failed, 4101, 6.0, "infrastructure: broker restarted", False, True) is True
     with pytest.raises(NeedsReason):
         may_run(failed, 4101, 6.0, None, False, False)
-    with pytest.raises(NeedsReason):
+    with pytest.raises(BadReason):
         may_run(failed, 4101, 6.0, "because", False, False)
 
 
@@ -134,7 +135,16 @@ def test_empty_reasons_are_rejected():
     for bare in ("bug:", "bug:  ", "infrastructure:"):
         with pytest.raises(BadReason):
             may_run([], 4101, 6.0, bare, False, False)
-    assert may_run([], 4101, 6.0, "no prefix at all", False, False) is True
+
+
+def test_a_reason_needs_a_known_prefix():
+    assert reason_kind(None) is None and reason_kind("") is None
+    assert reason_kind("bug: x") == "bug" and reason_kind(" infrastructure: y") == "infrastructure"
+    for bad in ("foo: x", "no prefix at all", "Bug: x", "  "):
+        with pytest.raises(BadReason, match="bug:"):
+            reason_kind(bad)
+    with pytest.raises(BadReason):
+        may_run([], 4101, 6.0, "foo: x", False, False)
 
 
 def test_a_run_directory_or_alert_log_counts_as_history():
@@ -162,6 +172,9 @@ class Fake:
         self.freeze_at_commit = freeze_doc
         self.git_show_rc = 0
         self.freeze_show_rc = 0
+        self.committed_run_log = ""
+        self.run_log_show_rc = 0
+        self.anchor_diff_rc = 0
         self.__dict__.update(over)
         self.calls = []
 
@@ -171,12 +184,15 @@ class Fake:
         if cmd[:2] == ["git", "status"]:
             out, rc = self.status, self.status_rc
         elif cmd[:2] == ["git", "show"]:
-            if cmd[2].startswith("HEAD:"):
+            if cmd[2] == "HEAD:docs/results/official-runs.jsonl":
                 rc, out = self.git_show_rc, self.committed_registry
+            elif cmd[2] == "HEAD:docs/results/run-log.jsonl":
+                rc, out = self.run_log_show_rc, self.committed_run_log
             else:
                 rc, out = self.freeze_show_rc, json.dumps(self.freeze_at_commit)
         elif cmd[:2] == ["git", "diff"]:
-            rc = self.diff_rc
+            # against HEAD: the frozen-code guard; between two commits: the anchor guard
+            rc = self.diff_rc if "HEAD" in cmd else self.anchor_diff_rc
         elif cmd[0] == "pmset":
             if self.batt is None:
                 raise FileNotFoundError("pmset")
@@ -199,19 +215,21 @@ def setup(tmp_path):
     (tmp_path / "data" / "frozen" / f"{sha}.jar").write_bytes(data)
     reg = tmp_path / "runs.jsonl"
     reg.write_text("")
+    (tmp_path / "run-log.jsonl").write_text("")
     fz = {**FREEZE, "jar_sha256": sha, "commit": FZ_COMMIT}
     return tmp_path, reg, fz
 
 
-def go(setup, fake=None, reason=None, **kw):
+def go(setup, fake=None, reason=None, freeze=None, **kw):
     repo, reg, fz = setup
     fake = fake or Fake({k: v for k, v in fz.items() if k != "commit"})
     return preflight(
-        fz,
+        freeze or fz,
         reason,
         run=fake,
         repo=repo,
         registry_path=reg,
+        run_log_path=repo / "run-log.jsonl",
         host_time=lambda: 1_000_000,
         **kw,
     )
@@ -231,6 +249,8 @@ def test_tree_guard_allows_only_docs_results(setup):
 
 def test_tree_guard_allows_the_rendered_results_document(setup):
     go(setup, Fake(status=" M docs/results.md\0", freeze_at_commit=setup[2]))
+    with pytest.raises(PreflightFailed, match="results.md.bak"):
+        go(setup, Fake(status=" M docs/results.md.bak\0", freeze_at_commit=setup[2]))
 
 
 def test_tree_guard_checks_both_sides_of_a_rename(setup):
@@ -307,9 +327,20 @@ def test_the_frozen_jar_must_be_there_and_match(setup):
     with pytest.raises(PreflightFailed, match="missing") as e:
         go(setup, Fake(freeze_at_commit=fz))
     assert "make jar" not in str(e.value) and "frozen" in str(e.value)
-    # a bug reason does not excuse the jar
-    with pytest.raises(PreflightFailed, match="missing"):
+    # a bug reason does not excuse the jar, and names the steps after a Java fix
+    with pytest.raises(PreflightFailed, match="missing") as e:
         go(setup, Fake(freeze_at_commit=fz), reason="bug: x")
+    assert "restore the copy" not in str(e.value)
+    assert "make jar" in str(e.value) and "jar_sha256" in str(e.value)
+    assert "restore the copy" in str(freeze_mod_message(fz, repo))
+
+
+def freeze_mod_message(fz, repo):
+    try:
+        freeze_mod.verify_frozen_jar(fz, repo)
+    except freeze_mod.FrozenJarError as e:
+        return e
+    raise AssertionError("the jar is missing; verify_frozen_jar must raise")
 
 
 def test_the_registry_must_extend_the_committed_file(setup):
@@ -325,6 +356,46 @@ def test_the_registry_must_extend_the_committed_file(setup):
         go(setup, Fake(freeze_at_commit=fz, committed_registry=line))
     with pytest.raises(PreflightFailed, match="not committed"):
         go(setup, Fake(freeze_at_commit=fz, git_show_rc=128))
+
+
+def test_the_run_log_must_extend_the_committed_file(setup):
+    repo, reg, fz = setup
+    line = '{"what": "first"}\n'
+    (repo / "run-log.jsonl").write_text(line + '{"what": "second"}\n')
+    go(setup, Fake(freeze_at_commit=fz, committed_run_log=line))
+    (repo / "run-log.jsonl").write_text("")
+    with pytest.raises(PreflightFailed, match="run-log.jsonl.*append-only"):
+        go(setup, Fake(freeze_at_commit=fz, committed_run_log=line))
+    with pytest.raises(PreflightFailed, match="run-log.jsonl is not committed"):
+        go(setup, Fake(freeze_at_commit=fz, run_log_show_rc=128))
+
+
+def test_the_anchor_must_be_a_full_commit_hash(setup):
+    fz = setup[2]
+    for bad in ("HEAD", "f" * 39, "F" * 40, "main"):
+        with pytest.raises(PreflightFailed, match="40-character"):
+            go(setup, Fake(freeze_at_commit=fz), freeze={**fz, "commit": bad})
+    go(setup, Fake(freeze_at_commit=fz), freeze={**fz, "commit": "f" * 40})
+
+
+def test_the_anchor_must_equal_the_commit_the_official_runs_started_on(setup):
+    fz = setup[2]
+    ran = "a" * 40
+    started = {"event": "started", "seed": 4101, "amplitude": 6.0, "commit": ran, "reason": None}
+    rerun = started | {"commit": "b" * 40, "reason": "bug: x"}
+    committed = json.dumps(started) + "\n" + json.dumps(rerun) + "\n"
+    setup[1].write_text(committed)
+    moved = Fake(freeze_at_commit=fz, committed_registry=committed, anchor_diff_rc=1)
+    with pytest.raises(PreflightFailed, match="does not match the commit the official runs"):
+        go(setup, moved)
+    fake = Fake(freeze_at_commit=fz, committed_registry=committed)
+    go(setup, fake)
+    anchor = [c for c in fake.calls if c[:2] == ["git", "diff"] and "HEAD" not in c]
+    assert anchor == [
+        ["git", "diff", "--quiet", ran, FZ_COMMIT, "--", ".", *eval_official.EXCLUDED]
+    ]
+    # a bug re-run is not held to the anchor
+    go(setup, moved, reason="bug: the scorer")
 
 
 def test_refuses_on_battery_without_the_flag(setup):
@@ -446,9 +517,12 @@ def test_loop_logs_each_run_copies_the_summary_and_resumes(env, capsys):
     assert (env.tmp / "summaries" / rid / "summary.json").is_file()
     assert (env.tmp / "summaries" / rid / "labels.json").is_file()
     # a second call skips the finished pairs and refuses the failed one without a reason
-    with pytest.raises(NeedsReason):
+    with pytest.raises(SystemExit) as e:
         eval_official.main(["--only-amplitude", "6"])
-    assert "already run" in capsys.readouterr().out
+    assert e.value.code == 2
+    out = capsys.readouterr()
+    assert "already run" in out.out
+    assert "infrastructure:" in out.err and "Traceback" not in out.err
 
 
 def test_resuming_with_a_summary_on_disk_for_an_unfinished_pair_refuses(env):
@@ -457,22 +531,98 @@ def test_resuming_with_a_summary_on_disk_for_an_unfinished_pair_refuses(env):
     Registry(env.tmp / "runs.jsonl").started(4101, 6.0, rid, "abc")
     (env.tmp / "data" / rid).mkdir(parents=True)
     (env.tmp / "data" / rid / "summary.json").write_text("{}")
-    with pytest.raises(NumbersMayExist):
-        eval_official.main(["--only-seed", "4101", "--only-amplitude", "6"])
-    with pytest.raises(NumbersMayExist):
-        eval_official.main(
-            ["--only-seed", "4101", "--only-amplitude", "6", "--rerun-reason", "infrastructure: x"]
-        )
+    for extra in ([], ["--rerun-reason", "infrastructure: x"]):
+        with pytest.raises(SystemExit) as e:
+            eval_official.main(["--only-seed", "4101", "--only-amplitude", "6", *extra])
+        assert e.value.code == 2
     assert not any(isinstance(c, tuple) for c in env.calls)
 
 
-def test_copied_summaries_and_run_directories_count_as_history(env):
+def test_copied_summaries_and_run_directories_count_as_history(env, capsys):
     (env.tmp / "summaries" / "off-s4101-a6-20261113T100000").mkdir(parents=True)
-    with pytest.raises(NumbersMayExist):
+    with pytest.raises(SystemExit) as e:
         eval_official.main(["--only-seed", "4101", "--only-amplitude", "6"])
+    assert e.value.code == 2 and "numbers may exist" in capsys.readouterr().err
     (env.tmp / "data" / "off-s4102-a6-20261113T100000").mkdir(parents=True)  # a bare directory
-    with pytest.raises(NumbersMayExist):
+    with pytest.raises(SystemExit) as e:
         eval_official.main(["--only-seed", "4102", "--only-amplitude", "6"])
+    assert e.value.code == 2 and "numbers may exist" in capsys.readouterr().err
+
+
+def test_an_alert_log_on_disk_counts_as_numbers(env, capsys):
+    """`_history` reads alerts.jsonl: a failed pair with one on disk may not be re-run as
+    infrastructure (without the alert log the same re-run goes ahead)."""
+    only = ["--only-seed", "4101", "--only-amplitude", "6"]
+    rid = "off-s4101-a6-20261113T100000"
+    reg = Registry(env.tmp / "runs.jsonl")
+    reg.started(4101, 6.0, rid, "abc")
+    reg.failed(rid, "RunFailed: x")
+    (env.tmp / "data" / rid).mkdir(parents=True)
+    (env.tmp / "data" / rid / "alerts.jsonl").write_text("{}\n")
+    with pytest.raises(SystemExit) as e:
+        eval_official.main([*only, "--rerun-reason", "infrastructure: broker restarted"])
+    assert e.value.code == 2 and "summary exists" in capsys.readouterr().err
+    assert not any(isinstance(c, tuple) for c in env.calls)
+    (env.tmp / "data" / rid / "alerts.jsonl").unlink()
+    eval_official.main([*only, "--rerun-reason", "infrastructure: broker restarted"])
+    assert ("run", 4101, 6.0) in env.calls
+
+
+def finish_all(env):
+    reg = Registry(env.tmp / "runs.jsonl")
+    for seed, amp in planned(FREEZE):
+        rid = f"off-s{seed}-a{amp:g}-20261113T100000"
+        reg.started(seed, amp, rid, "abc")
+        reg.finished(rid, {"total": 1.0})
+
+
+def test_with_every_pair_finished_make_eval_runs_nothing_and_goes_on(env, monkeypatch, capsys):
+    finish_all(env)
+
+    def refuse(*a, **k):
+        raise PreflightFailed("the tree differs from the freeze commit")
+
+    monkeypatch.setattr(eval_official, "preflight", refuse)
+    assert eval_official.main([]) is None
+    out = capsys.readouterr().out
+    assert "all 15 official runs are finished; nothing to run" in out
+    assert "--rerun-reason 'bug: ...'" in out
+    assert eval_official.main(["--only-amplitude", "6"]) is None
+    assert "all 5 official runs are finished" in capsys.readouterr().out
+    # a bug reason goes on to the guards
+    with pytest.raises(SystemExit) as e:
+        eval_official.main(
+            ["--only-seed", "4101", "--only-amplitude", "6", "--rerun-reason", "bug: x"]
+        )
+    assert e.value.code == 2
+
+
+def test_a_refused_preflight_exits_2_without_a_traceback(env, monkeypatch, capsys):
+    finish_all(env)
+    lines = (env.tmp / "runs.jsonl").read_text().splitlines()
+    (env.tmp / "runs.jsonl").write_text("\n".join(lines[:-1]) + "\n")  # one pair unfinished
+    called = []
+
+    def refuse(*a, **k):
+        called.append(1)
+        raise PreflightFailed("the working tree has changes outside docs/results/")
+
+    monkeypatch.setattr(eval_official, "preflight", refuse)
+    with pytest.raises(SystemExit) as e:
+        eval_official.main([])
+    assert e.value.code == 2 and called
+    err = capsys.readouterr().err
+    assert "eval-official: the working tree has changes" in err and "Traceback" not in err
+
+
+def test_an_unknown_reason_prefix_is_refused_before_anything_is_written(env, capsys):
+    with pytest.raises(SystemExit) as e:
+        eval_official.main(
+            ["--only-seed", "4101", "--only-amplitude", "6", "--rerun-reason", "foo: x"]
+        )
+    assert e.value.code == 2 and "bug:" in capsys.readouterr().err
+    assert not (env.tmp / "runs.jsonl").exists() and not (env.tmp / "run-log.jsonl").exists()
+    assert env.calls == []
 
 
 def test_a_rerun_reason_needs_one_named_run(env):
@@ -492,7 +642,8 @@ def test_a_bug_run_of_a_fresh_pair_is_logged_with_its_reason_and_jar(env):
     assert started["reason"] == "bug: scorer fix" and started["jar_sha256"] == "jarsha"
     (line,) = env.log()
     assert line["why"] == "bug: scorer fix" and line["commit"] == "abc"
-    assert set(line) == {"commit", "date", "what", "why", "old", "new"}
+    assert set(line) == {"commit", "date", "what", "why", "old", "new", "supersedes"}
+    assert line["old"] is None and line["new"] is None and line["supersedes"] == []
     assert env.preflight_reasons[-1] == "bug: scorer fix"  # the guards saw the reason
 
 
@@ -506,19 +657,48 @@ def test_a_bug_rerun_moves_the_old_summary_aside_so_the_report_still_renders(env
     assert [d.name for d in summaries.iterdir()] == [first[:-1] + "9"]
     assert (env.tmp / "superseded" / first / "summary.json").is_file()
     (line,) = env.log()
-    assert first in line["old"] and "superseded" in line["old"]
-    # eval_report.main reads that directory: one summary per pair, so no "appears twice"
-    monkeypatch.setattr(eval_report, "REPO", env.tmp)
-    monkeypatch.setattr(eval_report, "render", lambda *a, **k: "rendered\n")
-    monkeypatch.setattr(eval_report, "measure_machine", lambda: {})
-    out = env.tmp / "results.md"
-    eval_report.main(["--summaries", str(summaries), "--out", str(out)])
-    assert out.read_text() == "rendered\n"
+    assert line["supersedes"] == [first] and line["old"] is None and line["new"] is None
+    # the report's check takes the moved directory: one summary per pair, the last finished one
+    monkeypatch.setattr(eval_report, "planned", lambda freeze: [(4101, 6.0)])
+    registry = Registry(env.tmp / "runs.jsonl").entries()
+    loaded = [
+        s | {"commit": "abc", "timings": STAGES} for s in eval_report.load_summaries(summaries)
+    ]
+    eval_report.check_official(loaded, registry, FREEZE)
     # without the move, the same directory is refused
     (summaries / first).mkdir()
     (summaries / first / "summary.json").write_text(json.dumps(Env.summary(first, 4101, 6.0)))
+    again = [
+        s | {"commit": "abc", "timings": STAGES} for s in eval_report.load_summaries(summaries)
+    ]
     with pytest.raises(ValueError, match="appears twice"):
-        eval_report.main(["--summaries", str(summaries), "--out", str(out)])
+        eval_report.check_official(again, registry, FREEZE)
+
+
+STAGES = {"generate": 1.0, "produce": 1.0, "job": 1.0, "total": 3.0}
+
+
+def test_a_failed_bug_rerun_leaves_the_old_summary_in_place(env, monkeypatch):
+    only = ["--only-seed", "4101", "--only-amplitude", "6"]
+    eval_official.main(only)
+    first = next(e["run_id"] for e in Registry(env.tmp / "runs.jsonl").entries())
+    monkeypatch.setattr(eval_official.eval_run, "run_id", lambda k, s, a, now: first[:-1] + "9")
+    env.outcomes[(4101, 6.0)] = eval_run.RunFailed("boom")
+    with pytest.raises(SystemExit):
+        eval_official.main([*only, "--rerun-reason", "bug: the scorer miscounted"])
+    assert [d.name for d in (env.tmp / "summaries").iterdir()] == [first]
+    assert not (env.tmp / "superseded").exists()
+    (line,) = env.log()
+    assert line["supersedes"] == [first]
+    log = eval_report._log_section(env.log())
+    assert "moved" not in " ".join(log) and f"supersedes {first} when the re-run finishes" in log[0]
+
+
+def test_a_finished_line_records_the_hash_of_the_copied_summary(env):
+    eval_official.main(["--only-seed", "4101", "--only-amplitude", "6"])
+    (done,) = [e for e in Registry(env.tmp / "runs.jsonl").entries() if e["event"] == "finished"]
+    copied = env.tmp / "summaries" / done["run_id"] / "summary.json"
+    assert done["summary_sha256"] == freeze_mod.sha256_of(copied)
 
 
 # ---------------------------------------------------------------- the freeze on the run path
@@ -533,14 +713,16 @@ def frozen_repo(tmp_path, monkeypatch, **over):
     (tmp_path / "data" / "frozen" / f"{sha}.jar").write_bytes(b"jar")
     p = write_freeze(tmp_path / "f.json", jar_sha256=sha, **over)
     monkeypatch.setattr(eval_run, "REPO", tmp_path)
+    monkeypatch.setattr(freeze_mod, "REPO", tmp_path)  # container paths are under its data/
     monkeypatch.setattr(eval_run, "FREEZE_PATH", p)
     return sha
 
 
 def test_run_loads_the_freeze_from_disk(tmp_path, monkeypatch):
     monkeypatch.setattr(eval_run, "REPO", tmp_path)
+    monkeypatch.setattr(freeze_mod, "REPO", tmp_path)
     monkeypatch.setattr(eval_run, "_commit", lambda: "c0ffee")
-    monkeypatch.setattr(eval_run, "_dirty", lambda: False)
+    monkeypatch.setattr(eval_run, "_dirty", lambda kind: False)
     data = tmp_path / "data" / "eval"
     monkeypatch.setattr(eval_run, "FREEZE_PATH", tmp_path / "missing.json")
     with pytest.raises(FileNotFoundError):
@@ -553,7 +735,7 @@ def test_run_loads_the_freeze_from_disk(tmp_path, monkeypatch):
 
 def test_run_refuses_a_missing_or_changed_frozen_jar(tmp_path, monkeypatch):
     monkeypatch.setattr(eval_run, "_commit", lambda: "c0ffee")
-    monkeypatch.setattr(eval_run, "_dirty", lambda: False)
+    monkeypatch.setattr(eval_run, "_dirty", lambda kind: False)
     sha = frozen_repo(tmp_path, monkeypatch)
     jar = tmp_path / "data" / "frozen" / f"{sha}.jar"
     jar.write_bytes(b"changed")
@@ -566,7 +748,7 @@ def test_run_refuses_a_missing_or_changed_frozen_jar(tmp_path, monkeypatch):
 
 def test_an_official_run_id_must_belong_to_its_pair(tmp_path, monkeypatch):
     monkeypatch.setattr(eval_run, "_commit", lambda: "c0ffee")
-    monkeypatch.setattr(eval_run, "_dirty", lambda: False)
+    monkeypatch.setattr(eval_run, "_dirty", lambda kind: False)
     frozen_repo(tmp_path, monkeypatch)
     with pytest.raises(ValueError, match="does not belong"):
         eval_run.run(

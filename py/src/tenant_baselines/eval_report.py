@@ -1,10 +1,13 @@
 """Render docs/results.md from the run summaries (spec 5.5 and 5.6). Synthetic data only.
 
-`render` is pure: summaries, run log, check-paths result, freeze file and machine facts in,
-text out. `main` reads the files and measures the machine.
+`render` is pure: summaries, run log, check-paths result, freeze file, registry, machine facts
+and the render's own commit and date in, text out. `main` reads the files, checks the official
+records against each other, and reads the machine facts from `docs/results/machine.json` (it
+measures and writes them only when that file is absent).
 """
 
 import argparse
+import hashlib
 import importlib.metadata
 import json
 import statistics
@@ -14,6 +17,7 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 
+from tenant_baselines.freeze import DEV_SEEDS, MEASURED_PATHS, planned
 from tenant_baselines.scoring import FAMILIES, nearest_rank, wilson
 
 REPO = Path(__file__).resolve().parents[3]
@@ -49,14 +53,26 @@ _FIXED_VERSIONS = (
     ("Grafana", "13.2.5"),
     ("Alertmanager", "v0.34.2"),
 )
+# The check-paths stages, run one after the other: their sum cannot exceed the total.
+_CHECK_STAGES = ("generate", "produce", "events_job", "aggregates_job")
+_RUN_STAGES = ("generate", "produce", "job")
+_SLACK_S = 1.0  # each figure is rounded to 0.1 s
+_TIE_BREAKS = (
+    "the fewest false pages per day, then the lower median delay, then the less sensitive setting"
+)
 
 
-def _versions() -> tuple[tuple[str, str], ...]:
+def _python_version() -> str:
     v = sys.version_info
+    return f"{v.major}.{v.minor}.{v.micro}"
+
+
+def _versions(machine: dict) -> tuple[tuple[str, str], ...]:
+    """The fixed versions, and Python and numpy as recorded with the machine facts."""
     return (
         *_FIXED_VERSIONS,
-        ("Python", f"{v.major}.{v.minor}.{v.micro}"),
-        ("numpy", importlib.metadata.version("numpy")),
+        ("Python", machine.get("python") or _python_version()),
+        ("numpy", machine.get("numpy") or importlib.metadata.version("numpy")),
     )
 
 
@@ -67,7 +83,8 @@ def load_summaries(directory: str | Path) -> list[dict]:
     """Every summary under `directory`, ordered by (amplitude, seed, run id).
 
     Two layouts: `<dir>/<run id>/summary.json`, and `<dir>/<name>.json`. A `labels.json` beside
-    a summary (or `<name>.labels.json`) is attached as `_labels`, keyed by scenario id.
+    a summary (or `<name>.labels.json`) is attached as `_labels`, keyed by scenario id, and the
+    SHA-256 of the summary file as `_sha256`.
     """
     d = Path(directory)
     paths = sorted(d.glob("*/summary.json")) + sorted(
@@ -75,7 +92,9 @@ def load_summaries(directory: str | Path) -> list[dict]:
     )
     out = []
     for p in paths:
-        s = json.loads(p.read_text())
+        raw = p.read_bytes()
+        s = json.loads(raw)
+        s["_sha256"] = hashlib.sha256(raw).hexdigest()
         if p.name == "summary.json":
             labels = p.with_name("labels.json")
         else:
@@ -102,12 +121,21 @@ def latest_per_cell(summaries: list[dict]) -> list[dict]:
     return sorted(best.values(), key=lambda s: (s["meta"]["amplitude"], s["meta"]["seed"]))
 
 
-def load_run_log(path: str | Path) -> list[dict]:
-    """The run log (JSON lines, oldest first); an absent file is an empty log."""
+def _load_jsonl(path: str | Path) -> list[dict]:
     p = Path(path)
     if not p.is_file():
         return []
     return [json.loads(line) for line in p.read_text().splitlines() if line.strip()]
+
+
+def load_run_log(path: str | Path) -> list[dict]:
+    """The run log (JSON lines, oldest first); an absent file is an empty log."""
+    return _load_jsonl(path)
+
+
+def load_registry(path: str | Path) -> list[dict]:
+    """`official-runs.jsonl` (JSON lines, oldest first); an absent file is an empty registry."""
+    return _load_jsonl(path)
 
 
 # ---------------------------------------------------------------- numbers
@@ -150,6 +178,43 @@ def headline(summaries: list[dict], amplitude: float) -> dict:
             | _pooled(sum(x["detected_any"] for x in w5), sum(x["n_should_page"] for x in w5)),
         }
     return out
+
+
+def headline_text(summaries: list[dict], amplitude: float) -> str:
+    """The headline in one line: each family's pooled recall and false pages per day."""
+    parts = []
+    for i, (fam, v) in enumerate(headline(summaries, amplitude).items()):
+        e = v["detected_expected"]
+        unit = " false pages per day" if i == 0 else ""
+        parts.append(f"{_fam(fam)} {e['k']}/{e['n']}, {v['pooled_false_per_day']:.2f}{unit}")
+    return "; ".join(parts) or "no runs"
+
+
+def matched_pages(summaries: list[dict], amplitude: float) -> dict[str, tuple[int, int]]:
+    """Per family, over the seeds at `amplitude`: matched and all pages of the selected setting."""
+    runs = _at(summaries, amplitude)
+    if not runs:
+        return {}
+    return {
+        fam: (
+            sum(s["selected_week5"][fam]["matched_pages"] for s in runs),
+            sum(s["selected_week5"][fam]["pages"] for s in runs),
+        )
+        for fam in FAMILIES
+    }
+
+
+def false_pages_sentence(summaries: list[dict], amplitude: float = MAIN_AMPLITUDE) -> str | None:
+    """How many of the selected settings' pages matched a scenario, pooled at `amplitude`."""
+    m = matched_pages(summaries, amplitude)
+    if not m:
+        return None
+    items = [f"{k} of {n} ({_fam(f)})" for f, (k, n) in m.items()]
+    items[0] = items[0].replace(" (", " pages matched a scenario (", 1)
+    listed = ", ".join(items[:-1]) + " and " + items[-1] if len(items) > 1 else items[0]
+    if all(2 * k < n for k, n in m.values()):
+        return f"Most pages are false in every family: at the selected settings, {listed}."
+    return f"At the selected settings, {listed}."
 
 
 def curve(summaries: list[dict], amplitude: float) -> list[dict]:
@@ -503,12 +568,43 @@ def check_passed(cp: dict) -> tuple[bool, str]:
     return not reasons, "; ".join(reasons)
 
 
+def timing_problem(cp: dict) -> str | None:
+    """Why check-paths' seconds cannot be reported, or None when they can.
+
+    The four stages run one after the other, so their sum cannot exceed the total. The total
+    comes from the host's monotonic clock, which stops while the host sleeps; the job seconds come
+    from Flink's wall clock, which does not. A total below the sum means the host slept."""
+    secs = cp.get("seconds") or {}
+    if any(not isinstance(secs.get(k), int | float) for k in (*_CHECK_STAGES, "total")):
+        return "the file does not record every stage"
+    stages = sum(secs[k] for k in _CHECK_STAGES)
+    if secs["total"] + _SLACK_S < stages:
+        return (
+            f"the host slept during the run (total {secs['total']:.1f} s is less than the"
+            f" stages' sum {stages:.1f} s)"
+        )
+    return None
+
+
 def _check_section(cp: dict | None) -> list[str]:
     if cp is None:
         return ["`make check-paths` has not been run (no result file).", ""]
     ok, why = check_passed(cp)
     verdict = "passed" if ok else f"failed: {why}"
     secs = cp.get("seconds", {})
+    problem = timing_problem(cp)
+    bits = [f"run id `{cp['run_id']}`"] if cp.get("run_id") else []
+    if "dirty" in cp:
+        bits.append("a dirty tree" if cp["dirty"] else "a clean tree")
+    if cp.get("jar_sha256"):
+        bits.append(f"jar SHA-256 `{cp['jar_sha256']}`")
+    run = f" Recorded: {'; '.join(bits)}." if bits else ""
+    timing = (
+        f" Timings are not reported: {problem}."
+        if problem
+        else f" Seconds: events job {secs['events_job']}, aggregates job"
+        f" {secs['aggregates_job']}, total {secs['total']}."
+    )
     return [
         f"`make check-paths` {verdict}.",
         "",
@@ -520,20 +616,60 @@ def _check_section(cp: dict | None) -> list[str]:
         " of them regional firing rows.",
         "",
         f"Run at commit `{str(cp.get('commit', ''))[:7]}`"
-        f" on {cp.get('date_utc', 'an unrecorded date')}."
-        f" Seconds: events job {secs.get('events_job', 'n/a')}, aggregates job"
-        f" {secs.get('aggregates_job', 'n/a')}, total {secs.get('total', 'n/a')}.",
+        f" on {cp.get('date_utc', 'an unrecorded date')}.{run}{timing}",
         "",
     ]
 
 
 def _events_minutes(cp: dict | None) -> str:
-    secs = (cp or {}).get("seconds", {}).get("events_job")
-    return "an unmeasured time" if secs is None else f"about {round(secs / 60)} minutes"
+    if cp is None or timing_problem(cp):
+        return "an unmeasured time"
+    return f"about {round(cp['seconds']['events_job'] / 60)} minutes"
+
+
+def _and(items: Iterable) -> str:
+    xs = [str(x) for x in items]
+    return ", ".join(xs[:-1]) + " and " + xs[-1] if len(xs) > 1 else "".join(xs)
+
+
+def _dirty_note(summaries: list[dict]) -> list[str]:
+    off = [s for s in summaries if s["meta"]["kind"] == "off"]
+    n = sum(1 for s in off if s.get("dirty"))
+    if not n:
+        return []
+    count = (
+        f"Each of the {len(off)} official summaries records `dirty: true`."
+        if n == len(off)
+        else f"{n} of {len(off)} official summaries record `dirty: true`."
+    )
+    return [
+        f"- **The `dirty` flag.** {count} The flag counts the driver's own registry line, written"
+        " before the run. The driver refuses any other change (`eval_official.preflight`)."
+    ]
+
+
+def _false_pages_note(summaries: list[dict]) -> list[str]:
+    sentence = false_pages_sentence(summaries)
+    if sentence is None:
+        return []
+    cause = (
+        " The traffic model's unlabelled bursts and per-day level factors (spec 5.2) are the"
+        " expected cause; this eval does not measure the split."
+        if sentence.startswith("Most")
+        else ""
+    )
+    return [
+        f"- **Matched and false pages.** On week 5 at {_g(MAIN_AMPLITUDE)}:1, pooled over the"
+        f" seeds. {sentence}{cause}"
+    ]
 
 
 def _method_section(
-    summaries: list[dict], freeze: dict | None, machine: dict, check_paths: dict | None
+    summaries: list[dict],
+    freeze: dict | None,
+    check_paths: dict | None,
+    changes: list[str],
+    render_date: str | None,
 ) -> list[str]:
     seeds = sorted({s["meta"]["seed"] for s in summaries})
     kinds = sorted({s["meta"]["kind"] for s in summaries})
@@ -548,14 +684,19 @@ def _method_section(
     else:
         official = "not frozen yet"
         frozen = "No freeze file exists, so nothing here is frozen."
-    changes = machine.get("changes") or []
+    released = (
+        f"which is not released as of {render_date}"
+        if render_date
+        else "which was not released when this was rendered"
+    )
     lines = [
-        "- **Seeds.** The code enforces the seed protocol. A dev run refuses any seed outside 7,"
-        " 11 and 13. An official run needs the freeze file, uses only the seeds listed in it,"
-        " and refuses a seed and amplitude that already has an official run."
+        f"- **Seeds.** The code enforces the seed protocol. A dev run refuses any seed outside"
+        f" {_and(DEV_SEEDS)}. An official run needs the freeze file, uses only the seeds listed"
+        " in it, and refuses a seed and amplitude that already has an official run."
         f" Official seeds: {official}. {frozen}"
         f" This render holds runs of kind {', '.join(kinds) or 'none'} at seeds"
         f" {', '.join(str(s) for s in seeds) or 'none'}.",
+        *_dirty_note(summaries),
         "- **The world.** 3 regions, 24 tenants (8 per region) and 48 keys: 6 shared units"
         " and 6 dedicated units. The 18 shared tenants have a key on each of the two shared units"
         " of their region (36 keys). The 6 dedicated tenants have their own unit and one key on"
@@ -566,6 +707,10 @@ def _method_section(
         "- **Recall.** Every recall figure is expected-signal recall unless the column says"
         " any-signal. A scenario counts when a page lands on the signal the scenario is meant to"
         " move. The selection rule on week 4 uses the same count.",
+        "- **Selection ties.** Among the settings that reach 8 of 10 (or, when none does, among"
+        f" those with the highest recall), the rule takes {_TIE_BREAKS}. Spec 5.6 names the"
+        " first two; the third is the builder's call, recorded in `eval/freeze.json`.",
+        *_false_pages_note(summaries),
         "- **The thresholds mask.** The static thresholds are fitted with every labelled scenario"
         " masked out, except the Monday peak. Launch surges and holiday dips are masked too. The"
         " mask covers the scenario's keys from its start to 4 minutes past its end, because the"
@@ -583,8 +728,8 @@ def _method_section(
         " the same alert log. It does not show that the detectors are right: both paths share the"
         " thresholds, every operator from the minute aggregates on, and the random draws.",
         "- **Replay mode can fail.** Replay mode aligns the watermarks of the Kafka partitions."
-        " That can hit a race in the Kafka connector (FLINK-39728). It is fixed in connector 5.1.0,"
-        " which is not released yet; this repo pins 5.0.0-2.2. A run that hits it fails and gives"
+        " That can hit a race in the Kafka connector (FLINK-39728). It is fixed in connector"
+        f" 5.1.0, {released}; this repo pins 5.0.0-2.2. A run that hits it fails and gives"
         " no output, so no wrong result is possible, and check-paths can be run again. The"
         " official runs use aggregates mode. It has one partition and no alignment, so it cannot"
         " hit the race.",
@@ -610,43 +755,119 @@ def _method_section(
     return lines
 
 
-def _log_section(run_log: list[dict]) -> list[str]:
-    if not run_log:
-        return ["No entries yet.", ""]
+def _sentence(x: object) -> str:
+    s = str(x).strip()
+    return s if s.endswith((".", "!", "?")) else s + "."
+
+
+def _log_section(run_log: list[dict], first_entry: dict | None = None) -> list[str]:
+    """The derived first entry, then the file's entries. A file entry's typed `old` and `new`
+    are not printed: every headline here comes from the summaries."""
     lines = []
-    for i, e in enumerate(run_log, 1):
+    if first_entry:
+        e = first_entry
         lines.append(
-            f"{i}. `{str(e.get('commit', ''))[:7]}`, {e.get('date', 'undated')}:"
-            f" {e.get('what', '')} Why: {e.get('why', 'not recorded')}"
-            f" Old headline: {e.get('old', 'none')}. New headline: {e.get('new', 'none')}."
+            f"{len(lines) + 1}. `{e['commit'][:7]}`, {e['date']}: {_sentence(e['what'])}"
+            f" Why: {_sentence(e['why'])} Old headline: {_sentence(e['old'])}"
+            f" New headline: {_sentence(e['new'])}"
         )
+    for e in run_log:
+        sup = e.get("supersedes") or []
+        replaces = (
+            f" It supersedes {', '.join(sup)} when the re-run finishes;"
+            " until then the earlier summary stays in `docs/results/summaries/`."
+            if sup
+            else ""
+        )
+        lines.append(
+            f"{len(lines) + 1}. `{str(e.get('commit', ''))[:7]}`, {e.get('date', 'undated')}:"
+            f" {_sentence(e.get('what', ''))} Why: {_sentence(e.get('why', 'not recorded'))}"
+            f"{replaces} Old and new headlines not derived for this entry."
+        )
+    if not lines:
+        return ["No entries yet.", ""]
     return lines + [""]
 
 
-def _gib(n: int | float | None) -> str:
-    return "not measured" if n is None else f"{n / 2**30:.1f} GiB"
+def _gib(x: int | float | None) -> str:
+    return "not measured" if x is None else f"{x:.1f} GiB"
 
 
-def _setup_section(machine: dict) -> list[str]:
+def _utc(at: str) -> datetime:
+    return datetime.fromisoformat(at).astimezone(UTC)
+
+
+def run_span(summaries: list[dict], registry: list[dict]) -> dict | None:
+    """First start and last finish in the registry of the runs these summaries come from."""
+    rids = {s.get("run_id") for s in summaries}
+    mine = [e for e in registry if e.get("run_id") in rids and e.get("at")]
+    starts = [_utc(e["at"]) for e in mine if e["event"] == "started"]
+    ends = [_utc(e["at"]) for e in mine if e["event"] == "finished"]
+    if not starts or not ends:
+        return None
+    first, last = min(starts), max(ends)
+    return {"first": first, "last": last, "minutes": (last - first).total_seconds() / 60}
+
+
+def _setup_section(
+    summaries: list[dict],
+    registry: list[dict],
+    freeze: dict | None,
+    machine: dict,
+    rendered: dict,
+) -> list[str]:
+    commits = sorted({s["commit"] for s in summaries if s.get("commit")})
+    rids = {s.get("run_id") for s in summaries}
+    jars = sorted(
+        {
+            e["jar_sha256"]
+            for e in registry
+            if e.get("event") == "started" and e.get("run_id") in rids and e.get("jar_sha256")
+        }
+    )
+    span = run_span(summaries, registry)
+    stamp = "%Y-%m-%d %H:%M:%S UTC"
+    runs = (
+        f"first start {span['first']:{stamp}}, last finish {span['last']:{stamp}},"
+        f" elapsed {span['minutes']:.1f} minutes (`docs/results/official-runs.jsonl`)"
+        if span
+        else "not recorded (no registry lines for these runs)"
+    )
     host = (
         f"{machine.get('cpu', 'not measured')}, {machine.get('cores', 'n/a')} cores,"
-        f" {_gib(machine.get('memory_bytes'))} memory"
+        f" {_gib(machine.get('memory_gib'))} memory"
     )
     vm = (
         f"Docker {machine.get('docker_version', 'not measured')},"
         f" {machine.get('docker_cpus', 'n/a')} CPUs,"
-        f" {_gib(machine.get('docker_memory_bytes'))} memory"
+        f" {_gib(machine.get('docker_memory_gib'))} memory"
+    )
+    frozen = (
+        f"`{str(freeze['commit'])[:7]}`" if freeze and freeze.get("commit") else "not frozen yet"
     )
     lines = [
-        f"- Commit: `{str(machine.get('commit', 'not measured'))[:7]}`",
+        "- Runs at commit: " + (", ".join(f"`{c[:7]}`" for c in commits) or "not recorded"),
         "- Command: `make eval`",
-        f"- Date: {machine.get('date', 'not measured')}",
+        f"- Settings frozen at commit: {frozen}",
+        "- Jar SHA-256: " + (", ".join(f"`{j}`" for j in jars) or "not recorded"),
+        f"- Runs: {runs}",
         f"- Machine: {host}",
         f"- Docker VM: {vm}",
-        "- Versions: " + "; ".join(f"{k} {v}" for k, v in _versions()),
-        "",
     ]
-    return lines
+    if machine.get("source"):
+        lines.append(f"- Machine facts: {machine['source']}")
+    lines.append("- Versions: " + "; ".join(f"{k} {v}" for k, v in _versions(machine)))
+    lines.append(
+        f"- Rendered at commit `{str(rendered.get('commit') or 'not recorded')[:7]}`"
+        f" on {rendered.get('date') or 'an unrecorded date'}"
+    )
+    equal = rendered.get("measured_code_equal")
+    if equal is not None:
+        lines.append(
+            "- Measured code at the render commit equals the freeze commit: "
+            + ("yes" if equal else "no")
+        )
+    return lines + [""]
 
 
 def render(
@@ -655,7 +876,15 @@ def render(
     check_paths: dict | None,
     freeze: dict | None,
     machine: dict,
+    registry: list[dict] | None = None,
+    first_entry: dict | None = None,
+    rendered: dict | None = None,
+    changes: Iterable[str] = (),
 ) -> str:
+    """The whole document. `machine` holds the facts of the machine the runs ran on; `rendered`
+    the render's own commit and date, and whether the measured code equals the freeze commit's."""
+    registry = registry or []
+    rendered = rendered or {}
     out = [
         "# Results",
         "",
@@ -664,7 +893,7 @@ def render(
         "",
         "## Setup",
         "",
-        *_setup_section(machine),
+        *_setup_section(summaries, registry, freeze, machine, rendered),
         f"## Headline: {_g(MAIN_AMPLITUDE)}:1 day/night amplitude, selected settings on the test"
         " week",
         "",
@@ -683,12 +912,157 @@ def render(
         *_check_section(check_paths),
         "## Method notes",
         "",
-        *_method_section(summaries, freeze, machine, check_paths),
+        *_method_section(summaries, freeze, check_paths, list(changes), rendered.get("date")),
         "## Run log",
         "",
-        *_log_section(run_log),
+        *_log_section(run_log, first_entry),
     ]
     return "\n".join(out).rstrip("\n") + "\n"
+
+
+# ---------------------------------------------------------------- checks of the records
+
+
+def _last_lines(registry: list[dict]) -> dict[tuple, dict]:
+    last: dict[tuple, dict] = {}
+    for e in registry:
+        last[(e["seed"], e["amplitude"])] = e
+    return last
+
+
+def _check_timings(s: dict) -> None:
+    t = s.get("timings") or {}
+    if any(not isinstance(t.get(k), int | float) for k in (*_RUN_STAGES, "total")):
+        raise ValueError(f"{s['run_id']}: the summary does not record every stage's seconds")
+    stages = sum(t[k] for k in _RUN_STAGES)
+    if t["total"] + _SLACK_S < stages:
+        raise ValueError(
+            f"{s['run_id']}: total {t['total']} s is less than the stages' sum {stages:.1f} s;"
+            " the host slept during the run"
+        )
+
+
+def check_official(summaries: list[dict], registry: list[dict], freeze: dict | None) -> None:
+    """Official renders take the registry's current runs only: one summary per pair the freeze
+    plans, each the run of its pair's last `finished` line, all at one commit."""
+    if freeze is None:
+        raise ValueError("an official render needs eval/freeze.json")
+    seen: dict[tuple, dict] = {}
+    for s in summaries:
+        m, rid = s["meta"], s.get("run_id")
+        if not rid:
+            raise ValueError(
+                f"a summary of seed {m['seed']} amplitude {m['amplitude']:g} has no run_id"
+            )
+        if m["kind"] != "off" or not rid.startswith("off-"):
+            raise ValueError(f"run {rid} is not an official run (kind {m['kind']!r})")
+        cell = (m["seed"], m["amplitude"])
+        if cell in seen:
+            raise ValueError(
+                f"seed {cell[0]} at amplitude {cell[1]:g} appears twice:"
+                f" {seen[cell]['run_id']} and {rid}"
+            )
+        seen[cell] = s
+    pairs = planned(freeze)
+    extra = sorted(set(seen) - set(pairs))
+    if extra:
+        raise ValueError(f"summaries of pairs the freeze does not plan: {extra}")
+    last = _last_lines(registry)
+    for seed, amp in pairs:
+        e = last.get((seed, amp))
+        if e is None or e["event"] != "finished":
+            state = "has no registry line" if e is None else f"ends with {e['event']!r}"
+            raise ValueError(f"seed {seed} amplitude {amp:g} {state}, not 'finished'")
+        s = seen.get((seed, amp))
+        if s is None:
+            raise ValueError(f"seed {seed} amplitude {amp:g} has no summary")
+        if s["run_id"] != e["run_id"]:
+            raise ValueError(
+                f"seed {seed} amplitude {amp:g}: the summary is {s['run_id']}, but the last"
+                f" finished run is {e['run_id']}"
+            )
+        want = e.get("summary_sha256")
+        if want is not None and want != s.get("_sha256"):
+            raise ValueError(
+                f"{s['run_id']}: summary.json does not hash to the registry's summary_sha256"
+            )
+        _check_timings(s)
+    commits = sorted({str(s.get("commit")) for s in summaries})
+    if len(commits) != 1 or commits == ["None"]:
+        raise ValueError(f"the summaries carry {len(commits)} commits: {commits}")
+
+
+def first_run_entry(
+    registry: list[dict], summaries_dir: Path, superseded_dir: Path, freeze: dict
+) -> dict:
+    """Run log entry 1, derived: the first official run of every planned pair.
+
+    Each pair's first `finished` run is read from `summaries_dir`, or from `superseded_dir` when a
+    later re-run moved it, so the entry keeps the first generation's numbers after a re-run."""
+    pairs = planned(freeze)
+    first: dict[tuple, str] = {}
+    for e in registry:
+        if e["event"] == "finished":
+            first.setdefault((e["seed"], e["amplitude"]), e["run_id"])
+    done = [p for p in pairs if p in first]
+    if len(done) < len(pairs):
+        missing = [p for p in pairs if p not in first]
+        raise ValueError(
+            f"{len(done)} of {len(pairs)} pairs have a finished run; the first official run is"
+            f" not complete: {missing}"
+        )
+    started = {e["run_id"]: e for e in registry if e["event"] == "started"}
+    generation, lines = [], []
+    for p in pairs:
+        rid = first[p]
+        found = [d / rid / "summary.json" for d in (Path(summaries_dir), Path(superseded_dir))]
+        path = next((f for f in found if f.is_file()), None)
+        if path is None:
+            raise FileNotFoundError(
+                f"the first summary of seed {p[0]} amplitude {p[1]:g}, {rid}, is in neither"
+                f" {summaries_dir} nor {superseded_dir}"
+            )
+        if rid not in started:
+            raise ValueError(f"{rid} has no started line in the registry")
+        generation.append(json.loads(path.read_text()))
+        lines.append(started[rid])
+    commits = sorted({e["commit"] for e in lines})
+    if len(commits) != 1:
+        raise ValueError(f"the first official runs started at {len(commits)} commits: {commits}")
+    begun = min(_utc(e["at"]) for e in lines)
+    return {
+        "commit": commits[0],
+        "date": begun.date().isoformat(),
+        "what": (
+            f"first official run: {len(pairs)} runs, {len(freeze['official_seeds'])} seeds at"
+            f" {len(freeze['amplitudes'])} amplitudes"
+        ),
+        "why": f"the settings freeze at `{str(freeze['commit'])[:7]}`",
+        "old": "none",
+        "new": headline_text(generation, MAIN_AMPLITUDE),
+    }
+
+
+def measured_code_equal(freeze_commit: str) -> bool:
+    """Whether the measured code (`freeze.MEASURED_PATHS`) at HEAD equals the freeze commit's."""
+    cmd = ["git", "-C", str(REPO), "diff", "--quiet", freeze_commit, "HEAD", "--"]
+    r = subprocess.run([*cmd, *MEASURED_PATHS], capture_output=True, text=True)
+    if r.returncode not in (0, 1):
+        raise RuntimeError(
+            f"git diff could not compare the measured code with {freeze_commit[:7]}"
+            f" (exit {r.returncode}): {r.stderr.strip()}"
+        )
+    return r.returncode == 0
+
+
+def check_measured_code(equal: bool, run_log: list[dict]) -> None:
+    """A render after the measured code changed needs a `bug:` re-run in the run log."""
+    if equal or any(str(e.get("why", "")).startswith("bug:") for e in run_log):
+        return
+    raise ValueError(
+        "the measured code differs from the freeze commit and the run log records no 'bug:'"
+        " re-run; revert the change, or re-run under --rerun-reason 'bug: ...'"
+    )
 
 
 # ---------------------------------------------------------------- main
@@ -702,41 +1076,49 @@ def _run(*cmd: str) -> str | None:
     return r.stdout.strip()
 
 
+def _round_gib(n: str | None) -> float | None:
+    return round(int(n) / 2**30, 1) if n else None
+
+
 def measure_machine() -> dict:
+    """The host and Docker VM facts, measured now (for a render with no `machine.json`)."""
     cpu = _run("sysctl", "-n", "machdep.cpu.brand_string")
     cores = _run("sysctl", "-n", "hw.ncpu")
     mem = _run("sysctl", "-n", "hw.memsize")
     docker = _run("docker", "info", "--format", "{{.ServerVersion}}|{{.NCPU}}|{{.MemTotal}}")
     d = docker.split("|") if docker else [None, None, None]
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
+    return {
+        "source": f"measured by eval_report on {today}, at the first render after the runs",
+        "cpu": cpu,
+        "cores": int(cores) if cores else None,
+        "memory_gib": _round_gib(mem),
+        "docker_version": d[0],
+        "docker_cpus": int(d[1]) if d[1] else None,
+        "docker_memory_gib": _round_gib(d[2]),
+        "python": _python_version(),
+        "numpy": importlib.metadata.version("numpy"),
+    }
+
+
+def load_machine(path: Path) -> dict:
+    """The machine facts on file; measured and written only when the file is absent."""
+    if path.is_file():
+        return json.loads(path.read_text())
+    machine = measure_machine()
+    path.write_text(json.dumps(machine, indent=2, sort_keys=True) + "\n")
+    return machine
+
+
+def render_facts() -> dict:
     return {
         "commit": _run("git", "-C", str(REPO), "rev-parse", "HEAD"),
         "date": datetime.now(UTC).strftime("%Y-%m-%d"),
-        "cpu": cpu,
-        "cores": cores,
-        "memory_bytes": int(mem) if mem else None,
-        "docker_version": d[0],
-        "docker_cpus": d[1],
-        "docker_memory_bytes": int(d[2]) if d[2] else None,
     }
 
 
 def _load_json(path: Path) -> dict | None:
     return json.loads(path.read_text()) if path.is_file() else None
-
-
-def check_official(summaries: list[dict]) -> None:
-    """Official renders take official runs only, one per (seed, amplitude)."""
-    seen: dict[tuple, str] = {}
-    for s in summaries:
-        m, rid = s["meta"], s.get("run_id", "")
-        if m["kind"] != "off" or (rid and not rid.startswith("off-")):
-            raise ValueError(f"run {rid or '?'} is not an official run (kind {m['kind']!r})")
-        cell = (m["seed"], m["amplitude"])
-        if cell in seen:
-            raise ValueError(
-                f"seed {cell[0]} at amplitude {cell[1]:g} appears twice: {seen[cell]} and {rid}"
-            )
-        seen[cell] = rid
 
 
 def dedupe_dev(summaries: list[dict]) -> tuple[list[dict], list[str]]:
@@ -764,22 +1146,45 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--dev", metavar="DIR", help="render the dev summaries under DIR instead")
     ap.add_argument("--change", action="append", default=[], help="a job or mechanics change")
     args = ap.parse_args(argv)
-    machine = measure_machine() | {"changes": args.change}
-    check = _load_json(REPO / "docs/results/check-paths.json")
+    results = REPO / "docs" / "results"
+    check = _load_json(results / "check-paths.json")
+    rendered = render_facts()
     if args.dev:
         dev = [s for s in load_summaries(args.dev) if s["meta"]["kind"] == "dev"]
         summaries, notes = dedupe_dev(dev)
         for n in notes:
             print(f"eval-report: {n}")
         # Dev summaries sit one level down, in data/eval/dev-*/summary.json.
-        text = DEV_LINE + "\n\n" + render(summaries, [], check, None, machine)
+        machine = measure_machine()
+        text = (
+            DEV_LINE
+            + "\n\n"
+            + render(summaries, [], check, None, machine, rendered=rendered, changes=args.change)
+        )
         out = Path(args.dev) / "dev-results.md"
     else:
         summaries = load_summaries(args.summaries)
-        check_official(summaries)
-        run_log = load_run_log(REPO / "docs/results/run-log.jsonl")
+        registry = load_registry(results / "official-runs.jsonl")
         freeze = _load_json(REPO / "eval/freeze.json")
-        text = render(summaries, run_log, check, freeze, machine)
+        check_official(summaries, registry, freeze)
+        if not freeze.get("commit"):
+            raise ValueError("eval/freeze.json has no `commit`; record the freeze commit")
+        run_log = load_run_log(results / "run-log.jsonl")
+        equal = measured_code_equal(freeze["commit"])
+        check_measured_code(equal, run_log)
+        first = first_run_entry(registry, Path(args.summaries), results / "superseded", freeze)
+        machine = load_machine(results / "machine.json")
+        text = render(
+            summaries,
+            run_log,
+            check,
+            freeze,
+            machine,
+            registry=registry,
+            first_entry=first,
+            rendered=rendered | {"measured_code_equal": equal},
+            changes=args.change,
+        )
         out = Path(args.out)
     out.write_text(text)
     print(f"eval-report: wrote {out} ({len(summaries)} summaries)")

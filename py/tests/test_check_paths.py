@@ -1,8 +1,11 @@
+import hashlib
+import json
 import random
 
 import numpy as np
 import pytest
 
+from tenant_baselines import check_paths
 from tenant_baselines import latency as lat
 from tenant_baselines.check_paths import diff_aggregates, diff_logs, verdict
 from tenant_baselines.evalmodel import EPOCH_MS, MINUTE_MS, REPLAY_END_MS
@@ -138,34 +141,114 @@ def test_diff_aggregates_catches_a_missing_zero_row_and_a_p95_off_by_a_bucket():
     assert len(diff_aggregates(zero_p95, a)) == 1
 
 
+@pytest.mark.parametrize("field,job,python", [("count", 3, 2), ("errors", 1, 0)])
+def test_diff_aggregates_reports_a_count_or_an_error_count_alone(field, job, python):
+    a = tiny_aggregates()
+    rows_ = [dict(r) for r in job_rows(a)]
+    minute = EPOCH_MS + 2 * M
+    target = next(r for r in rows_ if r["key"].startswith("p1|") and r["minute_ms"] == minute)
+    target[field] += 1
+    (line,) = diff_aggregates(rows_, a)
+    p95 = float(lat.representative(80))
+    other = {"count": 2, "errors": 0} | {field: job}
+    want = {"count": 2, "errors": 0} | {field: python}
+    assert line == (
+        f"{KEY} minute {minute}: job count {other['count']}, errors {other['errors']}, p95 {p95};"
+        f" python count {want['count']}, errors {want['errors']}, p95 {p95}"
+    )
+
+
 @pytest.fixture
 def logs():
     a = log()
     return a, other_run(a)
 
 
+def judge(ev, ag, n_job, n_py, agg_diffs):
+    return verdict(ev, ag, n_job, n_py, agg_diffs, diff_logs(ev, ag))
+
+
 def test_verdict_fails_on_empty_logs_no_regional_row_or_a_row_count_mismatch(logs):
     ev, ag = logs
-    assert verdict(ev, ag, 10, 10, []) == []
+    assert judge(ev, ag, 10, 10, []) == []
 
-    (empty,) = [r for r in verdict([], ag, 10, 10, []) if "empty" in r]
+    (empty,) = [r for r in judge([], ag, 10, 10, []) if "empty" in r]
     assert "events" in empty
-    (empty,) = [r for r in verdict(ev, [], 10, 10, []) if "empty" in r]
+    (empty,) = [r for r in judge(ev, [], 10, 10, []) if "empty" in r]
     assert "aggregates" in empty
 
     local = [r for r in ev if r["scope"] != "region"]
-    (reason,) = verdict(local, other_run(local), 10, 10, [])
+    (reason,) = judge(local, other_run(local), 10, 10, [])
     assert "region" in reason
     # A regional row that is not a page does not count.
     resolved = local + [regional(state="resolved", event_time_ms=EPOCH_MS + 50 * M)]
-    assert len(verdict(resolved, other_run(resolved), 10, 10, [])) == 1
+    assert len(judge(resolved, other_run(resolved), 10, 10, [])) == 1
 
-    (reason,) = verdict(ev, ag, 9, 10, [])
+    (reason,) = judge(ev, ag, 9, 10, [])
     assert "9" in reason and "10" in reason
 
-    (reason,) = verdict(ev, ag, 10, 10, ["p1|… minute 0: job …, python …"])
+    (reason,) = judge(ev, ag, 10, 10, ["p1|… minute 0: job …, python …"])
     assert "aggregates" in reason
 
     differs = [r | {"value": 2.0} if r["alert_id"] == "a3" else r for r in ag]
-    (reason,) = verdict(ev, differs, 10, 10, [])
+    (reason,) = judge(ev, differs, 10, 10, [])
     assert "differ" in reason
+    # the reason quotes the diff it is given; the log diff is computed once, by the caller
+    (reason,) = verdict(ev, ag, 10, 10, [], ["- a given line"])
+    assert reason == "the alert logs differ, first at: - a given line"
+
+
+class FakeJobs:
+    """`check` with the stack faked. A commit lands, and the tree changes, while the jobs run."""
+
+    def __init__(self, monkeypatch, alerts_ag=None):
+        self.a = tiny_aggregates()
+        self.head, self.dirty = "before", False
+        self.alerts_ag = alerts_ag
+        m = monkeypatch
+        m.setattr(check_paths, "prepare", self.prepare)
+        m.setattr(check_paths, "build_world", lambda name, seed: None)
+        m.setattr(check_paths, "_draws", lambda world, a, scenarios: [])
+        m.setattr(check_paths, "_produce_events", lambda topic, world, draws: 123)
+        m.setattr(check_paths, "_produce_rows", lambda topic, a: len(job_rows(a)))
+        m.setattr(check_paths, "_run_job", self.run_job)
+        m.setattr(check_paths, "_read_run", self.read_run)
+        m.setattr(check_paths, "container_path", lambda path: "/opt/tb-data/x")
+        m.setattr(check_paths, "head_commit", lambda: self.head)
+        m.setattr(check_paths, "tree_dirty", lambda kind: self.dirty)
+
+    def prepare(self, kind, world, seed, amplitude, out):
+        out.mkdir(parents=True)
+        return self.a, []
+
+    def run_job(self, rid, mode, topic, thresholds, **kw):
+        self.head, self.dirty = "after", True
+        return {"job_seconds": 1.0}, {0: 0}, {0: 0}
+
+    def read_run(self, topic, start, rid):
+        if topic == check_paths.AGGREGATES_TOPIC:
+            return job_rows(self.a)
+        rows_ = log() if rid.endswith("-ev") or self.alerts_ag is None else self.alerts_ag
+        return [r | {"run_id": rid} for r in rows_]
+
+
+def test_check_records_commit_tree_and_jar_from_before_the_jobs(tmp_path, monkeypatch):
+    FakeJobs(monkeypatch)
+    jar = tmp_path / "job.jar"
+    jar.write_bytes(b"jar bytes")
+    out = tmp_path / "check-paths.json"
+    assert check_paths.check(tmp_path / "data", out, jar=jar) == 0
+    r = json.loads(out.read_text())
+    assert r["commit"] == "before" and r["dirty"] is False
+    assert r["passed"] is True and r["alerts_identical"] and r["aggregates_identical"]
+    assert r["run_id"].startswith("paths-s7-a6-")
+    assert r["jar_sha256"] == hashlib.sha256(b"jar bytes").hexdigest()
+
+
+def test_check_writes_passed_false_when_the_logs_differ(tmp_path, monkeypatch):
+    FakeJobs(monkeypatch, alerts_ag=log()[:-1])
+    out = tmp_path / "check-paths.json"
+    assert check_paths.check(tmp_path / "data", out, jar=tmp_path / "none.jar") == 1
+    r = json.loads(out.read_text())
+    assert r["passed"] is False and r["alerts_identical"] is False
+    assert r["jar_sha256"] is None
