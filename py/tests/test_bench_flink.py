@@ -120,7 +120,7 @@ def test_sample_sums_task_level_ids_only():
 
 
 def test_a_stale_read_is_read_again_in_the_same_burst():
-    previous = {"clock_ms": 120.0, "count": 30}
+    previous = {"clock_ms": 120.0, "count": 30, "t": 5.0}
     routes = {
         "/jobs/j": job_body(),
         BASE: [],
@@ -134,15 +134,52 @@ def test_a_stale_read_is_read_again_in_the_same_burst():
     assert slept == [bench_flink.REFRESH_WAIT_S, bench_flink.STALE_RETRY_WAIT_S]
 
 
+def test_read_s_and_reread_are_recorded():
+    routes = {"/jobs/j": job_body(), BASE: [], QUERY: reads(10, 20, busy=50.0)}
+    times = iter([100.0, 100.4])
+    got = bench_flink.sample(
+        "j", "s", 2, get=seq_getter(routes), now=lambda: next(times), sleep=lambda s: None
+    )
+    assert got["t"] == 100.0 and got["read_s"] == pytest.approx(0.4) and got["reread"] is False
+    previous = {"clock_ms": 120.0, "count": 30, "t": 99.0}
+    old, new = reads(10, 20, busy=50.0, bp=2, idle=8), reads(70, 80, busy=90.0, bp=2, idle=8)
+    routes = {"/jobs/j": job_body(), BASE: [], QUERY: Seq(old, old, new)}
+    times = iter([100.0, 105.5])
+    got = bench_flink.sample(
+        "j", "s", 2, previous=previous, get=seq_getter(routes), now=lambda: next(times),
+        sleep=lambda s: None,
+    )  # fmt: skip
+    assert got["reread"] is True and got["read_s"] == pytest.approx(5.5) and not got["stale"]
+
+
+def moved(busy_each: float, previous_t=0.0, t=12.0):
+    """A sample taken at `t` whose source clock reads `busy_each` ms of busy time per subtask."""
+    previous = {"clock_ms": 120_000.0, "count": 0, "t": previous_t}
+    routes = {"/jobs/j": job_body(), BASE: [], QUERY: reads(10, 20, busy=busy_each)}
+    times = iter([t, t + 1])
+    return bench_flink.sample(
+        "j", "s", 2, previous=previous, get=seq_getter(routes), now=lambda: next(times),
+        sleep=lambda s: None,
+    )  # fmt: skip
+
+
+def test_a_clock_that_moved_less_than_the_time_elapsed_is_stale():
+    # 12 s passed; each subtask's clock may lag by the waits (5 s) but not more: at least 7 s.
+    assert moved(65_000.0)["stale"] is True  # 5 s per subtask: an older cache generation
+    assert moved(66_500.0)["stale"] is True  # 6.5 s: still under the 7 s the elapsed time needs
+    assert moved(67_500.0)["stale"] is False  # 7.5 s
+    assert moved(71_000.0)["stale"] is False  # 11 s
+
+
 def test_a_read_that_stays_stale_is_marked():
-    previous = {"clock_ms": 120.0, "count": 30}
+    previous = {"clock_ms": 120.0, "count": 30, "t": 5.0}
     routes = {"/jobs/j": job_body(), BASE: [], QUERY: reads(10, 20, busy=50.0, bp=2, idle=8)}
     got = take(routes, previous=previous)
     assert got["stale"] is True
 
 
 def test_a_refresh_landing_between_the_reads_is_a_mixed_sample_and_is_read_again():
-    previous = {"clock_ms": 100.0, "count": 0}
+    previous = {"clock_ms": 100.0, "count": 0, "t": 5.0}
     old, new = reads(10, 20, busy=50.0), reads(40, 50, busy=75.0)
     routes = {"/jobs/j": job_body(), BASE: [], QUERY: Seq(old, new, new, new)}
     slept = []
@@ -152,7 +189,7 @@ def test_a_refresh_landing_between_the_reads_is_a_mixed_sample_and_is_read_again
 
 
 def test_a_mixed_sample_that_stays_mixed_is_marked_stale():
-    previous = {"clock_ms": 100.0, "count": 0}
+    previous = {"clock_ms": 100.0, "count": 0, "t": 5.0}
     a, b = reads(10, 20, busy=50.0), reads(40, 50, busy=75.0)
     routes = {"/jobs/j": job_body(), BASE: [], QUERY: Seq(a, b, a, b)}
     assert take(routes, previous=previous)["stale"] is True

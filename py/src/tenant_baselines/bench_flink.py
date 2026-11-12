@@ -109,6 +109,14 @@ def _count_and_clock(get: Callable, job_id: str, vertex_id: str, parallelism: in
     return int(count), clock
 
 
+def _advanced(previous: dict, t: float, clock_ms: float, parallelism: int) -> bool:
+    """Whether the clock has run for about as long as the host's time since `previous` (the last
+    fresh sample). A subtask's clock is read up to the waits after its `t`, so it may lag the host
+    time by REFRESH_WAIT_S plus STALE_RETRY_WAIT_S; a read that lags more is an older cache."""
+    elapsed_s = (clock_ms - previous["clock_ms"]) / parallelism / 1000
+    return elapsed_s > 0 and elapsed_s >= t - previous["t"] - (REFRESH_WAIT_S + STALE_RETRY_WAIT_S)
+
+
 def sample(
     job_id: str,
     source_vertex_id: str,
@@ -123,11 +131,14 @@ def sample(
 
     `count` sums the task-level `<i>.numRecordsOut` of the source subtasks, not the operator-level
     ids, which would count the same records again. The source's accumulated times come from the
-    same request (`clock_ms`). The count is read before and after the job's vertex block; the three
-    reads are one cache generation only if both clocks are equal, and fresh only if the clock is
-    above the previous sample's. Otherwise the reads are repeated once inside the burst (the
-    refresh is already triggered; the cache stays valid for 10 s). A sample that is still
-    incoherent or old is returned with `"stale": true`.
+    same request (`clock_ms`). `read_s` is how long after `t` the reads used were made; `reread`
+    says they were the second look.
+
+    The count is read before and after the job's vertex block. The three reads are one cache
+    generation only if both clocks are equal, and fresh only if the clock has advanced since
+    `previous` (the last fresh sample) by about the time elapsed. Otherwise the reads are repeated
+    once inside the burst (the refresh is already triggered, and the cache stays valid for 10 s).
+    A sample that is still incoherent or old is returned with `"stale": true`.
     """
     t = now()
     mono = monotonic()
@@ -138,17 +149,20 @@ def sample(
         job = _json(get, f"/jobs/{job_id}")
         count, clock = _count_and_clock(get, job_id, source_vertex_id, parallelism)
         coherent = before == clock
-        fresh = previous is None or clock > previous["clock_ms"]
+        fresh = previous is None or _advanced(previous, t, clock, parallelism)
         if coherent and fresh:
             break
         if attempt == 0:
             sleep(STALE_RETRY_WAIT_S)
+    read_s = now() - t
     return {
         "t": t,
         "mono": mono,
         "count": count,
         "clock_ms": clock,
         "stale": not (coherent and fresh),
+        "read_s": read_s,
+        "reread": attempt == 1,
         "vertices": {
             v["name"]: {
                 "busy_ms": v["metrics"]["accumulated-busy-time"],

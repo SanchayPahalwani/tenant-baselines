@@ -108,6 +108,9 @@ def sustained_rate(
     rates = [
         (b["count"] - a["count"]) / (b["t"] - a["t"]) for a, b in zip(win, win[1:], strict=False)
     ]
+    # The slower endpoint's read, measured: each endpoint's counter was read `read_s` after its
+    # `t`, so the span is off by at most that, whatever the waits and re-reads were.
+    read_s = max(x.get("read_s", bench_flink.REFRESH_WAIT_S) for x in (win[0], win[-1]))
     return {
         "events_per_s": round((win[-1]["count"] - win[0]["count"]) / span, 1),
         "window_start_s": round(win[0]["t"], 1),
@@ -116,9 +119,7 @@ def sustained_rate(
         "intervals": intervals,
         "min_interval_rate": round(min(rates), 1),
         "max_interval_rate": round(max(rates), 1),
-        # An upper bound: each endpoint's counter was read between its `t` and `t` plus the
-        # refresh wait, so the span is off by at most that wait.
-        "timing_error_pct": round(100 * bench_flink.REFRESH_WAIT_S / span, 1),
+        "timing_error_pct": round(100 * read_s / span, 1),
     }
 
 
@@ -248,31 +249,55 @@ def _fill(args, fill_id: str, run: Callable) -> dict:
     }
 
 
-def _poll_source(job_id: str, src: dict, samples: list[dict], total: int, deadline: float) -> str:
-    """Take a sample every SAMPLE_INTERVAL_S until the count reaches `total`. Returns "" or the
-    reason the run must stop: the count fell (a restart) or the deadline passed."""
-    due = time.monotonic()
+def _poll_source(
+    job_id: str,
+    src: dict,
+    samples: list[dict],
+    total: int,
+    deadline: float,
+    sample_fn: Callable = bench_flink.sample,
+    monotonic: Callable = time.monotonic,
+    sleep: Callable = time.sleep,
+) -> tuple[str, str]:
+    """Take a sample every SAMPLE_INTERVAL_S until the count reaches `total`.
+
+    Returns `("", "")` when it did, else `(kind, reason)`: "restarted" (the count fell),
+    "vanished" (the metrics went) or "deadline". Each sample is compared with the last fresh one.
+    """
+    due = monotonic()
     while True:
-        burst_start = time.monotonic()
+        burst_start = monotonic()
+        fresh = [x for x in samples if not x["stale"]]
         try:
-            previous = samples[-1] if samples else None
-            s = bench_flink.sample(job_id, src["id"], src["parallelism"], previous=previous)
-        except KeyError:
+            s = sample_fn(
+                job_id, src["id"], src["parallelism"], previous=fresh[-1] if fresh else None
+            )
+        except KeyError as e:
             if samples:
-                raise  # the metrics existed and went; not a start-up gap
+                return "vanished", f"the source's metrics vanished: {e}"
             s = None  # tasks not up yet
         if s is not None:
-            fresh = [x for x in samples if not x["stale"]]
             dropped = bool(fresh) and not s["stale"] and s["count"] < fresh[-1]["count"]
             samples.append(s)
             if dropped:
-                return f"the source count fell to {s['count']}: the job restarted"
+                return "restarted", f"the source count fell to {s['count']}: the job restarted"
             if s["count"] >= total:
-                return ""
-        if time.monotonic() > deadline:
-            return "the count did not reach the fill before the deadline"
+                return "", ""
+        if monotonic() > deadline:
+            return "deadline", "the count did not reach the fill before the deadline"
         due = next_due(due, burst_start)
-        time.sleep(max(0.0, due - time.monotonic()))
+        sleep(max(0.0, due - monotonic()))
+
+
+def power_reasons(runs: list[dict], on_battery: bool) -> list[str]:
+    """Why the power at the end of a run makes it invalid: battery without `--on-battery`."""
+    if on_battery:
+        return []
+    return [
+        f"the laptop went to battery during the run {r['run_id']}"
+        for r in runs
+        if r.get("power_end") and "AC Power" not in r["power_end"]
+    ]
 
 
 def _one_run(n: int, fill_id: str, total: int, args, run_dir: Path) -> dict:
@@ -289,28 +314,28 @@ def _one_run(n: int, fill_id: str, total: int, args, run_dir: Path) -> dict:
         _wait_running(job_id)
         job = bench_flink._json(bench_flink.httpx.get, f"/jobs/{job_id}")
         src = bench_flink.vertex(job, "Source: events")
-        stop = _poll_source(job_id, src, samples, total, time.monotonic() + timeout_s)
-        if stop:
+        kind, stop = _poll_source(job_id, src, samples, total, time.monotonic() + timeout_s)
+        if kind == "deadline":
+            raise RunFailed(f"{run_id}: {stop}")
+        if kind:
             restarts = bench_flink.restarts(job_id)
-            if "restarted" in stop and restarts == 0:
+            if kind == "restarted" and restarts == 0:
                 restarts = 1  # the count fell, so the job did restart; the history lags
-            aborted = {
+            bench_flink.cancel_and_clean(job_id, run_id)
+            return {
                 "run_id": run_id,
                 "job_id": job_id,
                 "events": total,
                 "aborted": stop,
                 "restarts": restarts,
-                "late_events": 0,
+                "late_events": None,  # not read: the job did not finish
                 "stale_samples": sum(x["stale"] for x in samples),
                 "host_sleep_gaps_s": _gaps(samples),
             }
-            if "restarted" not in stop:
-                raise RunFailed(f"{run_id}: {stop}")
-            bench_flink.cancel_and_clean(job_id, run_id)
-            return aborted
         check_final_count(samples[-1]["count"], total)
         time.sleep(METRIC_CACHE_WAIT_S)
-        fresh_after = (src["id"], src["parallelism"], samples[-1]["clock_ms"])
+        last_fresh = [x for x in samples if not x["stale"]][-1]
+        fresh_after = (src["id"], src["parallelism"], last_fresh["clock_ms"])
         late = bench_flink.late_events(job_id, fresh_after=fresh_after)
         restarts = bench_flink.restarts(job_id)
         history = bench_flink.checkpoint_history(job_id)
@@ -350,6 +375,14 @@ def _gaps(samples: list[dict]) -> list[float]:
     return [round(g, 1) for g in bench_env.gaps([s["mono"] for s in samples])]
 
 
+def _source_clock_rate(a: dict, b: dict, name: str = "Source: events") -> float:
+    """Events per second over the source's own clock: the count delta over the clock's rise per
+    subtask. A cross-check beside the host rate; it does not depend on the host's timing."""
+    par = b["vertices"][name]["parallelism"]
+    seconds = (b["clock_ms"] - a["clock_ms"]) / par / 1000
+    return round((b["count"] - a["count"]) / seconds, 1)
+
+
 def _summarise(run_id: str, job_id: str, total: int, samples: list[dict], pilot: bool) -> dict:
     t0 = samples[0]["t"]
     rebased = [{**s, "t": s["t"] - t0} for s in samples]  # unrounded: round only what is reported
@@ -358,6 +391,8 @@ def _summarise(run_id: str, job_id: str, total: int, samples: list[dict], pilot:
         "job_id": job_id,
         "events": total,
         "stale_samples": sum(s["stale"] for s in samples),
+        "reread_samples": sum(s["reread"] for s in samples),
+        "max_read_s": round(max(s["read_s"] for s in samples), 1),
     }
     try:
         rate = sustained_rate(rebased, total)
@@ -366,11 +401,12 @@ def _summarise(run_id: str, job_id: str, total: int, samples: list[dict], pilot:
         if not pilot:
             raise
         out["window_error"] = str(e)
-        rate, first, last = {}, 0, len(samples) - 1
-        while samples[last]["stale"] and last > 0:
-            last -= 1
+        fresh = _fresh(samples)
+        rate, first, last = {}, fresh[0], fresh[-1]
     shares = window_shares(rebased, first, last)
     out |= rate
+    if last > first:
+        out["events_per_s_source_clock"] = _source_clock_rate(samples[first], samples[last])
     out["source"] = _share_of(shares, "Source: events")
     out["drop_ticks_busy"] = _share_of(shares, "drop-ticks")["busy"]
     out["shares"] = shares
@@ -403,6 +439,7 @@ def main(argv: list[str] | None = None) -> None:
     runs = []
     for n in range(1, args.runs + 1):
         r = _one_run(n, fill_id, total, args, run_dir)
+        r["power_end"] = bench_env._power_line(run)
         runs.append(r)
         if "aborted" in r:
             print(f"bench: run {n} stopped: {r['aborted']}")
@@ -414,9 +451,13 @@ def main(argv: list[str] | None = None) -> None:
         )
     extra = [f"run {r['run_id']}: {r['window_error']}" for r in runs if "window_error" in r]
     extra += [f"run {r['run_id']}: {r['aborted']}" for r in runs if "aborted" in r]
+    extra += power_reasons(runs, args.on_battery)
     sleeps = [g for r in runs for g in r["host_sleep_gaps_s"]]
     valid, reasons = bench_env.validity(
-        sum(r["restarts"] for r in runs), sum(r["late_events"] for r in runs), sleeps, extra
+        sum(r["restarts"] for r in runs),
+        sum(r["late_events"] or 0 for r in runs),
+        sleeps,
+        extra,
     )
     rates = [r["events_per_s"] for r in runs if "events_per_s" in r]
     spread = (
