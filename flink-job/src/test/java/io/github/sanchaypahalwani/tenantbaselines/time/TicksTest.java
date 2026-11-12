@@ -60,7 +60,10 @@ class TicksTest {
         Ticks.withTicks(events, ticks)
             .keyBy(Event::key)
             .process(new MinuteAggregator("t", Long.MIN_VALUE, Duration.ofDays(7)));
-    return assertTimeoutPreemptively(Duration.ofSeconds(60), () -> minutes.executeAndCollect(n));
+    return assertTimeoutPreemptively(
+        Duration.ofSeconds(60),
+        () -> minutes.executeAndCollect(n),
+        () -> "the aggregator closed fewer than " + n + " minutes in 60 s");
   }
 
   /**
@@ -108,10 +111,10 @@ class TicksTest {
 
   /**
    * Three whole minutes of history, decades behind the ticks. If the ticks set the watermark,
-   * every event would be late and no minute would close. The events source ends, so its final
-   * watermark closes the three full minutes with or without ticks. The fourth, empty minute is
-   * closed only by a watermark that keeps advancing after the input ends, and the aggregator does
-   * not re-register at {@code Long.MAX_VALUE}, so only a tick can close it.
+   * every event would be late and no minute would close. The events source ends; without ticks,
+   * its final watermark would close the three full minutes. The fourth, empty minute is closed
+   * only by a watermark that keeps advancing after the input ends, and the aggregator does not
+   * re-register at {@code Long.MAX_VALUE}, so only a tick can close it.
    */
   @Test
   void ticksDoNotOutrunABacklog() {
