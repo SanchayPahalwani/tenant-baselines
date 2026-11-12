@@ -335,3 +335,21 @@ def test_result_refuses_runs_that_disagree():
         runs = [good_run("hashmap"), good_run("rocksdb") | {field: value}]
         with pytest.raises(RunFailed):
             bs.build_result({}, runs, "AC Power", False)
+
+
+def test_run_backend_records_the_rise_of_the_sleep_counter(tmp_path, monkeypatch):
+    readings = iter([100.0, 100.0, 100.0, 400.0])
+    monkeypatch.setattr(bs.bench_env, "slept_s", lambda: next(readings, 400.0))
+    monkeypatch.setattr(bs.bench_env, "load_record", lambda: {"host_load_1m": 1.0})
+    run = bs.run_backend("hashmap", tmp_path, bs.Polls(), ops=ops_fake(tmp_path, []))
+    assert run["host_sleep_s"] == 300.0
+
+
+def test_run_backend_refuses_a_topic_that_does_not_hold_every_row(tmp_path, monkeypatch):
+    monkeypatch.setattr(bs.bench_env, "load_record", lambda: {"host_load_1m": 1.0})
+    calls = []
+    ops = ops_fake(tmp_path, calls)
+    ops.end_offsets = lambda topic: {0: 1233}
+    with pytest.raises(RunFailed, match="does not hold exactly the 1234 rows produced"):
+        bs.run_backend("hashmap", tmp_path, bs.Polls(), ops=ops)
+    assert "submit" not in [c[0] if isinstance(c, tuple) else c for c in calls]

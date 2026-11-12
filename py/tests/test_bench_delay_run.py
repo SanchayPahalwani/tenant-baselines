@@ -690,3 +690,20 @@ def test_a_61_s_stall_without_a_sleep_makes_the_run_invalid_as_a_stall(monkeypat
     assert r["invalid_reasons"] == [
         f"the driver stalled for {r['stall_gaps_s'][0]:.0f} s between two polls"
     ]
+
+
+def test_a_sleep_seen_only_in_a_lag_sample_makes_the_run_invalid(monkeypatch, tmp_path):
+    h = build_harness(monkeypatch, tmp_path)
+    real = bdr.bench_flink.watermark_lag_sample
+    n = []
+
+    def sample(*a, **k):
+        s = real(*a, **k)
+        n.append(1)
+        return {**s, "slept": 300.0} if len(n) == 4 else s  # the polls' counter stays at 0
+
+    monkeypatch.setattr(bdr.bench_flink, "watermark_lag_sample", sample)
+    r, d = run_main(h, tmp_path)
+    assert max(json.loads((d / "samples-lag.json").read_text())["polls_slept"]) == 0.0
+    assert r["host_sleep_s"] == 300.0
+    assert r["invalid_reasons"] == ["the host slept 300 s during the run"]

@@ -468,3 +468,68 @@ def test_a_sample_without_a_sleep_reading_is_refused():
     del s[1]["slept"]
     with pytest.raises(ValueError, match=r"samples \[1\] carry no sleep-counter reading"):
         bt._host_sleep(s)
+
+
+def complete_run(monkeypatch, tmp_path, final_count, rows=()):
+    """`_one_run` to its end on fakes: a 30 M fill read in 12 s samples of 1 M events."""
+    script = [sampled(k, k * 1_000_000) for k in range(30)] + [sampled(30, final_count)]
+    it = iter(script)
+    monkeypatch.setattr(bt.bench_env, "load_record", lambda: LOAD)
+    monkeypatch.setattr(bt.kafka_io, "end_offsets", lambda topic: {0: 0})
+    monkeypatch.setattr(bt.kafka_io, "read_range", lambda topic, a, b: list(rows))
+    monkeypatch.setattr(bt.bench_flink, "submit", lambda run_id, topic: "j" * 32)
+    monkeypatch.setattr(bt, "_wait_running", lambda job_id: None)
+    monkeypatch.setattr(
+        bt.bench_flink, "_json",
+        lambda get, path: {"vertices": [{"id": "s", "name": "Source: events", "parallelism": 2}]},
+    )  # fmt: skip
+    monkeypatch.setattr(bt.bench_flink, "sample", lambda *a, **k: next(it))
+    monkeypatch.setattr(bt.time, "sleep", lambda s: None)
+    monkeypatch.setattr(bt.bench_flink, "late_events", lambda job_id, fresh_after=None: 0)
+    monkeypatch.setattr(bt.bench_flink, "restarts", lambda job_id: 0)
+    ck = {"id": 4, "trigger_timestamp": 1, "state_size": 10, "checkpointed_size": 5}
+    monkeypatch.setattr(bt.bench_flink, "checkpoint_history", lambda job_id: [ck])
+    monkeypatch.setattr(bt.bench_flink, "vertex_state", lambda job_id, cid: [])
+    monkeypatch.setattr(bt.bench_flink, "taskmanager_memory", lambda: {"used_bytes": 1})
+    cleaned = []
+    monkeypatch.setattr(bt.bench_flink, "cancel_and_clean", lambda j, r: cleaned.append(r))
+    run = bt._one_run(1, "tp-x", 30_000_000, SimpleNamespace(pilot=False), tmp_path)
+    return run, cleaned
+
+
+def alert(run_id, setting="k4"):
+    return {"detector": "seasonal", "setting": setting, "scope": "tenant", "state": "firing",
+            "run_id": run_id}  # fmt: skip
+
+
+def test_a_complete_run_counts_only_its_own_alert_rows(monkeypatch, tmp_path):
+    rows = [alert("tp-x-r1"), alert("tp-x-r1"), alert("tp-x-r2"), alert("tp-y-r1", "p99.9")]
+    run, cleaned = complete_run(monkeypatch, tmp_path, 30_000_000, rows)
+    assert run["alert_rows"] == {"seasonal/k4/tenant": 2}
+    assert run["events_per_s"] == pytest.approx(83_333.3, abs=0.1) and cleaned == ["tp-x-r1"]
+    assert run["checkpoint"]["id"] == 4 and run["late_events"] == 0
+
+
+def test_a_run_whose_count_ends_off_the_fill_fails_and_cleans(monkeypatch, tmp_path):
+    with pytest.raises(ValueError, match="not the task-level record count"):
+        complete_run(monkeypatch, tmp_path, 30_000_001)
+    assert (tmp_path / "samples-r1.json").exists()
+
+
+def broker(cmd):
+    """`df -Pk` and `du -sk` in the broker: plenty of space, 10 KiB of topic."""
+    df = "Filesystem 1024-blocks Used Available Capacity Mounted\n/dev/vda1 9 1 999999999 1% /d\n"
+    return SimpleNamespace(returncode=0, stdout=df if "df" in cmd else "10\t/x\n", stderr="")
+
+
+def test_the_fill_is_refused_unless_the_topic_holds_every_event(monkeypatch):
+    monkeypatch.setattr(bt.kafka_io, "create_topic", lambda name, parts: None)
+    monkeypatch.setattr(bt.kafka_io, "produce_all", lambda topic, records: 1000)
+    monkeypatch.setattr(bt, "_topic_compression", lambda topic: "zstd")
+    args = SimpleNamespace(seed=1, minutes=1, rpm=120.0)
+    monkeypatch.setattr(bt.kafka_io, "end_offsets", lambda topic: {0: 500, 1: 499})
+    with pytest.raises(bt.RunFailed, match="holds 999 records, 1000 were produced"):
+        bt._fill(args, "tp-x", broker)
+    monkeypatch.setattr(bt.kafka_io, "end_offsets", lambda topic: {0: 500, 1: 500})
+    fill = bt._fill(args, "tp-x", broker)
+    assert fill["events"] == 1000 and fill["topic"] == "tp-x.events" and fill["keys"] == 2000
