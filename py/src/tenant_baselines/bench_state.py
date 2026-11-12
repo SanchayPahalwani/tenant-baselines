@@ -23,7 +23,7 @@ import httpx
 
 from tenant_baselines import bench_env, bench_flink, bench_throughput, eval_run, kafka_io
 from tenant_baselines.bench_delay_run import Polls, make_run_dir, power_reasons
-from tenant_baselines.eval_run import RunFailed
+from tenant_baselines.eval_run import RunFailed, _write_failed
 from tenant_baselines.freeze import REPO, container_path, load_freeze
 from tenant_baselines.simulate import checked, encode_row, rows
 from tenant_baselines.world import build_world
@@ -58,7 +58,9 @@ EVAL_CHECKPOINTS = "/flink-data/checkpoints/eval"
 _BACKEND_NAMES = {"HashMapStateBackend": "hashmap", "EmbeddedRocksDBStateBackend": "rocksdb"}
 
 
-def in_last_share(trigger_ms: int, start_ms: int, source_end_ms: int, share: float = LAST_SHARE):
+def in_last_share(
+    trigger_ms: int, start_ms: int, source_end_ms: int, share: float = LAST_SHARE
+) -> bool:
     """Whether a checkpoint was triggered before the source ended, in the last `share` of the time
     from the job's start to the source's end."""
     cutoff = source_end_ms - share * (source_end_ms - start_ms)
@@ -121,7 +123,13 @@ def world_counts() -> tuple[int, int]:
 def measure_run(job_id: str, backend: str, keys: int, flink=bench_flink) -> dict:
     """Read a finished job's checkpoints and state: the backend and interval it ran with, the
     latest completed checkpoint before the source ended (in the last share, or RunFailed), the
-    range over the last share and the per-key figure. Call it before any clean-up."""
+    range over the last share and the per-key figure. Call it before any clean-up.
+
+    With `execution.checkpointing.checkpoints-after-tasks-finish` on (the default), the job takes a
+    final checkpoint once its tasks have finished, and the source vertex's end time comes after
+    it. The checkpoint selected here is then most likely that final one. It is still the state at
+    the end of the five weeks, so the figure is right; `checkpoints_after_tasks_finish` records
+    the setting."""
     times = flink.job_times(job_id)
     cfg = flink.checkpoint_config(job_id)
     if backend_of(cfg["state_backend"]) != backend:
@@ -138,9 +146,9 @@ def measure_run(job_id: str, backend: str, keys: int, flink=bench_flink) -> dict
         raise RunFailed(f"{e}; the history holds {len(history)} completed checkpoints") from e
     if not in_last_share(last["trigger_timestamp"], start, end):
         raise RunFailed(
-            f"no completed checkpoint lies in the last {LAST_SHARE:.0%} before the source ended:"
-            f" the latest, {last['id']}, was triggered at {last['trigger_timestamp']} (job start"
-            f" {start}, source end {end}); the history holds {len(history)} checkpoints"
+            f"the latest completed checkpoint, {last['id']}, was triggered before the last"
+            f" {LAST_SHARE:.0%} of the run, at {last['trigger_timestamp']} (job start {start},"
+            f" source end {end}); the history holds {len(history)} completed checkpoints"
         )
     vertices = flink.vertex_state(job_id, last["id"])
     return {
@@ -149,6 +157,8 @@ def measure_run(job_id: str, backend: str, keys: int, flink=bench_flink) -> dict
         "interval_ms": cfg["interval_ms"],
         "job_seconds": (times["end_ms"] - start) / 1000,
         "history_checkpoints": len(history),
+        "history_entries": flink.checkpoint_history_length(job_id),
+        "checkpoints_after_tasks_finish": flink.checkpoints_after_tasks_finish(job_id),
         "checkpoint": {
             "id": last["id"],
             "trigger_share": (last["trigger_timestamp"] - start) / (end - start),
@@ -161,19 +171,9 @@ def measure_run(job_id: str, backend: str, keys: int, flink=bench_flink) -> dict
     }
 
 
-def _sh(cmd: list[str]):
-    return bench_env._sh(cmd)
-
-
 def _clean(job_id: str, run_id: str) -> None:
     """Cancel the job if it still runs and delete its checkpoint directory."""
-    bench_flink.cancel_and_clean(job_id, run_id)
-    rm = _sh(
-        ["docker", "compose", "exec", "-T", "jobmanager"]
-        + ["rm", "-rf", f"{EVAL_CHECKPOINTS}/{run_id}"]
-    )
-    if rm.returncode != 0:
-        raise RunFailed(f"could not remove the checkpoints of {run_id}: {rm.stderr.strip()}")
+    bench_flink.cancel_and_clean(job_id, run_id, root=EVAL_CHECKPOINTS)
 
 
 def _produce(topic: str, a) -> int:
@@ -192,15 +192,9 @@ REAL_OPS = SimpleNamespace(
     measure=measure_run,
     restarts=bench_flink.restarts,
     clean=_clean,
+    http_get=httpx.get,
+    clock=time,
 )
-
-
-def _write_failed(out: Path, run_id: str, stage: str, job_id: str | None, e: BaseException):
-    doc = {"run_id": run_id, "stage": stage, "job_id": job_id, "error": f"{type(e).__name__}: {e}"}
-    try:
-        (out / "failed.json").write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
-    except OSError as w:
-        print(f"bench: could not write {out / 'failed.json'}: {w}")
 
 
 def run_backend(backend: str, base: Path, polls: Polls, ops=REAL_OPS) -> dict:
@@ -230,11 +224,11 @@ def run_backend(backend: str, base: Path, polls: Polls, ops=REAL_OPS) -> dict:
         stage = "job"
 
         def get(*args, **kwargs):  # every poll of the wait ticks the poll clock
-            polls.tick(time)
-            return httpx.get(*args, **kwargs)
+            polls.tick(ops.clock)
+            return ops.http_get(*args, **kwargs)
 
         ops.wait_finished(job_id, get=get, timeout_s=JOB_TIMEOUT_S)
-        polls.tick(time)
+        polls.tick(ops.clock)
         stage = "measure"
         restarts = ops.restarts(job_id)
         measured = ops.measure(job_id, backend, len(a.keys))  # before any clean-up
@@ -252,16 +246,24 @@ def run_backend(backend: str, base: Path, polls: Polls, ops=REAL_OPS) -> dict:
             "load_start": load_start,
             "load_end": bench_throughput._load(),
         }
-        (out / "run.json").write_text(json.dumps(run, indent=2, sort_keys=True, allow_nan=False))
     except BaseException as e:
         if out.is_dir():
             _write_failed(out, run_id, stage, job_id, e)
         try:
-            ops.clean(job_id, run_id) if job_id else print(f"bench: no job to clean for {run_id}")
+            if job_id:
+                ops.clean(job_id, run_id)
+            else:
+                print(f"bench: no job to clean for {run_id}")
         except Exception as c:
             print(f"bench: could not clean {run_id}: {c}")
         raise
-    ops.clean(job_id, run_id)
+    try:
+        ops.clean(job_id, run_id)
+        run["cleanup_error"] = None
+    except Exception as e:  # the measurement is good; keep it
+        run["cleanup_error"] = f"{type(e).__name__}: {e}"
+        print(f"bench: could not clean {run_id}: {e}")
+    (out / "run.json").write_text(json.dumps(run, indent=2, sort_keys=True, allow_nan=False))
     return run
 
 
@@ -269,6 +271,15 @@ def build_result(env: dict, runs: list[dict], power_end: str | None, on_battery:
     """The result file's content from the finished runs (the first is the headline hashmap run)."""
     first = runs[0]
     keys, five_weeks = world_counts()
+    for r in runs:
+        if r["keys"] != keys:
+            raise RunFailed(f"the {r['backend']} run had {r['keys']} keys; the world has {keys}")
+        for field in ("aggregate_rows", "settings"):
+            if r[field] != first[field]:
+                raise RunFailed(
+                    f"the runs differ in {field}: {first['backend']} {first[field]},"
+                    f" {r['backend']} {r[field]}"
+                )
     extra = power_reasons(power_end, on_battery)
     reasons: list[str] = []
     for r in runs:

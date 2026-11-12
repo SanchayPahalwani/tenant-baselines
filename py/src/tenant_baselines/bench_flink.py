@@ -313,6 +313,17 @@ def checkpoint_history(job_id: str, get: Callable = httpx.get) -> list[dict]:
     ]
 
 
+def checkpoint_history_length(job_id: str, get: Callable = httpx.get) -> int:
+    """All entries of the checkpoint history, failed and in-progress ones too. They take slots of
+    `web.checkpoints.history` as the completed ones do."""
+    return len(_json(get, f"/jobs/{job_id}/checkpoints")["history"])
+
+
+def checkpoints_after_tasks_finish(job_id: str, get: Callable = httpx.get) -> bool | None:
+    """Whether the job takes checkpoints once some tasks have finished; None if not exposed."""
+    return _json(get, f"/jobs/{job_id}/checkpoints/config").get("checkpoints_after_tasks_finish")
+
+
 def latest_before(history: list[dict], before_ms: int | None) -> dict:
     """The checkpoint with the highest id triggered before `before_ms` (any, when None)."""
     pool = [c for c in history if before_ms is None or c["trigger_timestamp"] < before_ms]
@@ -343,9 +354,10 @@ def cancel_and_clean(
     run: Callable = _sh,
     sleep: Callable = time.sleep,
     monotonic: Callable = time.monotonic,
+    root: str = "/flink-data/checkpoints/bench",
 ) -> None:
-    """Cancel the job, wait for it to stop, and delete the run's checkpoint directory. A job that
-    is already over is only cleaned."""
+    """Cancel the job, wait for it to stop, and delete the run's checkpoint directory under
+    `root`. A job that is already over is only cleaned."""
     if _json(get, f"/jobs/{job_id}")["state"] not in _TERMINAL:
         r = patch(f"{REST}/jobs/{job_id}", params={"mode": "cancel"}, timeout=10)
         # 409: the job finished on its own meanwhile; the wait below sees its state
@@ -356,10 +368,7 @@ def cancel_and_clean(
             if monotonic() >= deadline:
                 raise RunFailed(f"job {job_id} is still {state} {CANCEL_WAIT_S} s after cancel")
             sleep(1.0)
-    rm = run(
-        ["docker", "compose", "exec", "-T", "jobmanager"]
-        + ["rm", "-rf", f"/flink-data/checkpoints/bench/{run_id}"]
-    )
+    rm = run(["docker", "compose", "exec", "-T", "jobmanager"] + ["rm", "-rf", f"{root}/{run_id}"])
     if rm.returncode != 0:
         raise RunFailed(f"could not remove the checkpoints of {run_id}: {rm.stderr.strip()}")
 

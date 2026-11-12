@@ -579,3 +579,24 @@ def test_samples_record_the_sleep_counter_beside_the_monotonic_time():
         slept=lambda: 43.0,
     )  # fmt: skip
     assert lagged["slept"] == 43.0
+
+
+def test_checkpoint_history_length_counts_failed_entries_too():
+    routes = {"/jobs/j/checkpoints": {"history": [entry(1, 1), entry(2, 2, "FAILED")]}}
+    assert bench_flink.checkpoint_history_length("j", getter(routes)) == 2
+
+
+def test_checkpoints_after_tasks_finish():
+    on = {"/jobs/j/checkpoints/config": {"checkpoints_after_tasks_finish": True}}
+    off = {"/jobs/j/checkpoints/config": {}}
+    assert bench_flink.checkpoints_after_tasks_finish("j", getter(on)) is True
+    assert bench_flink.checkpoints_after_tasks_finish("j", getter(off)) is None
+
+
+def test_cancel_and_clean_removes_under_the_given_root():
+    cmds = []
+    bench_flink.cancel_and_clean(
+        "j", "r1", get=cancel_world(["FINISHED"]), run=ok(cmds), sleep=lambda s: None,
+        root="/flink-data/checkpoints/eval",
+    )  # fmt: skip
+    assert cmds[0][-3:] == ["rm", "-rf", "/flink-data/checkpoints/eval/r1"]

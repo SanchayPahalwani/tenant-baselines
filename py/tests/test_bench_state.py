@@ -97,13 +97,16 @@ def flink_fake(history, config=None, times=None):
         ),
         checkpoint_history=lambda job_id: history,
         vertex_state=lambda job_id, cid: [
-            {"name": "scorer", "state_size": 480, "checkpointed_size": 480},
+            {"name": "scorer", "state_size": SCORER_BY_CHECKPOINT[cid], "checkpointed_size": 1},
             {"name": "Source: aggregates", "state_size": 2, "checkpointed_size": 2},
         ],
+        checkpoint_history_length=lambda job_id: len(history) + 2,
+        checkpoints_after_tasks_finish=lambda job_id: True,
         latest_before=bs.bench_flink.latest_before,
     )
 
 
+SCORER_BY_CHECKPOINT = {7: 4_000, 8: 480, 9: 5_000}
 HISTORY = [ckpt(7, 90_000, 400), ckpt(8, 95_000, 480), ckpt(9, 104_000, 500)]
 
 
@@ -114,6 +117,10 @@ def test_measure_run_reports_the_last_checkpoint_before_the_source_ended():
     assert got["checkpoint"]["id"] == 8
     assert got["checkpoint"]["trigger_share"] == 0.95
     assert got["checkpoint"]["state_size"] == 480
+    assert got["checkpoint"]["vertices"][0]["state_size"] == 480  # checkpoint 8's, not 7's or 9's
+    assert got["history_checkpoints"] == 3
+    assert got["history_entries"] == 5
+    assert got["checkpoints_after_tasks_finish"] is True
     assert got["range"] == {"checkpoints": 2, "min": 400, "max": 480}
     assert got["per_key"]["per_key_bytes"] == 10
     assert got["job_seconds"] == 110
@@ -121,7 +128,7 @@ def test_measure_run_reports_the_last_checkpoint_before_the_source_ended():
 
 def test_measure_run_fails_when_no_checkpoint_is_in_the_last_share():
     old = [ckpt(1, 20_000, 10), ckpt(2, 60_000, 20)]
-    with pytest.raises(RunFailed, match="last 15%"):
+    with pytest.raises(RunFailed, match="was triggered before"):
         bs.measure_run("j", "hashmap", 48, flink_fake(old))
 
 
@@ -145,7 +152,19 @@ def test_measure_run_fails_on_the_wrong_interval():
 # ---- run_backend ----
 
 
-def ops_fake(tmp_path, calls, fail_at=None):
+def clock_at(*seconds):
+    """A clock whose monotonic() returns the given readings in turn, then the last one."""
+    it = iter(seconds)
+    last = [0.0]
+
+    def monotonic():
+        last[0] = next(it, last[0])
+        return last[0]
+
+    return SimpleNamespace(monotonic=monotonic)
+
+
+def ops_fake(tmp_path, calls, fail_at=None, clock=None, clean_error=None):
     def step(name, value=None):
         def f(*a, **k):
             calls.append(name)
@@ -167,6 +186,18 @@ def ops_fake(tmp_path, calls, fail_at=None):
         calls.append(("submit", list(extra)))
         return "a" * 32
 
+    def wait(job_id, get=None, timeout_s=0):
+        calls.append("wait")
+        if fail_at == "wait":
+            raise RunFailed("wait broke")
+        for _ in range(3):  # three polls of the job
+            get("http://flink/jobs/j")
+
+    def clean(job_id, run_id):
+        calls.append("clean")
+        if clean_error:
+            raise RunFailed(clean_error)
+
     return SimpleNamespace(
         prepare=prepare,
         create_topic=step("create_topic"),
@@ -174,10 +205,12 @@ def ops_fake(tmp_path, calls, fail_at=None):
         end_offsets=lambda t: {0: 1234},
         submit=submit,
         container_path=lambda p: f"/opt/tb-data/{p.name}",
-        wait_finished=lambda job_id, get=None, timeout_s=0: step("wait", {})(),
+        wait_finished=wait,
         measure=step("measure", {"backend": "hashmap", "interval_ms": 5000}),
         restarts=step("restarts", 0),
-        clean=step("clean"),
+        clean=clean,
+        http_get=lambda *a, **k: None,
+        clock=clock or clock_at(*range(1, 100)),
     )
 
 
@@ -195,7 +228,24 @@ def test_run_backend_submits_with_the_backend_and_interval(tmp_path):
     assert run["settings"] == 5
     assert calls.index("measure") < calls.index("clean")
     assert run["run_id"].startswith("state-hashmap-")
-    assert len(polls) >= 1  # the wait loop ticks the poll clock
+    assert len(polls) == 3 + 1  # one tick per poll of the wait, one after it
+    assert run["stall_gaps_s"] == []
+
+
+def test_a_stall_inside_the_wait_is_recorded(tmp_path):
+    clock = clock_at(0, 2, 100, 102)  # a 98 s gap between the second and third poll
+    run = bs.run_backend("hashmap", tmp_path, bs.Polls(), ops=ops_fake(tmp_path, [], clock=clock))
+    assert run["stall_gaps_s"] == [98.0]
+
+
+def test_a_failed_cleanup_keeps_the_measurement(tmp_path):
+    run = bs.run_backend(
+        "hashmap", tmp_path, bs.Polls(), ops=ops_fake(tmp_path, [], clean_error="rm failed")
+    )
+    assert "rm failed" in run["cleanup_error"]
+    saved = json.loads(next(tmp_path.glob("state-hashmap-*/run.json")).read_text())
+    assert saved["cleanup_error"] == run["cleanup_error"]
+    assert run["backend"] == "hashmap"
 
 
 def test_run_backend_rocksdb_keeps_the_cluster_backend(tmp_path):
@@ -278,3 +328,10 @@ def test_on_battery_flag_waives_the_battery_reason():
 def test_result_is_invalid_after_a_restart():
     run = good_run("hashmap") | {"restarts": 1}
     assert not bs.build_result({}, [run], "AC Power", False)["valid"]
+
+
+def test_result_refuses_runs_that_disagree():
+    for field, value in (("keys", 47), ("aggregate_rows", 11), ("settings", 6)):
+        runs = [good_run("hashmap"), good_run("rocksdb") | {field: value}]
+        with pytest.raises(RunFailed):
+            bs.build_result({}, runs, "AC Power", False)
