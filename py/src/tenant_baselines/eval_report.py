@@ -318,6 +318,7 @@ def outage_rows(summaries: list[dict], amplitude: float) -> list[dict]:
                 "detected_expected": e["detected_expected"],
                 "delay_min": e["delay_min"],
                 "regional_formed": e["regional_formed"],
+                "pages": e["pages"],
             }
         out.append(row)
     return out
@@ -541,7 +542,9 @@ def _type_section(summaries: list[dict]) -> list[str]:
             hit = "expected-signal page" if x["detected_expected"] else "no expected-signal page"
             delay = f", delay {_num(x['delay_min'], 1)} min" if x["delay_min"] is not None else ""
             reg = ", regional alert" if x["regional_formed"] else ""
-            cells.append(f"{x['setting']}: {hit}{delay}{reg}")
+            n = x["pages"]
+            pages = f", {n} page" + ("" if n == 1 else "s")
+            cells.append(f"{x['setting']}: {hit}{delay}{reg}{pages}")
         orows.append(
             [
                 str(o["seed"]),

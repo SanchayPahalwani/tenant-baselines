@@ -186,6 +186,19 @@ def test_outage_rows_carry_the_hour_from_labels(summaries):
     assert row["utc"] == "Tue 14:20" and row["local"] == "Tue 15:20"
 
 
+def test_outage_cell_carries_its_page_count(summaries):
+    s = summaries[2]
+    for fam, pages in zip(FAMILIES, (3, 1, 3), strict=False):
+        for e in s["selected_week5"][fam]["scenarios"]:
+            if e["type"] == "regional_outage":
+                e["pages"] = pages
+                e["regional_formed"] = True
+    assert [outage_rows(summaries, 6.0)[0][f]["pages"] for f in FAMILIES][:2] == [3, 1]
+    t = text(summaries)
+    assert "regional alert, 3 pages" in t
+    assert "regional alert, 1 page |" in t
+
+
 def test_check_paths_passed_needs_all_five_conditions():
     assert check_passed(CHECK)[0]
     for key, bad in [
