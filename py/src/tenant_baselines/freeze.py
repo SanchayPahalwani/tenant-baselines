@@ -40,6 +40,10 @@ MEASURED_PATHS = (
         )
     ),
 )
+# Added 2026-11-13, after the official runs. A file under these may differ from the freeze
+# commit: the eval reads the alerts topic, and no run reads a dashboard. The report names each
+# such file.
+DISPLAY_ONLY_PATHS = ("infra/grafana/dashboards",)
 _REFREEZE = (
     "after a fix to the Java code, build the jar (`make jar`), copy it to"
     " data/frozen/<sha256>.jar and set `jar_sha256` in eval/freeze.json (the steps are in the"

@@ -607,7 +607,7 @@ def test_file_entries_print_no_typed_headline_and_say_supersedes():
 
 def test_setup_describes_the_runs_not_the_render():
     summaries, registry = records()
-    rendered = {"commit": "0123456" + "9" * 33, "date": "2026-11-13", "measured_code_equal": True}
+    rendered = {"commit": "0123456" + "9" * 33, "date": "2026-11-13", "measured_code_diff": []}
     t = render(summaries, [], CHECK, FREEZE, MACHINE, registry=registry, rendered=rendered)
     setup = t[t.index("## Setup") : t.index("## Headline")]
     assert f"- Runs at commit: `{OFF_COMMIT[:7]}`" in setup
@@ -618,10 +618,83 @@ def test_setup_describes_the_runs_not_the_render():
     assert "first start 2026-11-12 06:00:00 UTC, last finish 2026-11-12 06:37:30 UTC" in setup
     assert "elapsed 37.5 minutes" in setup
     assert "- Measured code at the render commit equals the freeze commit: yes" in setup
-    no = rendered | {"measured_code_equal": False}
+    no = rendered | {"measured_code_diff": ["infra/kafka/create-topics.sh"]}
     assert "freeze commit: no" in render(
         summaries, [], CHECK, FREEZE, MACHINE, registry=registry, rendered=no
     )
+
+
+DASHBOARD = "infra/grafana/dashboards/tenant-baselines.json"
+
+
+def test_display_only():
+    assert eval_report.display_only([])
+    assert eval_report.display_only([DASHBOARD])
+    assert not eval_report.display_only(["infra/grafana/provisioning/datasources/clickhouse.yml"])
+    assert not eval_report.display_only(["infra/grafana/dashboards/x.json", "docker-compose.yml"])
+
+
+@pytest.mark.parametrize("code", [1, 128])
+def test_measured_code_diff_raises_when_git_fails(monkeypatch, code):
+    def git(cmd, **kw):
+        return subprocess.CompletedProcess(cmd, code, "", "fatal")
+
+    monkeypatch.setattr(eval_report.subprocess, "run", git)
+    with pytest.raises(RuntimeError, match=str(code)):
+        eval_report.measured_code_diff("a" * 40)
+
+
+def test_measured_code_diff_lists_sorted_paths(monkeypatch):
+    def git(cmd, **kw):
+        assert "--name-only" in cmd
+        return subprocess.CompletedProcess(cmd, 0, "shared/b\nDOCKER\nshared/a\n", "")
+
+    monkeypatch.setattr(eval_report.subprocess, "run", git)
+    assert eval_report.measured_code_diff("a" * 40) == ["DOCKER", "shared/a", "shared/b"]
+
+
+def test_check_measured_code_allows_only_display_files():
+    eval_report.check_measured_code([DASHBOARD], [])
+    other = "infra/kafka/create-topics.sh"
+    with pytest.raises(ValueError, match=other):
+        eval_report.check_measured_code([DASHBOARD, other], [])
+    eval_report.check_measured_code([DASHBOARD, other], [{"why": "bug: the scorer"}])
+
+
+def test_setup_line_names_display_only_files(summaries):
+    def setup(diff):
+        t = render(
+            summaries, [], CHECK, FREEZE, MACHINE, rendered=RENDERED | {"measured_code_diff": diff}
+        )
+        return t[t.index("## Setup") : t.index("## Headline")]
+
+    head = "- Measured code at the render commit equals the freeze commit: "
+    assert head + "yes\n" in setup([])
+    assert head + f"yes, except display-only files: {DASHBOARD}\n" in setup([DASHBOARD])
+    assert head + "no\n" in setup(["infra/kafka/create-topics.sh"])
+
+
+def test_method_notes_date_the_change(summaries):
+    t = text(summaries)
+    assert f"Changed {eval_report.MEASURED_CODE_CHANGE_DATE}, after the official runs" in t
+    assert "Everything else under infra/, and docker-compose.yml, is still compared." in t
+
+
+def test_no_measured_file_reads_grafana():
+    """A pin: the exemption is safe because no measured file reads a dashboard."""
+    from tenant_baselines import freeze
+
+    hits = []
+    for rel in freeze.MEASURED_PATHS:
+        base = freeze.REPO / rel
+        files = [base] if base.is_file() else [f for f in base.rglob("*") if f.is_file()]
+        for f in files:
+            r = f.relative_to(freeze.REPO).as_posix()
+            if r == "docker-compose.yml" or r.startswith("infra/grafana/"):
+                continue
+            if "grafana" in f.read_text(errors="ignore").lower():
+                hits.append(r)
+    assert hits == []
 
 
 def official_repo(tmp_path, machine=None):
@@ -643,7 +716,7 @@ def official_repo(tmp_path, machine=None):
 def repo(tmp_path, monkeypatch):
     monkeypatch.setattr(eval_report, "REPO", tmp_path)
     monkeypatch.setattr(eval_report, "render_facts", lambda: RENDERED)
-    monkeypatch.setattr(eval_report, "measured_code_equal", lambda commit: True)
+    monkeypatch.setattr(eval_report, "measured_code_diff", lambda commit: [])
     return tmp_path
 
 
@@ -680,13 +753,13 @@ def test_main_refuses_when_the_measured_code_changed_without_a_bug_entry(tmp_pat
 
     def git(cmd, **kw):
         calls.append(cmd)
-        return subprocess.CompletedProcess(cmd, 1, "", "")
+        return subprocess.CompletedProcess(cmd, 0, "infra/kafka/create-topics.sh\n", "")
 
     monkeypatch.setattr(eval_report.subprocess, "run", git)
     with pytest.raises(ValueError, match="measured code"):
         main_official(tmp_path)
     (cmd,) = calls
-    assert cmd[cmd.index("diff") :][:4] == ["diff", "--quiet", FREEZE["commit"], "HEAD"]
+    assert cmd[cmd.index("diff") :][:4] == ["diff", "--name-only", FREEZE["commit"], "HEAD"]
     assert "flink-job/src/main" in cmd and "py/src/tenant_baselines/scoring.py" in cmd
     entry = {"commit": "e" * 40, "date": "2026-11-20", "what": "re-run", "why": "bug: the scorer"}
     (results / "run-log.jsonl").write_text(json.dumps(entry) + "\n")

@@ -17,7 +17,7 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 
-from tenant_baselines.freeze import DEV_SEEDS, MEASURED_PATHS, planned
+from tenant_baselines.freeze import DEV_SEEDS, DISPLAY_ONLY_PATHS, MEASURED_PATHS, planned
 from tenant_baselines.scoring import FAMILIES, nearest_rank, wilson
 
 REPO = Path(__file__).resolve().parents[3]
@@ -284,6 +284,9 @@ def _utc_hour(start_ms: int, epoch_ms: int, offset_h: int = 0) -> str:
     day, rest = divmod(into, 86_400_000)
     minutes = rest // 60_000
     return f"{_DAY_NAMES[day]} {minutes // 60:02d}:{minutes % 60:02d}"
+
+
+MEASURED_CODE_CHANGE_DATE = "2026-11-13"  # when the display-only exemption was added
 
 
 def outage_rows(summaries: list[dict], amplitude: float) -> list[dict]:
@@ -727,6 +730,11 @@ def _method_section(
         "- **What check-paths shows.** It shows that the events path and the aggregates path give"
         " the same alert log. It does not show that the detectors are right: both paths share the"
         " thresholds, every operator from the minute aggregates on, and the random draws.",
+        f"- **Measured code.** Changed {MEASURED_CODE_CHANGE_DATE}, after the official runs: the"
+        " dashboard files under infra/grafana/dashboards may differ from the freeze commit, and"
+        " the Setup line names each one that does. The dashboards only draw; the eval reads pages"
+        " from the alerts topic. Everything else under infra/, and docker-compose.yml, is still"
+        " compared.",
         "- **Replay mode can fail.** Replay mode aligns the watermarks of the Kafka partitions."
         " That can hit a race in the Kafka connector (FLINK-39728). It is fixed in connector"
         f" 5.1.0, {released}; this repo pins 5.0.0-2.2. A run that hits it fails and gives"
@@ -861,12 +869,15 @@ def _setup_section(
         f"- Rendered at commit `{str(rendered.get('commit') or 'not recorded')[:7]}`"
         f" on {rendered.get('date') or 'an unrecorded date'}"
     )
-    equal = rendered.get("measured_code_equal")
-    if equal is not None:
-        lines.append(
-            "- Measured code at the render commit equals the freeze commit: "
-            + ("yes" if equal else "no")
-        )
+    differing = rendered.get("measured_code_diff")
+    if differing is not None:
+        if not differing:
+            state = "yes"
+        elif display_only(differing):
+            state = "yes, except display-only files: " + ", ".join(differing)
+        else:
+            state = "no"
+        lines.append(f"- Measured code at the render commit equals the freeze commit: {state}")
     return lines + [""]
 
 
@@ -1043,25 +1054,32 @@ def first_run_entry(
     }
 
 
-def measured_code_equal(freeze_commit: str) -> bool:
-    """Whether the measured code (`freeze.MEASURED_PATHS`) at HEAD equals the freeze commit's."""
-    cmd = ["git", "-C", str(REPO), "diff", "--quiet", freeze_commit, "HEAD", "--"]
+def measured_code_diff(freeze_commit: str) -> list[str]:
+    """The files under `freeze.MEASURED_PATHS` that differ between the freeze commit and HEAD."""
+    cmd = ["git", "-C", str(REPO), "diff", "--name-only", freeze_commit, "HEAD", "--"]
     r = subprocess.run([*cmd, *MEASURED_PATHS], capture_output=True, text=True)
-    if r.returncode not in (0, 1):
+    if r.returncode != 0:
         raise RuntimeError(
             f"git diff could not compare the measured code with {freeze_commit[:7]}"
             f" (exit {r.returncode}): {r.stderr.strip()}"
         )
-    return r.returncode == 0
+    return sorted(line for line in r.stdout.splitlines() if line)
 
 
-def check_measured_code(equal: bool, run_log: list[dict]) -> None:
-    """A render after the measured code changed needs a `bug:` re-run in the run log."""
-    if equal or any(str(e.get("why", "")).startswith("bug:") for e in run_log):
+def display_only(paths: list[str]) -> bool:
+    """Whether every path is under a `freeze.DISPLAY_ONLY_PATHS` entry (none is, trivially)."""
+    return all(any(p.startswith(d + "/") for d in DISPLAY_ONLY_PATHS) for p in paths)
+
+
+def check_measured_code(differing: list[str], run_log: list[dict]) -> None:
+    """A render after the measured code changed needs a `bug:` re-run in the run log. Display-only
+    files may differ."""
+    if display_only(differing) or any(str(e.get("why", "")).startswith("bug:") for e in run_log):
         return
     raise ValueError(
         "the measured code differs from the freeze commit and the run log records no 'bug:'"
-        " re-run; revert the change, or re-run under --rerun-reason 'bug: ...'"
+        " re-run; revert the change, or re-run under --rerun-reason 'bug: ...'."
+        f" Differing files: {', '.join(differing)}"
     )
 
 
@@ -1170,8 +1188,8 @@ def main(argv: list[str] | None = None) -> None:
         if not freeze.get("commit"):
             raise ValueError("eval/freeze.json has no `commit`; record the freeze commit")
         run_log = load_run_log(results / "run-log.jsonl")
-        equal = measured_code_equal(freeze["commit"])
-        check_measured_code(equal, run_log)
+        differing = measured_code_diff(freeze["commit"])
+        check_measured_code(differing, run_log)
         first = first_run_entry(registry, Path(args.summaries), results / "superseded", freeze)
         machine = load_machine(results / "machine.json")
         text = render(
@@ -1182,7 +1200,7 @@ def main(argv: list[str] | None = None) -> None:
             machine,
             registry=registry,
             first_entry=first,
-            rendered=rendered | {"measured_code_equal": equal},
+            rendered=rendered | {"measured_code_diff": differing},
             changes=args.change,
         )
         out = Path(args.out)

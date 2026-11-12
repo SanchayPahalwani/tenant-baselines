@@ -4,7 +4,7 @@ import subprocess
 
 import pytest
 
-from tenant_baselines import bench_world, freeze
+from tenant_baselines import bench_world, eval_report, freeze
 from tenant_baselines.bench_fill import LATENCY_FACTOR
 from tenant_baselines.traffic import LATENCY_SIGMA
 from tenant_baselines.world import build_world
@@ -55,10 +55,7 @@ def test_measured_paths_equal_the_freeze():
         pytest.skip("git is not available")
     if known.returncode != 0:
         pytest.skip("the freeze commit is not available (no git history)")
-    diff = subprocess.run(
-        ["git", "diff", "--quiet", commit, "HEAD", "--", *freeze.MEASURED_PATHS], cwd=freeze.REPO
-    )
-    assert diff.returncode == 0
+    assert eval_report.display_only(eval_report.measured_code_diff(commit))
 
 
 def test_eval_demo_and_paths_worlds_are_unchanged():
