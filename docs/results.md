@@ -13,7 +13,7 @@ These results test the implementation under the stated traffic assumption; they 
 - Docker VM: Docker 28.4.0, 8 CPUs, 9.7 GiB memory
 - Machine facts: from the Setup block that `make eval` rendered right after the official runs on 2026-11-12 (`docs/results.md` at commit `7fba0be`, whose Setup names commit `b97503c`)
 - Versions: Flink 2.2.1 (Java 17); Flink Kafka connector 5.0.0-2.2; Kafka 4.4.0; ClickHouse 26.8; Grafana 13.2.5; Alertmanager v0.34.2; Python 3.12.15; numpy 2.5.4
-- Rendered at commit `3233c9e` on 2026-11-12
+- Rendered at commit `c26c984` on 2026-11-12
 - Measured code at the render commit equals the freeze commit: yes, except display-only files: infra/grafana/dashboards/tenant-baselines.json
 
 ## Headline: 6:1 day/night amplitude, selected settings on the test week
