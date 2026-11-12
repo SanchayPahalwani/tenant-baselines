@@ -60,9 +60,12 @@ def test_sample_sums_task_level_ids_only():
         ],
     }
     slept = []
+    calls = []
     got = bench_flink.sample(
-        "j", "s", 2, get=getter(routes), now=lambda: 5.0, monotonic=lambda: 7.0, sleep=slept.append
-    )
+        "j", "s", 2, get=getter(routes, calls), now=lambda: 5.0, monotonic=lambda: 7.0,
+        sleep=lambda s: (slept.append(s), calls.append("sleep")),
+    )  # fmt: skip
+    assert calls == [base, "sleep", base + "?get=0.numRecordsOut,1.numRecordsOut", "/jobs/j"]
     assert got["count"] == 30 and got["t"] == 5.0 and got["mono"] == 7.0
     assert slept == [1.0]
     assert got["vertices"] == {
@@ -106,8 +109,9 @@ def test_watermark_lag_none_before_first_watermark():
 
 def test_watermark_lag_adds_the_offset():
     routes = watermark_routes([980_000, 978_000])
+    clock = iter([1000.0, 1005.0, 1010.0, 1015.0])  # only the first reading is the request time
     got = bench_flink.watermark_lag_s(
-        "j", -0.7, get=getter(routes), now=lambda: 1000.0, sleep=lambda s: None
+        "j", -0.7, get=getter(routes), now=lambda: next(clock), sleep=lambda s: None
     )
     assert got == pytest.approx(21.3)
 
@@ -205,6 +209,14 @@ def cancel_world(states: list[str]):
     return get
 
 
+def ok(cmds: list):
+    def run(cmd):
+        cmds.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    return run
+
+
 def test_cancel_and_clean_waits_then_removes_the_directory():
     cmds, patched = [], []
 
@@ -214,28 +226,48 @@ def test_cancel_and_clean_waits_then_removes_the_directory():
 
     bench_flink.cancel_and_clean(
         "j", "r1", get=cancel_world(["RUNNING", "CANCELLING", "CANCELED"]), patch=patch,
-        run=lambda cmd: cmds.append(cmd), sleep=lambda s: None,
+        run=ok(cmds), sleep=lambda s: None,
     )  # fmt: skip
     assert patched == [("http://127.0.0.1:8081/jobs/j", {"mode": "cancel"})]
     assert cmds[0][-3:] == ["rm", "-rf", "/flink-data/checkpoints/bench/r1"]
 
 
+def test_cancel_and_clean_raises_when_the_cancel_is_refused():
+    cmds = []
+    with pytest.raises(RunFailed, match="HTTP 500"):
+        bench_flink.cancel_and_clean(
+            "j", "r1", get=cancel_world(["RUNNING"]), patch=lambda *a, **k: Resp({}, 500),
+            run=cmds.append, sleep=lambda s: None,
+        )  # fmt: skip
+    assert cmds == []
+
+
+def test_cancel_and_clean_raises_when_the_removal_fails():
+    failed = subprocess.CompletedProcess([], 1, stdout="", stderr="permission denied")
+    with pytest.raises(RunFailed, match="permission denied"):
+        bench_flink.cancel_and_clean(
+            "j", "r1", get=cancel_world(["FINISHED"]), patch=None, run=lambda cmd: failed
+        )
+
+
 def test_cancel_and_clean_only_cleans_a_finished_job():
     cmds = []
     bench_flink.cancel_and_clean(
-        "j", "r1", get=cancel_world(["FINISHED"]), patch=None, run=cmds.append
+        "j", "r1", get=cancel_world(["FINISHED"]), patch=None, run=ok(cmds)
     )
     assert len(cmds) == 1
 
 
 def test_cancel_and_clean_gives_up_after_the_wait():
     clock = iter(range(0, 1000, 20))
+    cmds = []
     with pytest.raises(RunFailed, match="CANCELLING"):
         bench_flink.cancel_and_clean(
             "j", "r1", get=cancel_world(["RUNNING", "CANCELLING"]),
-            patch=lambda *a, **k: Resp({}), run=lambda cmd: None,
+            patch=lambda *a, **k: Resp({}), run=ok(cmds),
             sleep=lambda s: None, monotonic=lambda: next(clock),
         )  # fmt: skip
+    assert cmds == []  # the directory of a job that may still run is left alone
 
 
 def test_taskmanager_memory_reads_docker_stats():
@@ -247,3 +279,24 @@ def test_taskmanager_memory_reads_docker_stats():
         "used_bytes": int(1.5 * 1024**3),
         "limit_bytes": 3 * 1024**3,
     }
+
+
+def test_submit_returns_the_last_line_and_passes_the_arguments():
+    seen = []
+
+    def run(cmd, **kw):
+        seen.append(cmd)
+        return subprocess.CompletedProcess(
+            cmd, 0, stdout="Job has been submitted\n" + "a" * 32 + "\n"
+        )
+
+    assert bench_flink.submit("r1", "bench.in", ["-Dx=1"], run=run) == "a" * 32
+    assert seen[0][-3:] == ["r1", "bench.in", "-Dx=1"]
+    assert "submit-bench.sh" in " ".join(seen[0])
+
+
+def test_submit_raises_on_a_failed_script_or_a_bad_id():
+    for rc, out in [(1, "a" * 32), (0, "not a job id"), (0, "")]:
+        done = subprocess.CompletedProcess([], rc, stdout=out)
+        with pytest.raises(RunFailed, match="submit-bench.sh"):
+            bench_flink.submit("r1", "t", run=lambda cmd, done=done, **kw: done)

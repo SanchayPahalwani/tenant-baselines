@@ -29,6 +29,7 @@ shift 2
 
 [[ "$run_id" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || fail "run id may hold only letters, digits, . and -: $run_id"
 [ -f "$JAR" ] || fail "no job jar at $JAR"
+[ -f "$THRESHOLDS" ] || fail "no thresholds file at $THRESHOLDS"
 [ ! -e "$CHECKPOINTS/$run_id" ] || fail "$CHECKPOINTS/$run_id exists; a run id is never reused"
 
 out=$(flink run -d -Dexecution.checkpointing.dir="file://$CHECKPOINTS/$run_id" "$@" "$JAR" \

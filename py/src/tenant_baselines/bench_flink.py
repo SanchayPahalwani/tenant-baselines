@@ -20,7 +20,7 @@ from tenant_baselines.freeze import REPO
 
 REFRESH_WAIT_S = 1.0
 CANCEL_WAIT_S = 60
-NO_WATERMARK = 0  # a lowest watermark below this means no watermark yet (Long.MIN_VALUE)
+_WATERMARK_FLOOR = 0  # a lowest watermark below this means no watermark yet (Long.MIN_VALUE)
 _SUBMIT = (
     *("docker", "compose", "exec", "-T", "jobmanager"),
     *("bash", "/opt/tb-scripts/submit-bench.sh"),
@@ -39,11 +39,11 @@ def _json(get: Callable, path: str):
     return get(f"{REST}{path}", timeout=10).raise_for_status().json()
 
 
-def submit(run_id: str, topic: str, extra: Iterable[str] = ()) -> str:
+def submit(
+    run_id: str, topic: str, extra: Iterable[str] = (), run: Callable = subprocess.run
+) -> str:
     """Submit the bench job inside the jobmanager; returns its job id."""
-    done = subprocess.run(
-        [*_SUBMIT, run_id, topic, *extra], cwd=REPO, stdout=subprocess.PIPE, text=True
-    )
+    done = run([*_SUBMIT, run_id, topic, *extra], cwd=REPO, stdout=subprocess.PIPE, text=True)
     lines = done.stdout.strip().splitlines()
     job_id = lines[-1] if lines else ""
     if done.returncode != 0 or not _JOB_ID.fullmatch(job_id):
@@ -61,12 +61,10 @@ def vertex(job: dict, prefix: str) -> dict:
     return found[0]
 
 
-def _refresh(job_id: str, vertex_id: str, get: Callable, now: Callable, sleep: Callable) -> float:
-    """Start a metric-cache refresh and wait for it; returns the wall-clock time of the request."""
-    sent = now()
+def _refresh(job_id: str, vertex_id: str, get: Callable, sleep: Callable) -> None:
+    """Send the request that starts a metric-cache refresh, and wait for the refresh to land."""
     _json(get, f"/jobs/{job_id}/vertices/{vertex_id}/metrics")
     sleep(REFRESH_WAIT_S)
-    return sent
 
 
 def _values(get: Callable, job_id: str, vertex_id: str, ids: list[str]) -> dict[str, float]:
@@ -136,23 +134,23 @@ def watermark_lag_s(
     sleep: Callable = time.sleep,
 ) -> float | None:
     """How far the minute aggregator's lowest input watermark is behind the job's clock, in
-    seconds. `offset_s` is the VM clock minus the host's. None until every subtask has a watermark.
+    seconds. `offset_s` is the VM clock minus the host's. The request time is read before the
+    burst's first request. None until every subtask has a watermark.
     """
+    sent = now()  # before the first request of the burst, so the value is never newer than it
     first = _json(get, f"/jobs/{job_id}")["vertices"][0]["id"]
-    sent = _refresh(job_id, first, get, now, sleep)
+    _refresh(job_id, first, get, sleep)
     vid, ids = _find_metric(get, job_id, ".minute-aggregator.currentInputWatermark")
     lowest = min(_values(get, job_id, vid, ids).values())
-    if lowest < NO_WATERMARK:
+    if lowest < _WATERMARK_FLOOR:
         return None
     return sent + offset_s - lowest / 1000
 
 
-def late_events(
-    job_id: str, get: Callable = httpx.get, now: Callable = time.time, sleep: Callable = time.sleep
-) -> int:
+def late_events(job_id: str, get: Callable = httpx.get, sleep: Callable = time.sleep) -> int:
     """The job's total `lateEvents`, summed over the late-events operator's subtasks."""
     first = _json(get, f"/jobs/{job_id}")["vertices"][0]["id"]
-    _refresh(job_id, first, get, now, sleep)
+    _refresh(job_id, first, get, sleep)
     vid, ids = _find_metric(get, job_id, ".late-events.lateEvents")
     return int(sum(_values(get, job_id, vid, ids).values()))
 
@@ -225,16 +223,20 @@ def cancel_and_clean(
     """Cancel the job, wait for it to stop, and delete the run's checkpoint directory. A job that
     is already over is only cleaned."""
     if _json(get, f"/jobs/{job_id}")["state"] not in _TERMINAL:
-        patch(f"{REST}/jobs/{job_id}", params={"mode": "cancel"}, timeout=10)
+        r = patch(f"{REST}/jobs/{job_id}", params={"mode": "cancel"}, timeout=10)
+        if r.status_code != 202:
+            raise RunFailed(f"cancelling job {job_id} returned HTTP {r.status_code}, not 202")
         deadline = monotonic() + CANCEL_WAIT_S
         while (state := _json(get, f"/jobs/{job_id}")["state"]) not in _TERMINAL:
             if monotonic() >= deadline:
                 raise RunFailed(f"job {job_id} is still {state} {CANCEL_WAIT_S} s after cancel")
             sleep(1.0)
-    run(
+    rm = run(
         ["docker", "compose", "exec", "-T", "jobmanager"]
         + ["rm", "-rf", f"/flink-data/checkpoints/bench/{run_id}"]
     )
+    if rm.returncode != 0:
+        raise RunFailed(f"could not remove the checkpoints of {run_id}: {rm.stderr.strip()}")
 
 
 def taskmanager_memory(run: Callable = _sh) -> dict:

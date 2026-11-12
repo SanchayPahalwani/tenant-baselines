@@ -5,7 +5,6 @@ eval modules: `kafka_io` is only imported from.
 """
 
 import json
-import os
 import re
 import subprocess
 import time
@@ -23,6 +22,7 @@ from tenant_baselines.eval_run import REST
 from tenant_baselines.freeze import REPO, dirty_paths, head_commit
 
 __all__ = [
+    "ClockReadFailed",
     "NotAppendTime",
     "PreflightFailed",
     "collect",
@@ -36,11 +36,16 @@ __all__ = [
 
 JAR = REPO / "flink-job" / "target" / "tenant-baselines-job.jar"
 PERF_DIR = REPO / "docs" / "performance"
-_BUSY_STATES = ("RUNNING", "RESTARTING", "CREATED", "INITIALIZING")
+_OVER = ("FINISHED", "CANCELED", "FAILED")
+_CLOCK = re.compile(r"\d+\.\d{9}")
 _GB = 1024**3
 
 
 class NotAppendTime(ValueError):
+    pass
+
+
+class ClockReadFailed(PreflightFailed):
     pass
 
 
@@ -77,7 +82,7 @@ def preflight(on_battery: bool = False, run: Callable = _sh, get: Callable = htt
     except httpx.HTTPError as e:
         raise PreflightFailed(f"could not read the Flink REST API at {REST}: {e}") from e
     for job in jobs:
-        if job["state"] in _BUSY_STATES:
+        if job["state"] not in _OVER:
             raise PreflightFailed(
                 f"job {job['name']} is {job['state']}; cancel it, or `make down` and `make up`"
             )
@@ -85,25 +90,26 @@ def preflight(on_battery: bool = False, run: Callable = _sh, get: Callable = htt
         raise PreflightFailed(f"no job jar at {JAR}; run `make jar`")
 
 
-def _out(run: Callable, cmd: list[str]) -> str:
-    return run(cmd).stdout.strip()
+def _out(run: Callable, cmd: list[str], strip: bool = True) -> str:
+    """The stdout of a command; raises on a non-zero exit, so a failed command records nothing."""
+    done = run(cmd)
+    if done.returncode != 0:
+        raise RuntimeError(f"`{' '.join(cmd)}` exited {done.returncode}: {done.stderr.strip()}")
+    return done.stdout.strip() if strip else done.stdout
 
 
-def _project_name() -> str:
-    """Compose's project name for this checkout: the directory name, normalized."""
-    name = os.environ.get("COMPOSE_PROJECT_NAME") or REPO.name
-    return re.sub(r"[^a-z0-9_-]", "", name.lower())
+def _result_file(path: str) -> bool:
+    """The files a bench run writes: they do not make the tree dirty."""
+    return path == "docs/performance.md" or path.startswith("docs/performance/")
 
 
 def collect(on_battery: bool, run: Callable = _sh, get: Callable = httpx.get) -> dict:
     """The environment record of a bench run. Other containers are counted, never named."""
-    status = run(["git", "status", "--porcelain", "-z"]).stdout
-    own = ("docs/performance/", "docs/performance.md")
-    dirty = [p for p in dirty_paths("bench", status) if not p.startswith(own)]
+    status = _out(run, ["git", "status", "--porcelain", "-z"], strip=False)
+    dirty = [p for p in dirty_paths("bench", status) if not _result_file(p)]
     info = json.loads(_out(run, ["docker", "info", "--format", "{{json .}}"]))
-    labels = _out(
-        run, ["docker", "ps", "--format", '{{.Label "com.docker.compose.project"}}']
-    ).splitlines()
+    running = set(_out(run, ["docker", "ps", "-q"]).split())
+    ours = set(_out(run, ["docker", "compose", "ps", "-q"]).split())
     cfg = {e["key"]: e["value"] for e in _json(get, "/jobmanager/config")}
     wanted = (
         "parallelism.default",
@@ -130,7 +136,7 @@ def collect(on_battery: bool, run: Callable = _sh, get: Callable = httpx.get) ->
             "memory_gb": round(info["MemTotal"] / _GB, 1),
             "server_version": info["ServerVersion"],
         },
-        "other_containers": sum(1 for x in labels if x != _project_name()),
+        "other_containers": len(running - ours),
         "images": sorted(x for x in images if x),
         "flink": {
             "version": _json(get, "/config")["flink-version"],
@@ -150,12 +156,12 @@ def vm_clock_offset(run: Callable = _sh, now: Callable = time.time, tries: int =
         before = now()
         out = run(["docker", "compose", "exec", "-T", "jobmanager", "date", "+%s.%N"])
         after = now()
-        try:
-            vm = float(out.stdout.strip())
-        except ValueError:
-            raise PreflightFailed(
-                f"could not read the jobmanager's clock (exit {out.returncode}); is the stack up?"
-            ) from None
+        if not _CLOCK.fullmatch(out.stdout.strip()):
+            raise ClockReadFailed(
+                f"could not read the jobmanager's clock (exit {out.returncode}): got"
+                f" {out.stdout!r}, wanted seconds with nine decimals; is the stack up?"
+            )
+        vm = float(out.stdout.strip())
         try_ = {"offset_s": vm - (before + after) / 2, "bracket_s": after - before}
         if best is None or try_["bracket_s"] < best["bracket_s"]:
             best = try_

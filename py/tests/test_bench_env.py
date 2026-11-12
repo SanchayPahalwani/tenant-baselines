@@ -38,14 +38,21 @@ def getter(routes: dict):
 class Shell:
     """A fake `run`: the answer for a command is looked up by its first words."""
 
-    def __init__(self, power=AC, vm_date=None, status="", labels="", **answers):
-        self.power, self.status, self.labels = power, status, labels
+    def __init__(self, power=AC, vm_date=None, status="", running="", ours="", fail=None):
+        self.power, self.status, self.running, self.ours, self.fail = (
+            power,
+            status,
+            running,
+            ours,
+            fail,
+        )
         self.vm_date = str(int(time.time())) if vm_date is None else vm_date
-        self.answers = answers
         self.calls: list[list[str]] = []
 
     def __call__(self, cmd):
         self.calls.append(cmd)
+        if self.fail and cmd[: len(self.fail)] == self.fail:
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="boom")
         if cmd[0] == "pmset":
             return done(self.power)
         if cmd[:2] == ["git", "status"]:
@@ -56,8 +63,10 @@ class Shell:
             return done(
                 json.dumps({"NCPU": 8, "MemTotal": 10 * 1024**3, "ServerVersion": "28.0.1"})
             )
-        if cmd[:2] == ["docker", "ps"]:
-            return done(self.labels)
+        if cmd[:3] == ["docker", "ps", "-q"]:
+            return done(self.running)
+        if cmd[:4] == ["docker", "compose", "ps", "-q"]:
+            return done(self.ours)
         if cmd[:3] == ["docker", "compose", "config"]:
             return done("b:2\na:1\n")
         if cmd[0] == "sysctl":
@@ -101,6 +110,13 @@ def test_preflight_refuses_a_running_job(jar):
     bench_env.preflight(run=Shell(), get=getter(overview("FINISHED", "CANCELED")))
 
 
+def test_preflight_refuses_any_job_that_is_not_over(jar):
+    for state in ("RUNNING", "RECONCILING", "SUSPENDED", "CANCELLING", "FAILING", "CREATED"):
+        with pytest.raises(PreflightFailed, match=state):
+            bench_env.preflight(run=Shell(), get=getter(overview(state)))
+    bench_env.preflight(run=Shell(), get=getter(overview("FINISHED", "CANCELED", "FAILED")))
+
+
 def test_preflight_refuses_a_missing_jar(jar):
     jar.unlink()
     with pytest.raises(PreflightFailed, match="make jar"):
@@ -125,11 +141,11 @@ FLINK = {
 
 def test_collect_counts_other_containers_without_names(monkeypatch):
     monkeypatch.setattr(bench_env, "head_commit", lambda: "abc")
-    monkeypatch.setattr(bench_env, "_project_name", lambda: "tenant-baselines")
-    labels = "tenant-baselines\nsecret-project\nsecret-project\n\ntenant-baselines\n"
-    got = bench_env.collect(False, run=Shell(labels=labels), get=getter(FLINK))
-    assert got["other_containers"] == 3  # the two foreign ones and a container with no project
-    assert "secret-project" not in json.dumps(got)
+    got = bench_env.collect(
+        False, run=Shell(running="x1\nus1\nx2\nus2\nx3\n", ours="us1\nus2\n"), get=getter(FLINK)
+    )
+    assert got["other_containers"] == 3  # foreign ones first, mid-list and last
+    assert "x1" not in json.dumps(got)
     assert set(got) == {
         "data", "date_utc", "commit", "dirty", "on_battery", "host", "power", "vm",
         "other_containers", "images", "flink",
@@ -148,6 +164,19 @@ def test_collect_counts_other_containers_without_names(monkeypatch):
     }
 
 
+def test_collect_counts_a_lone_foreign_container_at_either_end(monkeypatch):
+    monkeypatch.setattr(bench_env, "head_commit", lambda: "abc")
+    for running in ("x1\nus1\n", "us1\nx1\n"):
+        got = bench_env.collect(False, run=Shell(running=running, ours="us1\n"), get=getter(FLINK))
+        assert got["other_containers"] == 1
+
+
+def test_collect_raises_when_a_command_fails(monkeypatch):
+    monkeypatch.setattr(bench_env, "head_commit", lambda: "abc")
+    with pytest.raises(RuntimeError, match=r"git status.*boom"):
+        bench_env.collect(False, run=Shell(fail=["git", "status"]), get=getter(FLINK))
+
+
 def test_collect_dirty_ignores_the_result_files(monkeypatch):
     monkeypatch.setattr(bench_env, "head_commit", lambda: "abc")
     clean = " M docs/performance/throughput.json\0?? docs/performance.md\0"
@@ -155,14 +184,31 @@ def test_collect_dirty_ignores_the_result_files(monkeypatch):
     assert bench_env.collect(False, run=Shell(status=clean + " M py/x.py\0"), get=getter(FLINK))[
         "dirty"
     ]
+    stray = " M docs/performance.md.orig\0"
+    assert bench_env.collect(False, run=Shell(status=stray), get=getter(FLINK))["dirty"]
 
 
 def test_clock_offset_takes_the_tightest_bracket():
     host = iter([100.0, 100.4, 101.0, 101.1, 102.0, 102.6])
-    vm = iter(["100.9", "101.75", "103.0"])
+    vm = iter(["100.900000000", "101.750000000", "103.500000000"])
     got = bench_env.vm_clock_offset(run=lambda cmd: done(next(vm)), now=lambda: next(host), tries=3)
+    # offsets of the three tries: 0.7, 0.7, 1.2 would not tell them apart; these differ
     assert got["offset_s"] == pytest.approx(0.70)
     assert got["bracket_s"] == pytest.approx(0.1)
+
+
+def test_clock_offset_picks_the_try_not_the_first_or_last():
+    host = iter([100.0, 100.4, 101.0, 101.1, 102.0, 102.6])
+    vm = iter(["100.000000000", "101.850000000", "105.000000000"])
+    got = bench_env.vm_clock_offset(run=lambda cmd: done(next(vm)), now=lambda: next(host), tries=3)
+    assert got["offset_s"] == pytest.approx(0.80)  # the middle try: 101.85 - 101.05
+
+
+@pytest.mark.parametrize("bad", ["1731400000.", "1731400000.N", "1731400000", "", "x.123456789"])
+def test_clock_read_failure_names_the_output(bad):
+    with pytest.raises(bench_env.ClockReadFailed, match="jobmanager's clock") as e:
+        bench_env.vm_clock_offset(run=lambda cmd: done(bad), now=lambda: 1.0, tries=1)
+    assert isinstance(e.value, PreflightFailed) and repr(bad) in str(e.value)
 
 
 def test_gaps_finds_a_host_sleep():
