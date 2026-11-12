@@ -79,7 +79,7 @@ def test_delay_world_has_twelve_tenants_a_region():
         assert sum(k.region == r.name for k in w.keys) == 12
     units = {u.name: u.base_latency_ms for u in w.units}
     assert len(units) == 6
-    assert sorted(units.values()) == [70.0] * 3 + [90.0] * 3
+    assert sorted(units.values()) == [70.0] * 3 + [80.0] * 3
     for i, t in enumerate(w.tenants):
         mine = [k for k in w.keys if k.tenant == t.name]
         assert len(mine) == 1
@@ -90,3 +90,12 @@ def test_delay_world_has_twelve_tenants_a_region():
     assert w == bench_world.build("delay", 99)
     gen = LiveGenerator(w, 1, [])
     assert {gen.partition_of(k.key, 8) for k in w.keys} == set(range(8))
+
+
+def test_delay_latencies_stay_under_the_static_threshold_at_40_a_minute():
+    """A minute of 40 events has a p95 near base x 1.6 x exp(1.645 sigma) x 1.1; it must clear
+    the demo file's static level with room, or static pairs page on latency in a delay run."""
+    sets = json.loads((freeze.REPO / "infra/flink/thresholds-demo.json").read_text())["sets"]
+    fire = min(s["global"]["latency_p95"]["fire"] for s in sets)
+    top = max(u.base_latency_ms for u in bench_world.build("delay", 1).units)
+    assert top * LATENCY_FACTOR * math.exp(1.645 * LATENCY_SIGMA) * 1.1 < fire

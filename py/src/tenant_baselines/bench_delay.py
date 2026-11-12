@@ -11,7 +11,18 @@ from tenant_baselines.incidents import Incident
 from tenant_baselines.scoring import MATCH_GRACE_MS, nearest_rank
 from tenant_baselines.world import World
 
-__all__ = ["MATCH_GRACE_MS"]
+__all__ = [
+    "DESIGN",
+    "MATCH_GRACE_MS",
+    "enough_matched",
+    "first_appends",
+    "labels",
+    "measure",
+    "pairs",
+    "run_end_ms",
+    "schedule",
+    "summary",
+]
 
 SETTLE_MS = 300_000
 SPACING_MS = 180_000
@@ -114,6 +125,8 @@ def enough_matched(m: dict) -> bool:
     return m["matched"] >= MIN_MATCHED * m["incidents"]
 
 
+# This restates the window of `scoring.matches` (start <= event_time <= end + MATCH_GRACE_MS,
+# tenant scope, key and signal). `scoring.py` is sealed, so the two cannot drift.
 def _in_window(row: dict, inc: dict) -> bool:
     return (
         row["key"] == inc["key"]
@@ -145,12 +158,14 @@ def measure(labels: dict, records: list[tuple[int, dict]], detector: str, settin
         if r["event_time_ms"] >= settled and not any(_in_window(r, i) for i in labels["incidents"])
     )
     regional = sum(1 for _, r in mine if r["scope"] == "region" and r["event_time_ms"] >= settled)
+    in_window = sum(1 for _, r in tenant_rows if any(_in_window(r, i) for i in labels["incidents"]))
     ttp = [(at - inc["start_ms"]) / 1000 for inc, at, _ in hits]
     return {
         "incidents": len(labels["incidents"]),
         "matched": len(hits),
         "missed": missed,
         "unmatched_firing_rows": unmatched,
+        "extra_matched_rows": in_window - len(hits),
         "regional_firing_rows": regional,
         "pipeline_delay_s": summary([(at - r["event_time_ms"]) / 1000 for _, at, r in hits]),
         "time_to_page_s": summary(ttp),

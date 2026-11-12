@@ -68,15 +68,13 @@ def test_labels_round_trip():
 def test_design_constants_match_the_sources():
     root = Path(freeze.REPO)
     java = root / "flink-job/src/main/java/io/github/sanchaypahalwani/tenantbaselines"
-    wm = (java / "time/Watermarks.java").read_text() if (java / "time").exists() else None
-    if wm is None:
-        wm = next(java.rglob("Watermarks.java")).read_text()
+    wm = next(java.rglob("Watermarks.java")).read_text()
     asm = next(java.rglob("AlertStateMachine.java")).read_text()
     rg = next(java.rglob("RegionGrouper.java")).read_text()
     am = (root / "infra/alertmanager/alertmanager.yml").read_text()
     assert "BOUND = Duration.ofSeconds(20)" in wm
     assert "LIVE_IDLENESS = Duration.ofSeconds(60)" in wm
-    assert "FIRE_AFTER = 3" in asm
+    assert "FIRE_AFTER = 3;" in asm
     assert "HOLD_MS = 120_000L" in rg
     assert "group_wait: 30s" in am
     assert bd.DESIGN == {
@@ -220,3 +218,15 @@ def test_pairs_are_sorted_firing_pairs():
 
 def test_incident_type_is_the_incidents_one():
     assert isinstance(bd.schedule(_world(), T0, 1, 1)[0], Incident)
+
+
+def test_measure_reports_refires():
+    s = T0 + 400_000
+    rows = [
+        (1, _row(KEY1, s + 300_000, alert_id="a")),
+        (2, _row(KEY1, s + 400_000, alert_id="b")),
+        (3, _row(KEY1, s + 500_000, alert_id="c")),
+        (4, _row(KEY3, s + 300_000, alert_id="d")),
+    ]
+    m = bd.measure(_lab([(s, KEY1)]), rows, "seasonal", "k4")
+    assert (m["matched"], m["extra_matched_rows"], m["unmatched_firing_rows"]) == (1, 2, 1)

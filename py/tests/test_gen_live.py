@@ -4,7 +4,15 @@ import orjson
 import pytest
 
 from tenant_baselines import bench_world
-from tenant_baselines.gen_live import DeliveryStats, LiveGenerator, main, next_step, take_step
+from tenant_baselines.gen_live import (
+    DeliveryStats,
+    LiveGenerator,
+    check_failed,
+    main,
+    next_step,
+    start_bench,
+    take_step,
+)
 from tenant_baselines.incidents import Incident
 from tenant_baselines.traffic import shape
 from tenant_baselines.world import build_world
@@ -160,6 +168,10 @@ def test_steps_cross_the_seam_without_gap_or_overlap():
             clock[0] += 7000
         spans.append((start, nxt))
         next_ms = nxt
+    minutes = [a for a in spans if a[1] - a[0] == 60_000]
+    seconds = [a for a in spans if a[1] - a[0] == 1000]
+    assert minutes and seconds
+    assert len(minutes) + len(seconds) == len(spans)
     assert spans[0][0] == 1_800_000_000_000
     assert all(a[1] == b[0] for a, b in zip(spans, spans[1:], strict=False))
     assert abs(clock[0] - spans[-1][1]) <= 1000
@@ -170,7 +182,49 @@ def test_bench_script_needs_labels_out(monkeypatch, capsys):
     with pytest.raises(SystemExit) as exc:
         main()
     assert exc.value.code == 2
-    assert "--labels-out" in capsys.readouterr().err
+    assert "--script bench needs --labels-out" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("extra", "message"),
+    [
+        (["--history-days", "0"], "--script bench needs --history-days"),
+        (["--bench-incidents", "0"], "--bench-incidents must be"),
+        (["--script", "demo"], "needs --script bench or none"),
+    ],
+)
+def test_bad_argument_combinations_are_refused_up_front(monkeypatch, capsys, extra, message):
+    argv = ["gen_live", "--world", "delay", "--script", "bench", "--labels-out", "x.json", *extra]
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 2
+    assert message in capsys.readouterr().err
+
+
+def test_start_bench_writes_labels_and_sets_incidents(tmp_path):
+    w = bench_world.build("delay", 1)
+    gen = LiveGenerator(w, 1, [])
+    out = tmp_path / "labels.json"
+    t0 = 1_800_000_000_000
+    incidents = start_bench(w, gen, out, t0, 6, 1)
+    assert len(incidents) == 6 and gen._incidents == incidents
+    assert [p.name for p in tmp_path.iterdir()] == ["labels.json"]
+    lab = orjson.loads(out.read_bytes())
+    assert lab["t0_ms"] == t0 and len(lab["incidents"]) == 6
+    assert lab["incidents"][0]["start_ms"] == incidents[0].start_ms
+
+
+def test_failed_deliveries_end_a_bench_run_only(caplog):
+    stats = DeliveryStats()
+    stats.failed = 1
+    check_failed("demo", stats)
+    check_failed("none", stats)
+    with caplog.at_level("ERROR", logger="gen_live"), pytest.raises(SystemExit) as exc:
+        check_failed("bench", stats)
+    assert exc.value.code == 1 and "deliveries failed" in caplog.text
+    stats.failed = 0
+    check_failed("bench", stats)
 
 
 def test_delay_world_tick_rate():

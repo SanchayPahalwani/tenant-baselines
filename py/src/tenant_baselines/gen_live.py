@@ -159,6 +159,23 @@ def _fmt_utc(ms: int) -> str:
     return time.strftime("%H:%M", time.gmtime(ms / 1000))
 
 
+def start_bench(
+    world: World, gen: "LiveGenerator", labels_out: Path, t0_ms: int, n: int, seed: int
+) -> list[Incident]:
+    """Catch-up handler of `--script bench`: set the schedule and write the labels."""
+    incidents = bench_delay.schedule(world, t0_ms, n, seed)
+    gen.set_incidents(incidents)
+    _write_labels(labels_out, bench_delay.labels(incidents, world, t0_ms))
+    return incidents
+
+
+def check_failed(script: str, stats: "DeliveryStats") -> None:
+    """A bench run with a failed delivery is spoiled: exit with status 1."""
+    if script == "bench" and stats.failed > 0:
+        log.error("%d deliveries failed; the bench run is spoiled", stats.failed)
+        sys.exit(1)
+
+
 def _write_labels(path: Path, labels: dict) -> None:
     """Write beside `path` and rename onto it, so a reader never sees half a file."""
     tmp = path.with_name(path.name + ".tmp")
@@ -182,6 +199,12 @@ def main() -> None:
     args = ap.parse_args()
     if args.script == "bench" and args.labels_out is None:
         ap.error("--script bench needs --labels-out")
+    if args.script == "bench" and args.history_days <= 0:
+        ap.error("--script bench needs --history-days > 0 (the schedule starts at catch-up)")
+    if args.bench_incidents <= 0:
+        ap.error("--bench-incidents must be > 0")
+    if args.world != "demo" and args.script == "demo":
+        ap.error(f"--world {args.world} has no dedicated unit: it needs --script bench or none")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
     world = _build(args.world, args.seed)
@@ -309,9 +332,7 @@ def main() -> None:
                     stats.failed - last_failed,
                     sent_total,
                 )
-            if args.script == "bench" and stats.failed > 0:
-                log.error("%d deliveries failed; the bench run is spoiled", stats.failed)
-                sys.exit(1)
+            check_failed(args.script, stats)
             sent = 0
             last_delivered, last_failed = stats.delivered, stats.failed
             last_log = time.monotonic()

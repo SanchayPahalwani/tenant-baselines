@@ -651,10 +651,11 @@ def test_a_bug_rerun_moves_the_old_summary_aside_so_the_report_still_renders(env
     only = ["--only-seed", "4101", "--only-amplitude", "6"]
     eval_official.main(only)
     first = next(e["run_id"] for e in Registry(env.tmp / "runs.jsonl").entries())
-    monkeypatch.setattr(eval_official.eval_run, "run_id", lambda k, s, a, now: first[:-1] + "9")
+    second = first[:-1] + ("8" if first.endswith("9") else "9")
+    monkeypatch.setattr(eval_official.eval_run, "run_id", lambda k, s, a, now: second)
     eval_official.main([*only, "--rerun-reason", "bug: the scorer miscounted"])
     summaries = env.tmp / "summaries"
-    assert [d.name for d in summaries.iterdir()] == [first[:-1] + "9"]
+    assert [d.name for d in summaries.iterdir()] == [second]
     assert (env.tmp / "superseded" / first / "summary.json").is_file()
     (line,) = env.log()
     assert line["supersedes"] == [first] and line["old"] is None and line["new"] is None
@@ -682,7 +683,8 @@ def test_a_failed_bug_rerun_leaves_the_old_summary_in_place(env, monkeypatch):
     only = ["--only-seed", "4101", "--only-amplitude", "6"]
     eval_official.main(only)
     first = next(e["run_id"] for e in Registry(env.tmp / "runs.jsonl").entries())
-    monkeypatch.setattr(eval_official.eval_run, "run_id", lambda k, s, a, now: first[:-1] + "9")
+    second = first[:-1] + ("8" if first.endswith("9") else "9")
+    monkeypatch.setattr(eval_official.eval_run, "run_id", lambda k, s, a, now: second)
     env.outcomes[(4101, 6.0)] = eval_run.RunFailed("boom")
     with pytest.raises(SystemExit):
         eval_official.main([*only, "--rerun-reason", "bug: the scorer miscounted"])

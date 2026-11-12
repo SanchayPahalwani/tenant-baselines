@@ -16,7 +16,7 @@ _PEAK_RPM = 240.0
 _LATENCY_RANGE_MS = (30.0, 80.0)
 _DELAY_TENANTS = 36
 _DELAY_PEAK_RPM = 40.0
-_DELAY_UNIT_LATENCY_MS = (70.0, 90.0)
+_DELAY_UNIT_LATENCY_MS = (70.0, 80.0)
 
 
 def build(name: str, seed: int) -> World:
@@ -61,7 +61,7 @@ def _build_delay() -> World:
     """3 regions, 36 tenants (d01 to d36) with one key each, 40 requests a minute, flat.
 
     Tenant i is homed in region i % 3. Each region has two shared units, `-s1` at 70 ms and
-    `-s2` at 90 ms; the tenant's key is on `-s1` when (i // 3) % 2 == 0, else on `-s2`.
+    `-s2` at 80 ms; the tenant's key is on `-s1` when (i // 3) % 2 == 0, else on `-s2`.
     The seed is not used.
     """
     regions = _DEMO_REGIONS
