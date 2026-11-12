@@ -4,12 +4,17 @@ These results test the implementation under the stated traffic assumption; they 
 
 ## Setup
 
-- Commit: `b97503c`
+- Runs at commit: `b97503c`
 - Command: `make eval`
-- Date: 2026-11-12
+- Settings frozen at commit: `9f25a23`
+- Jar SHA-256: `1dff21f3fcc1c6ba11b72c0400843c5adf9d2a4a2a55ebd3a8371d1046e6e78e`
+- Runs: first start 2026-11-12 06:20:37 UTC, last finish 2026-11-12 07:01:08 UTC, elapsed 40.5 minutes (`docs/results/official-runs.jsonl`)
 - Machine: Apple M3 Pro, 12 cores, 18.0 GiB memory
 - Docker VM: Docker 28.4.0, 8 CPUs, 9.7 GiB memory
+- Machine facts: from the Setup block that `make eval` rendered right after the official runs on 2026-11-12 (`docs/results.md` at commit `7fba0be`, whose Setup names commit `b97503c`)
 - Versions: Flink 2.2.1 (Java 17); Flink Kafka connector 5.0.0-2.2; Kafka 4.4.0; ClickHouse 26.8; Grafana 13.2.5; Alertmanager v0.34.2; Python 3.12.15; numpy 2.5.4
+- Rendered at commit `87d90a3` on 2026-11-12
+- Measured code at the render commit equals the freeze commit: yes
 
 ## Headline: 6:1 day/night amplitude, selected settings on the test week
 
@@ -124,19 +129,22 @@ Regional outages on week 5, with their hour (the hour is reported, spec 5.4):
 
 A synthetic world (`paths (synthetic)`) went through the job once as 25,780,861 events and once as 443,520 minute aggregates. The alert logs compared equal: true. The aggregates compared equal: true. The alert log holds 2,583 rows, 62 of them regional firing rows.
 
-Run at commit `49c7b72` on 2026-11-12T03:15:01Z. Seconds: events job 3026.2, aggregates job 3993.4, total 2378.7.
+Run at commit `e57f621` on 2026-11-12T08:53:03Z. Recorded: run id `paths-s7-a6-20261112T080636`; a clean tree; jar SHA-256 `1dff21f3fcc1c6ba11b72c0400843c5adf9d2a4a2a55ebd3a8371d1046e6e78e`. Seconds: events job 2663.6, aggregates job 54.3, total 2787.4.
 
 ## Method notes
 
 - **Seeds.** The code enforces the seed protocol. A dev run refuses any seed outside 7, 11 and 13. An official run needs the freeze file, uses only the seeds listed in it, and refuses a seed and amplitude that already has an official run. Official seeds: 4101, 4102, 4103, 4104, 4105. The settings were frozen at commit `9f25a23`. This render holds runs of kind off at seeds 4101, 4102, 4103, 4104, 4105.
+- **The `dirty` flag.** Each of the 15 official summaries records `dirty: true`. The flag counts the driver's own registry line, written before the run. The driver refuses any other change (`eval_official.preflight`).
 - **The world.** 3 regions, 24 tenants (8 per region) and 48 keys: 6 shared units and 6 dedicated units. The 18 shared tenants have a key on each of the two shared units of their region (36 keys). The 6 dedicated tenants have their own unit and one key on the region's first shared unit (12 keys). The spec says about 60 keys, but its two sentences give 42. Reaching 60 would need a third shared unit or keys across regions, and cross-region keys would put half the tenants partly out of their time zone, so the world has 48. Five tenants keep the hours of another region's time zone.
 - **Recall.** Every recall figure is expected-signal recall unless the column says any-signal. A scenario counts when a page lands on the signal the scenario is meant to move. The selection rule on week 4 uses the same count.
+- **Selection ties.** Among the settings that reach 8 of 10 (or, when none does, among those with the highest recall), the rule takes the fewest false pages per day, then the lower median delay, then the less sensitive setting. Spec 5.6 names the first two; the third is the builder's call, recorded in `eval/freeze.json`.
+- **Matched and false pages.** On week 5 at 6:1, pooled over the seeds. Most pages are false in every family: at the selected settings, 73 of 410 pages matched a scenario (seasonal), 60 of 802 (per key static) and 51 of 495 (global static). The traffic model's unlabelled bursts and per-day level factors (spec 5.2) are the expected cause; this eval does not measure the split.
 - **The thresholds mask.** The static thresholds are fitted with every labelled scenario masked out, except the Monday peak. Launch surges and holiday dips are masked too. The mask covers the scenario's keys from its start to 4 minutes past its end, because the five-minute sum carries a scenario's effect for 4 more minutes.
 - **The clip at the replay end.** The replay ends at the end of week 5. Alert rows with an event time past it are dropped before scoring: 6 rows over all runs here. Alerts still open at the end count as pages: 388 over all runs here. Duplicate rows dropped: 0.
 - **Inclusive fire comparison.** The shared state machine fires at or past the fire level (spec 4.5). The values are discrete (bucketed p95, error counts over request counts, whole 5-minute sums), so a static threshold is breached on calibration minutes more often than its nominal percentile. Static false pages therefore run somewhat higher than the percentile alone suggests. The comparison was not changed.
 - **What check-paths shows.** It shows that the events path and the aggregates path give the same alert log. It does not show that the detectors are right: both paths share the thresholds, every operator from the minute aggregates on, and the random draws.
-- **Replay mode can fail.** Replay mode aligns the watermarks of the Kafka partitions. That can hit a race in the Kafka connector (FLINK-39728). It is fixed in connector 5.1.0, which is not released yet; this repo pins 5.0.0-2.2. A run that hits it fails and gives no output, so no wrong result is possible, and check-paths can be run again. The official runs use aggregates mode. It has one partition and no alignment, so it cannot hit the race.
-- **Events-path speed.** The events path of check-paths is bound by the alignment: about 50 minutes for five weeks. The alignment drift was not changed.
+- **Replay mode can fail.** Replay mode aligns the watermarks of the Kafka partitions. That can hit a race in the Kafka connector (FLINK-39728). It is fixed in connector 5.1.0, which is not released as of 2026-11-12; this repo pins 5.0.0-2.2. A run that hits it fails and gives no output, so no wrong result is possible, and check-paths can be run again. The official runs use aggregates mode. It has one partition and no alignment, so it cannot hit the race.
+- **Events-path speed.** The events path of check-paths is bound by the alignment: about 44 minutes for five weeks. The alignment drift was not changed.
 - **Single-key creeps.** A latency creep is placed on one unit. A dedicated unit is a unit, so a creep can land on a unit with a single key.
 - **No Monday holiday in two regions.** eu-central and ap-southeast never get a holiday dip on a Monday. Their local Monday starts before the UTC week, so that local day cannot lie inside the week.
 - **The traffic model and the spreads were kept as specified.** The owner reserved the decision at the freeze and then delegated it to the builder. The builder left spec 5.2 and 4.3 as written. Changing them after seeing dev results would be tuning.
@@ -144,4 +152,4 @@ Run at commit `49c7b72` on 2026-11-12T03:15:01Z. Seconds: events job 3026.2, agg
 
 ## Run log
 
-No entries yet.
+1. `b97503c`, 2026-11-12: first official run: 15 runs, 5 seeds at 3 amplitudes. Why: the settings freeze at `9f25a23`. Old headline: none. New headline: seasonal 45/50, 9.63 false pages per day; per key static 38/50, 21.20; global static 31/50, 12.69.

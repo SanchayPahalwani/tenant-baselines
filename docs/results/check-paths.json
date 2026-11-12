@@ -1,6 +1,10 @@
 {
-  "commit": "49c7b72dacdca4e7477db151b09f2a3b5c647093",
-  "date_utc": "2026-11-12T03:15:01Z",
+  "commit": "e57f621819c573a333cd18a89d59d1553a41fb4b",
+  "dirty": false,
+  "run_id": "paths-s7-a6-20261112T080636",
+  "jar_sha256": "1dff21f3fcc1c6ba11b72c0400843c5adf9d2a4a2a55ebd3a8371d1046e6e78e",
+  "passed": true,
+  "date_utc": "2026-11-12T08:53:03Z",
   "world": "paths (synthetic)",
   "events": 25780861,
   "aggregate_rows": 443520,
@@ -9,10 +13,10 @@
   "alerts_identical": true,
   "aggregates_identical": true,
   "seconds": {
-    "generate": 2.5,
-    "produce": 53.1,
-    "events_job": 3026.2,
-    "aggregates_job": 3993.4,
-    "total": 2378.7
+    "generate": 2.4,
+    "produce": 44.6,
+    "events_job": 2663.6,
+    "aggregates_job": 54.3,
+    "total": 2787.4
   }
 }

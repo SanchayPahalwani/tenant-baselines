@@ -10,6 +10,7 @@ freeze file's and the spec's, and are not rebuilt here.
 
 import json
 import re
+import shutil
 import subprocess
 
 import pytest
@@ -113,7 +114,9 @@ def test_the_readme_sentences_carry_the_scripts_figures(records, machine, check_
         f"At commit `{check_paths['commit'][:7]}`, with a jar built from the same source as the"
         " frozen one",
         f"unchanged since {freeze['commit'][:7]})",
+        f"The check took {check_paths['seconds']['total'] / 60:.1f} minutes on this machine.",
     ]
+    assert eval_report.timing_problem(check_paths) is None
     missing = [w for w in want if w not in text]
     assert not missing, missing
     assert "paged less than both" not in README
@@ -178,6 +181,14 @@ def test_the_jar_sources_are_unchanged_since_the_freeze_commit_the_readme_names(
     assert named, "the README no longer states which jar sources are unchanged"
     freeze = json.loads((REPO / "eval" / "freeze.json").read_text())
     assert freeze["commit"].startswith(named.group(1))
+    # The CI container copies the tree without .git, and a shallow clone lacks the freeze commit.
+    if (
+        shutil.which("git") is None
+        or subprocess.run(
+            ["git", "cat-file", "-e", f"{named.group(1)}^{{commit}}"], cwd=REPO, capture_output=True
+        ).returncode
+    ):
+        pytest.skip("needs the git history back to the freeze commit")
     diff = subprocess.run(
         ["git", "diff", "--quiet", named.group(1), "HEAD", "--"]
         + ["flink-job/pom.xml", "flink-job/src/main", "shared"],
