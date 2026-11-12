@@ -80,10 +80,16 @@ From the milestone 4 final review:
   - One `make smoke` on `gen_live`'s loop, which now goes through `take_step`.
   - The offset correction for `watermark-lag.sh`.
   - The `make test-java` flake after a host sleep (README troubleshooting note).
-  - Move or link the extrapolation table into `docs/design.md`, and reconcile the key count there (48 in the eval world, 60 in the spec).
-  - A README performance block rendered from `docs/performance/`.
-  - **Power disclosure.** The published delay run (`delay-20261112T154647`) had the charger out for about 5½ minutes, 21:21:30 to 21:27 IST, seen by the controller's power watch. The driver reads power only at its start and end, both AC, so the result says AC. Sample `pmset -g ps` during runs and record any change.
-  - Move the shared private helpers (`bench_throughput._load`, `_settings`, `_wait_running`, `bench_flink._json`, `bench_env._sh`/`_power_line`) into `bench_env`/`bench_flink`.
-  - One read-twice helper for `sample`, `late_events` and `watermark_lag_sample`.
-  - The two restart edges that end as `RunFailed`: a restart before the first checkpoint, and one after the last sample.
+  - Move or link the extrapolation table into `docs/design.md`, and reconcile the key count there (48 in the eval world, 60 in the spec). (M5 final review C6.)
+  - A README performance block rendered from `docs/performance/`. (C6.)
+  - **Power during a run (C1).** The published delay run (`delay-20261112T154647`) had the charger out from 21:21:33 to 21:27:03 IST, recorded in the OS power log (`pmset -g log`). Its last 23 s fell inside the first incident; no incident was paged on battery. The driver reads power only at its start and end, both AC, so the result says AC. The stopgap is in place: `docs/performance.md` prints the log's changes from `docs/performance/power.json`. Still to do: sample `pmset -g ps` at every poll, record the changes in the result, and decide the rule (refuse the run, or print the change).
+  - **A run's end time in its result file (C2).** The result files record a start (`env.date_utc`) but no end. `power.json` takes the end from the write time of `data/bench/<run_id>/result.json`, which is not in git.
+  - Move the shared private helpers (`bench_throughput._load`, `_settings`, `_wait_running`, `bench_flink._json`, `bench_env._sh`/`_power_line`) into `bench_env`/`bench_flink`. (C3.)
+  - One read-twice helper for `sample`, `late_events` and `watermark_lag_sample`. (C4.)
+  - The two restart edges that end as `RunFailed`: a restart before the first checkpoint, and one after the last sample. (C5.)
+  - **Load as more than two instants (C7).** Sample `docker stats` during a throughput run, so a rate can be set beside the load it ran under. The pilot table in `docs/performance.md` shows how far the rate moves with the VM's load.
+  - **A stale read seen live (C8).** The stale-read path has not been seen live under the current code: the published runs had no stale and no re-read sample. See one, or keep one old pilot's samples as a test fixture.
+  - **A warmed-up throughput run (C9).** History first, then the dense fill, so the cold-baseline caveat becomes a figure.
+  - **Task 6's two nits.** `test_measure_run_fails_when_no_checkpoint_is_in_the_last_share` matches "was triggered before", which the other failure's message ("no completed checkpoint was triggered before") also contains. `measure_run` reads `/checkpoints` twice (`checkpoint_history`, `checkpoint_history_length`) and `/checkpoints/config` twice (`checkpoint_config`, `checkpoints_after_tasks_finish`).
+  - **For `docs/design.md`: §6's "at least about 5 minutes".** §6 says time-to-page is at least about 5 minutes for every detector. The code counts the 3 minutes and the hold from the start of the first breaching minute, so an incident that breaches in its start minute pages in under 5 minutes of its own start; `docs/performance/delay.json` has the measured minimum. Reconcile the spec's sentence there.
   - `check_paths.py`'s monotonic `total` (listed above).

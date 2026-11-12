@@ -516,3 +516,15 @@ data/bench/<run_id>/                   git-ignored: labels.json, result.json, sa
 - [ ] **Step 9: Check.** `make test && make ci` → green. `git grep -n -i -E 'spearheaded|leveraged|synergy|cutting-edge|results-driven|passionate' -- docs/performance.md README.md` → no output.
 - [ ] **Step 10: Stop the stack.** `make down`. `docker ps`: if nothing is left, `colima stop`; if other containers are running, leave Colima up and say so in the report.
 - [ ] **Step 11: Commit.** `git add docs/performance docs/performance.md README.md docs/superpowers/m1-followups.md docs/superpowers/m2-followups.md docs/superpowers/m3-followups.md && git commit -m "Milestone 5: throughput, delay and state size, measured and written up"`. Do not push. Then follow the owner's milestone workflow for the merge to `main`. Report: the three headline figures as `docs/performance.md` has them; the spread between the throughput runs and the `drop-ticks` share; matched and missed incidents, and the measured minimum time-to-page; which follow-ups were folded in and which moved; every builder's call made during the build that this plan did not already list; the hours spent against the budget line at the top; whether Colima was stopped; and that the GitHub Actions workflow has not run on GitHub.
+
+## Changes during the build (2026-11-12)
+
+The plan above is as it was reviewed. The build changed these points; the code and `docs/performance.md` follow the changes.
+
+- `host_sleep_s` and `stall_gaps_s` replace `host_sleep_gaps_s`. `host_sleep_s` is the rise of the OS sleep counter over a run; `stall_gaps_s` lists the gaps over 60 s between polls on the monotonic clock. `time.monotonic` stops while a Mac sleeps, so its gaps cannot show a sleep.
+- `BENCH_MINUTES` is 240. A 120-minute fill was read too fast for the 120 s window on a quiet VM.
+- The timing bound is `timing_error_pct = 100 × the longer measured read delay of the window's two endpoints ÷ window_s`, from each sample's `read_s`, not `100 × 2 × 1 s ÷ window`.
+- A result recorded on battery is refused by the report, not labelled.
+- The report refuses a result recorded from a dirty tree again.
+- The state checkpoint is worded as "the latest completed one triggered before the source vertex was reported finished". With checkpoints after tasks finish on, it is most likely the job's final checkpoint.
+- The final fix wave added `bench_power` and `docs/performance/power.json` (the OS power log during each published run), the pilots' result files under `docs/performance/pilots/`, `bench_throughput.build_result`, ticks through the delay run's end phase, and a test that `docs/performance.md` is the render of the committed files.
