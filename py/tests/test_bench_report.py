@@ -174,6 +174,8 @@ def state_run(backend, per_key, with_range):
         "interval_ms": 5000,
         "job_seconds": 100.0,
         "history_checkpoints": 10,
+        "history_entries": 10,
+        "checkpoints_after_tasks_finish": True if backend == "hashmap" else None,
         "keys": 48,
         "aggregate_rows": 999,
         "settings": 9,
@@ -511,3 +513,44 @@ def test_main_wraps_a_json_decode_error(tmp_path):
     (res / "state.json").write_text("{not json")
     with pytest.raises(br.ReportRefused, match=r"state\.json"):
         br.main(["--results", str(res), "--out", str(tmp_path / "x.md")])
+
+
+@pytest.mark.parametrize(
+    ("which", "edit", "reason"),
+    [
+        (
+            "throughput",
+            lambda d: d.update(valid=False, invalid_reasons=["the job restarted"]),
+            "restarted",
+        ),
+        ("delay", lambda d: d["env"].update(dirty=True), "dirty"),
+        ("state", lambda d: d["env"].update(on_battery=True), "battery"),
+        ("delay", lambda d: d.update(stall_gaps_s=[70.0]), "stalled"),
+    ],
+)
+def test_refusals_keep_their_own_message(which, edit, reason):
+    docs = {"throughput": throughput(), "delay": delay(), "state": state()}
+    edit(docs[which])
+    with pytest.raises(br.ReportRefused) as e:
+        br.render(docs["throughput"], docs["delay"], docs["state"])
+    assert f"{which}.json" in str(e.value)
+    assert reason in str(e.value)
+    assert "unexpected shape" not in str(e.value)
+
+
+def test_a_file_missing_env_is_named():
+    d = delay()
+    del d["env"]
+    with pytest.raises(br.ReportRefused) as e:
+        render(d=d)
+    assert "delay.json" in str(e.value)
+    assert "'env'" in str(e.value)
+
+
+def test_state_wording_and_after_tasks_finish():
+    out = render()
+    sec = out[out.index("## State size") : out.index("## Extrapolation")]
+    assert "triggered before the source vertex was reported finished" in sec
+    assert "before the source finished" not in sec
+    assert "checkpoints after tasks finish: true" in sec
+    assert "checkpoints after tasks finish: not recorded" in sec

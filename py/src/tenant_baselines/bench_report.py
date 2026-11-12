@@ -62,25 +62,27 @@ def _contradictions(name: str, doc: dict) -> list[str]:
 def check_results(docs: dict[str, dict]) -> None:
     """Raise ReportRefused, naming the file, unless all three results may be published."""
     for name in NAMES:
-        doc, file = docs[name], f"{name}.json"
-        if doc["env"].get("dirty"):
-            raise ReportRefused(
-                f"{file}: recorded from a dirty tree; run it again from a clean tree"
-            )
-        if doc.get("data") != "synthetic":
-            raise ReportRefused(f"{file}: the data is not marked synthetic ({doc.get('data')!r})")
-        if not doc.get("valid"):
-            why = "; ".join(doc.get("invalid_reasons") or ["no reason recorded"])
-            raise ReportRefused(f"{file}: the run is not valid: {why}")
-        if doc["env"].get("on_battery"):
-            raise ReportRefused(
-                f"{file}: recorded on battery; published runs need AC power, so run it again"
-            )
-        bad = _contradictions(name, doc)
-        if bad:
-            raise ReportRefused(
-                f"{file}: marked valid, but its fields say otherwise: " + "; ".join(bad)
-            )
+        _guard(f"{name}.json", lambda name=name: _check_one(name, docs[name]))
+
+
+def _check_one(name: str, doc: dict) -> None:
+    file = f"{name}.json"
+    if doc["env"].get("dirty"):
+        raise ReportRefused(f"{file}: recorded from a dirty tree; run it again from a clean tree")
+    if doc.get("data") != "synthetic":
+        raise ReportRefused(f"{file}: the data is not marked synthetic ({doc.get('data')!r})")
+    if not doc.get("valid"):
+        why = "; ".join(doc.get("invalid_reasons") or ["no reason recorded"])
+        raise ReportRefused(f"{file}: the run is not valid: {why}")
+    if doc["env"].get("on_battery"):
+        raise ReportRefused(
+            f"{file}: recorded on battery; published runs need AC power, so run it again"
+        )
+    bad = _contradictions(name, doc)
+    if bad:
+        raise ReportRefused(
+            f"{file}: marked valid, but its fields say otherwise: " + "; ".join(bad)
+        )
 
 
 # ---------------------------------------------------------------- formatting
@@ -402,6 +404,10 @@ def _delay(d: dict) -> str:
     )
 
 
+def _after_finish(x) -> str:
+    return "not recorded" if x is None else str(x).lower()
+
+
 def _state_run(r: dict, spec: int, label: str) -> str:
     c, pk = r["checkpoint"], r["per_key"]
     vertices = table(
@@ -409,11 +415,13 @@ def _state_run(r: dict, spec: int, label: str) -> str:
         [[v["name"], count(v["state_size"])] for v in c["vertices"]],
     )
     out = (
-        f"{label}: checkpoint {c['id']}, triggered at {pct(c['trigger_share'], 0)} of the run,"
+        f"{label}: checkpoint {c['id']} was the latest completed one triggered before the source"
+        f" vertex was reported finished, at {pct(c['trigger_share'], 0)} of the run,"
         f" interval {count(r['interval_ms'])} ms, total state {size(c['state_size'])}. The scorer"
         f" holds {size(pk['scorer_bytes'])}, which is {n(pk['per_key_bytes'], 0)} bytes per key"
         f" over {count(r['keys'])} keys. The spec's estimate is {count(spec)} bytes per key"
-        " (an estimate, not a measurement).\n\n"
+        " (an estimate, not a measurement). Method note: checkpoints after tasks finish:"
+        f" {_after_finish(r.get('checkpoints_after_tasks_finish'))}.\n\n"
         f"{vertices}\n"
     )
     rng = r.get("range") or {}
@@ -517,6 +525,8 @@ def _guard(file: str, build):
     """Run `build`; a missing key or a wrong shape is a refusal naming the file and the key."""
     try:
         return build()
+    except ReportRefused:
+        raise
     except KeyError as e:
         raise ReportRefused(f"{file}: the result has no key {e.args[0]!r}") from e
     except (TypeError, IndexError, ValueError) as e:
@@ -525,7 +535,7 @@ def _guard(file: str, build):
 
 def render(throughput: dict, delay: dict, state: dict) -> str:
     docs = {"throughput": throughput, "delay": delay, "state": state}
-    _guard("a result file", lambda: check_results(docs))
+    check_results(docs)
     return "\n".join(
         [
             _what_this_is(),
