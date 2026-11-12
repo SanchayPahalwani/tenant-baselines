@@ -230,3 +230,28 @@ def test_measure_reports_refires():
     ]
     m = bd.measure(_lab([(s, KEY1)]), rows, "seasonal", "k4")
     assert (m["matched"], m["extra_matched_rows"], m["unmatched_firing_rows"]) == (1, 2, 1)
+
+
+def test_a_region_scope_row_inside_the_window_is_not_a_match():
+    s = T0 + 400_000
+    rows = [(s + 321_000, _row(KEY1, s + 300_000, scope="region"))]
+    m = bd.measure(_lab([(s, KEY1)]), rows, "seasonal", "k4")
+    assert m["matched"] == 0 and m["missed"] == [0] and m["regional_firing_rows"] == 1
+
+
+def test_the_row_with_the_earlier_event_time_matches_whatever_its_append_time():
+    s = T0 + 400_000
+    rows = [
+        (s + 421_000, _row(KEY1, s + 400_000, alert_id="later-event")),
+        (s + 500_000, _row(KEY1, s + 300_000, alert_id="earlier-event")),
+    ]
+    m = bd.measure(_lab([(s, KEY1)]), rows, "seasonal", "k4")
+    assert m["matched"] == 1 and m["extra_matched_rows"] == 1
+    assert m["time_to_page_s"]["p50"] == 500.0 and m["pipeline_delay_s"]["p50"] == 200.0
+
+
+def test_a_page_at_exactly_300_s_is_not_under_five_minutes():
+    s = T0 + 400_000
+    for at, under in ((s + 300_000, 0), (s + 299_900, 1)):
+        m = bd.measure(_lab([(s, KEY1)]), [(at, _row(KEY1, s + 240_000))], "seasonal", "k4")
+        assert m["time_to_page_s"]["p50"] in (300.0, 299.9) and m["under_five_minutes"] == under
