@@ -15,6 +15,7 @@ from collections.abc import Callable, Iterable
 
 import httpx
 
+from tenant_baselines.bench_env import slept_s
 from tenant_baselines.eval_run import REST, RunFailed
 from tenant_baselines.freeze import REPO
 
@@ -126,6 +127,7 @@ def sample(
     now: Callable = time.time,
     monotonic: Callable = time.monotonic,
     sleep: Callable = time.sleep,
+    slept: Callable = slept_s,
 ) -> dict:
     """One burst: the source's output count and every vertex's busy, backpressured and idle time.
 
@@ -142,6 +144,7 @@ def sample(
     """
     t = now()
     mono = monotonic()
+    asleep = slept()
     _json(get, f"/jobs/{job_id}/vertices/{source_vertex_id}/metrics")
     sleep(REFRESH_WAIT_S)
     for attempt in (0, 1):
@@ -158,6 +161,7 @@ def sample(
     return {
         "t": t,
         "mono": mono,
+        "slept": asleep,
         "count": count,
         "clock_ms": clock,
         "stale": not (coherent and fresh),
@@ -204,6 +208,7 @@ def watermark_lag_sample(
     get: Callable = httpx.get,
     now: Callable = time.time,
     sleep: Callable = time.sleep,
+    slept: Callable = slept_s,
 ) -> dict:
     """One burst: the watermark lag and the source's accumulated clock, tested for freshness.
 
@@ -215,6 +220,7 @@ def watermark_lag_sample(
     A read that is still old is returned with `"stale": true`; the caller drops its lag.
     """
     src_id, par = source
+    asleep = slept()
     sent = now()  # before the first request of the burst, so the value is never newer than it
     _refresh(job_id, src_id, get, sleep)
     vid, ids = _find_metric(get, job_id, ".minute-aggregator.currentInputWatermark")
@@ -230,6 +236,7 @@ def watermark_lag_sample(
             sleep(STALE_RETRY_WAIT_S)
     return {
         "t": sent,
+        "slept": asleep,
         "lag_s": None if lowest < _WATERMARK_FLOOR else sent + offset_s - lowest / 1000,
         "clock_ms": clock,
         "stale": not (coherent and fresh),

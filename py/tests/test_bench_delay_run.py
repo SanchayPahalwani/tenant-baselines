@@ -85,6 +85,7 @@ class Clock:
         self.host = T0 / 1000
         self.mono = 5000.0
         self.slept = []
+        self.asleep = 0.0  # the OS sleep counter
 
     def time(self):
         return self.host
@@ -113,6 +114,7 @@ def fake_sample_fn(clock, lags, par=2):
         return {
             "t": clock.host - 3.0,
             "lag_s": v,
+            "slept": clock.asleep,
             "clock_ms": (clock.host - T0 / 1000) * 1000 * par,
             "stale": stale,
             "read_s": 3.0,
@@ -156,7 +158,7 @@ def test_a_clock_that_runs_backwards_twice_is_a_restart():
 def test_catch_up_returns_the_first_fresh_lag_below_60():
     clock = Clock()
     r = reader_for(clock, [900.0, "stale", None, 75.0, 40.0, 5.0])
-    polls = []
+    polls = bdr.Polls()
     got = bdr.wait_caught_up(
         r, T0 + 600_000, 0.0, polls=polls, check=lambda: None,
         time_=clock, 
@@ -169,7 +171,9 @@ def test_catch_up_returns_the_first_fresh_lag_below_60():
 def test_catch_up_does_not_accept_a_stale_read_below_60():
     clock = Clock()
     r = reader_for(clock, [("stale", 30.0), ("stale", 20.0), 45.0])
-    got = bdr.wait_caught_up(r, T0 + 600_000, 0.0, polls=[], check=lambda: None, time_=clock)
+    got = bdr.wait_caught_up(
+        r, T0 + 600_000, 0.0, polls=bdr.Polls(), check=lambda: None, time_=clock
+    )
     assert got == 45.0 and len(r.samples) == 3
 
 
@@ -177,7 +181,7 @@ def test_catch_up_failure_does_not_print_none():
     clock = Clock()
     r = reader_for(clock, lambda t: None)
     with pytest.raises(RunFailed, match="no fresh lag read") as e:
-        bdr.wait_caught_up(r, T0 + 120_000, 0.0, polls=[], check=lambda: None, time_=clock)
+        bdr.wait_caught_up(r, T0 + 120_000, 0.0, polls=bdr.Polls(), check=lambda: None, time_=clock)
     assert "None" not in str(e.value)
 
 
@@ -185,7 +189,7 @@ def test_catch_up_fails_one_minute_before_the_first_incident():
     clock = Clock()
     r = reader_for(clock, lambda t: 500.0)
     with pytest.raises(RunFailed, match="did not catch up"):
-        bdr.wait_caught_up(r, T0 + 120_000, 0.0, polls=[], check=lambda: None, time_=clock)
+        bdr.wait_caught_up(r, T0 + 120_000, 0.0, polls=bdr.Polls(), check=lambda: None, time_=clock)
     assert clock.host * 1000 >= T0 + 60_000  # it waited up to one minute before the start
     assert clock.host * 1000 < T0 + 60_000 + 30_000
 
@@ -198,13 +202,13 @@ def test_catch_up_stops_when_the_generator_is_gone():
         raise RunFailed("the generator exited")
 
     with pytest.raises(RunFailed, match="generator exited"):
-        bdr.wait_caught_up(r, T0 + 600_000, 0.0, polls=[], check=gone, time_=clock)
+        bdr.wait_caught_up(r, T0 + 600_000, 0.0, polls=bdr.Polls(), check=gone, time_=clock)
 
 
 def test_watch_polls_every_30_s_samples_every_second_poll_and_checks_the_generator():
     clock = Clock()
     r = reader_for(clock, lambda t: 21.0)
-    polls, checks = [], []
+    polls, checks = bdr.Polls(), []
     bdr.watch(r, T0 + 300_000, 0.0, polls=polls, check=lambda: checks.append(1), time_=clock)
     assert len(checks) == len(polls) >= 9
     assert len(r.samples) == len(polls) // 2  # the first poll only waits
@@ -224,7 +228,7 @@ def test_watch_fails_when_the_generator_exits():
             raise RunFailed("the generator container exited")
 
     with pytest.raises(RunFailed, match="exited"):
-        bdr.watch(r, T0 + 900_000, 0.0, polls=[], check=check, time_=clock)
+        bdr.watch(r, T0 + 900_000, 0.0, polls=bdr.Polls(), check=check, time_=clock)
     assert len(r.samples) == 1  # the second poll's
 
 
@@ -289,6 +293,7 @@ def build_harness(monkeypatch, tmp_path, *, gen_exits_at=None, lag=lambda t: 22.
     clock = Clock()
     h = SimpleNamespace(clock=clock, cmds=[], cancelled=[], result_dir=None, running=True)
     monkeypatch.setattr(bdr, "time", clock)
+    monkeypatch.setattr(bdr.bench_env, "slept_s", lambda: clock.asleep)
     monkeypatch.setattr(bdr, "DATA_BENCH", tmp_path / "bench")
     (tmp_path / "bench").mkdir()
     monkeypatch.setattr(bdr.bench_env, "preflight", lambda on_battery: None)
@@ -389,7 +394,12 @@ def test_a_clean_run_writes_a_valid_result_from_this_runs_rows_only(monkeypatch,
     }
     assert r["generator"]["failed_deliveries"] == 0
     assert r["generator"]["caught_up_ms"] > 0
-    assert r["late_events"] == 0 and r["restarts"] == 0 and r["host_sleep_gaps_s"] == []
+    assert (
+        r["late_events"] == 0
+        and r["restarts"] == 0
+        and r["stall_gaps_s"] == []
+        and r["host_sleep_s"] == 0.0
+    )
     assert r["power_end"] == AC and r["load_start"] and r["load_end"]
     assert (d / "samples-lag.json").is_file() and (d / "labels.json").is_file()
     assert (d / "generator.log").is_file()
@@ -650,3 +660,33 @@ def test_watermark_lag_script_tells_no_watermark_from_a_replay(tmp_path):
     old = run(int((time.time() - 22 * 86400) * 1000))
     assert old.returncode == 1
     assert "22.0 days behind the wall clock: the job is replaying history" in old.stderr
+
+
+def test_a_host_sleep_between_polls_makes_the_run_invalid_as_a_sleep(monkeypatch, tmp_path):
+    h = build_harness(monkeypatch, tmp_path)
+    real = bdr.bench_env._sh
+
+    def sh(cmd):
+        if cmd[:2] == ["docker", "inspect"] and h.clock.host > T0 / 1000 + 500:
+            h.clock.asleep = 300.0  # the OS counter rises; the monotonic intervals stay normal
+        return real(cmd)
+
+    monkeypatch.setattr(bdr.bench_env, "_sh", sh)
+    r, _ = run_main(h, tmp_path)
+    assert r["host_sleep_s"] == 300.0 and r["stall_gaps_s"] == []
+    assert r["invalid_reasons"] == ["the host slept 300 s during the run"]
+
+
+def test_a_61_s_stall_without_a_sleep_makes_the_run_invalid_as_a_stall(monkeypatch, tmp_path):
+    h = build_harness(monkeypatch, tmp_path)
+
+    def slow_submit(run_id, topic):
+        h.clock.sleep(70)  # no change in the sleep counter
+        return "j" * 32
+
+    monkeypatch.setattr(bdr.bench_flink, "submit", slow_submit)
+    r, _ = run_main(h, tmp_path)
+    assert r["host_sleep_s"] == 0.0 and len(r["stall_gaps_s"]) == 1
+    assert r["invalid_reasons"] == [
+        f"the driver stalled for {r['stall_gaps_s'][0]:.0f} s between two polls"
+    ]

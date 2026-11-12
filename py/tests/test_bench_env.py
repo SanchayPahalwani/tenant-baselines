@@ -1,6 +1,7 @@
 import json
 import subprocess
 import time
+from types import SimpleNamespace
 
 import pytest
 from confluent_kafka import TIMESTAMP_CREATE_TIME, TIMESTAMP_LOG_APPEND_TIME
@@ -221,6 +222,54 @@ def test_clock_read_failure_names_the_output(bad):
 def test_gaps_finds_a_host_sleep():
     assert bench_env.gaps([0, 12, 24, 300, 312]) == [276]
     assert bench_env.gaps([0, 60, 120]) == []
+
+
+def fake_time(**clocks):
+    names = {"CLOCK_MONOTONIC": 1, "CLOCK_UPTIME_RAW": 2, "CLOCK_BOOTTIME": 3}
+    attrs = {k: v for k, v in names.items() if k in clocks}
+    values = {names[k]: v for k, v in clocks.items() if k in names}
+    return SimpleNamespace(
+        **attrs, clock_gettime=lambda c: values[c], time=lambda: 1000.0, monotonic=lambda: 400.0
+    )
+
+
+def test_slept_s_picks_the_clock_pair_of_the_platform():
+    mac = fake_time(CLOCK_MONOTONIC=3_200_000.0, CLOCK_UPTIME_RAW=1_700_000.0)
+    assert bench_env.slept_s(mac, "darwin") == 1_500_000.0
+    linux = fake_time(CLOCK_MONOTONIC=500.0, CLOCK_BOOTTIME=530.0)
+    assert bench_env.slept_s(linux, "linux") == 30.0
+    plain = fake_time()  # no sleep-aware clock: wall clock minus monotonic
+    assert bench_env.slept_s(plain, "win32") == 600.0
+
+
+def test_slept_s_works_on_this_machine():
+    assert bench_env.slept_s() >= 0
+
+
+def test_host_sleep_is_the_rise_of_the_counter():
+    assert bench_env.host_sleep_s([5.0, 5.0, 305.0, 306.0]) == 301.0
+    assert bench_env.host_sleep_s([]) == 0.0
+
+
+def test_a_sleep_between_polls_with_normal_intervals_is_invalid_as_a_sleep():
+    slept = [0.0, 0.0, 300.0, 300.0]
+    mono = [0.0, 30.0, 60.0, 90.0]  # the monotonic clock stops while the Mac sleeps
+    assert bench_env.gaps(mono) == []
+    ok, reasons = bench_env.validity(
+        0, 0, bench_env.gaps(mono), host_sleep_s=bench_env.host_sleep_s(slept)
+    )
+    assert not ok and reasons == ["the host slept 300 s during the run"]
+
+
+def test_a_stall_without_a_sleep_is_invalid_as_a_stall():
+    ok, reasons = bench_env.validity(
+        0, 0, bench_env.gaps([0, 30, 91]), host_sleep_s=bench_env.host_sleep_s([7.0, 7.0, 7.0])
+    )
+    assert not ok and reasons == ["the driver stalled for 61 s between two polls"]
+
+
+def test_no_sleep_and_no_stall_is_valid():
+    assert bench_env.validity(0, 0, bench_env.gaps([0, 30, 60]), host_sleep_s=0.4) == (True, [])
 
 
 def test_validity_lists_every_reason():

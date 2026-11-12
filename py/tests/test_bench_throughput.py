@@ -157,6 +157,20 @@ def test_summarise_reports_the_source_clock_rate_beside_the_host_rate():
     assert out["drop_ticks_busy"] == out["source"]["busy"]
 
 
+def test_summarise_reports_a_host_sleep_apart_from_a_stall():
+    s = run_samples()
+    for k, x in enumerate(s):
+        x["slept"] = 0.0 if k < 10 else 300.0
+    out = bt._summarise("r1", "j1", 30_000_000, s, pilot=False)
+    assert out["host_sleep_s"] == 300.0 and out["stall_gaps_s"] == []
+    assert "host_sleep_gaps_s" not in out
+    s[20]["mono"] += 61  # a 61 s stall, and every later sample moves with it
+    for x in s[21:]:
+        x["mono"] += 61
+    out = bt._summarise("r1", "j1", 30_000_000, s, pilot=False)
+    assert out["stall_gaps_s"] == [73.0]
+
+
 def test_summarise_pilot_fallback_walks_both_ends_to_fresh_samples():
     s = [sampled(k, k * 1000, stale=k in (0, 1, 9)) for k in range(10)]
     out = bt._summarise("r1", "j1", 1_000_000_000, s, pilot=True)

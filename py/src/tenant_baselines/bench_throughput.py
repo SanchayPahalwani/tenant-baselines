@@ -339,7 +339,8 @@ def _aborted(run_id, job_id, total, reason, restarts, samples, load_start, load_
         "restarts": restarts,
         "late_events": None,  # not read: the job did not finish
         "stale_samples": sum(x["stale"] for x in samples),
-        "host_sleep_gaps_s": _gaps(samples),
+        "stall_gaps_s": _gaps(samples),
+        "host_sleep_s": _host_sleep(samples),
         "load_start": load_start,
         "load_end": load_end,
     }
@@ -423,7 +424,13 @@ def _one_run(n: int, fill_id: str, total: int, args, run_dir: Path) -> dict:
 
 
 def _gaps(samples: list[dict]) -> list[float]:
+    """Stalls of the driver between polls. A host sleep is `_host_sleep`'s."""
     return [round(g, 1) for g in bench_env.gaps([s["mono"] for s in samples])]
+
+
+def _host_sleep(samples: list[dict]) -> float:
+    """The OS sleep counter's rise over the run's samples (the monotonic clock stops in a sleep)."""
+    return round(bench_env.host_sleep_s([s["slept"] for s in samples if "slept" in s]), 1)
 
 
 def _source_clock_rate(a: dict, b: dict, name: str = "Source: events") -> float:
@@ -466,7 +473,8 @@ def _summarise(run_id: str, job_id: str, total: int, samples: list[dict], pilot:
     out["drop_ticks_busy"] = _share_of(shares, "drop-ticks")["busy"] if shares else None
     out["shares"] = shares
     out["busiest_vertex"] = max(shares, key=lambda n: shares[n]["busy"]) if shares else None
-    out["host_sleep_gaps_s"] = _gaps(samples)
+    out["stall_gaps_s"] = _gaps(samples)
+    out["host_sleep_s"] = _host_sleep(samples)
     return out
 
 
@@ -507,12 +515,13 @@ def main(argv: list[str] | None = None) -> None:
     extra = [f"run {r['run_id']}: {r['window_error']}" for r in runs if "window_error" in r]
     extra += [f"run {r['run_id']}: {r['aborted']}" for r in runs if "aborted" in r]
     extra += power_reasons(runs, args.on_battery)
-    sleeps = [g for r in runs for g in r["host_sleep_gaps_s"]]
+    stalls = [g for r in runs for g in r["stall_gaps_s"]]
     valid, reasons = bench_env.validity(
         sum(r["restarts"] for r in runs),
         sum(r["late_events"] or 0 for r in runs),
-        sleeps,
+        stalls,
         extra,
+        host_sleep_s=sum(r["host_sleep_s"] for r in runs),
     )
     rates = [r["events_per_s"] for r in runs if "events_per_s" in r]
     spread = (

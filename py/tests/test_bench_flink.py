@@ -564,3 +564,18 @@ def test_lag_sample_reads_the_watermark_between_the_two_clock_reads():
         sleep=lambda s: None,
     )  # fmt: skip
     assert calls[-3:] == [QUERY, wm_query, QUERY]
+
+
+def test_samples_record_the_sleep_counter_beside_the_monotonic_time():
+    routes = {"/jobs/j": job_body(), BASE: [], QUERY: reads(10, 20, busy=50.0)}
+    got = bench_flink.sample(
+        "j", "s", 2, get=seq_getter(routes), now=lambda: 5.0, monotonic=lambda: 7.0,
+        sleep=lambda s: None, slept=lambda: 42.0,
+    )  # fmt: skip
+    assert got["slept"] == 42.0
+    routes = lag_routes(wm(980_000, 978_000), reads(10, 20, busy=60_000))
+    lagged = bench_flink.watermark_lag_sample(
+        "j", 0.0, ("s", 2), get=seq_getter(routes), now=lambda: 5.0, sleep=lambda s: None,
+        slept=lambda: 43.0,
+    )  # fmt: skip
+    assert lagged["slept"] == 43.0

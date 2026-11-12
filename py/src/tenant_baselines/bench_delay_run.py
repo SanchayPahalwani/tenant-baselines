@@ -26,6 +26,7 @@ from tenant_baselines.freeze import REPO
 
 __all__ = [
     "LagReader",
+    "Polls",
     "generator_command",
     "lag_summary",
     "main",
@@ -124,6 +125,18 @@ def lag_reasons(block: dict) -> list[str]:
     return reasons
 
 
+class Polls(list):
+    """The monotonic time of each poll (the list itself) and, beside it, the OS sleep counter."""
+
+    def __init__(self):
+        super().__init__()
+        self.slept: list[float] = []
+
+    def tick(self, time_=None) -> None:
+        self.append((time_ or time).monotonic())
+        self.slept.append(bench_env.slept_s())
+
+
 class LagReader:
     """Watermark-lag samples, each tested for freshness against the last fresh one.
 
@@ -181,7 +194,7 @@ def wait_caught_up(
     first_start_ms: int,
     offset_s: float,
     *,
-    polls: list[float],
+    polls: Polls,
     check: Callable[[], None],
     time_=None,
 ) -> float:
@@ -192,7 +205,7 @@ def wait_caught_up(
     """
     time_ = time_ or time
     while True:
-        polls.append(time_.monotonic())
+        polls.tick(time_)
         check()
         s = reader.read()
         if not s["stale"] and s["lag_s"] is not None and s["lag_s"] < CAUGHT_UP_LAG_S:
@@ -214,7 +227,7 @@ def watch(
     read_at_ms: int,
     offset_s: float,
     *,
-    polls: list[float],
+    polls: Polls,
     check: Callable[[], None],
     time_=None,
 ) -> None:
@@ -224,7 +237,7 @@ def watch(
     due = time_.monotonic()
     n = 1  # the first poll only waits: a sample then would be a stale read, 4 s after catch-up's
     while _vm_now_ms(offset_s, time_) < read_at_ms:
-        polls.append(time_.monotonic())
+        polls.tick(time_)
         check()
         if n % 2 == 0:
             reader.read()
@@ -249,12 +262,12 @@ def _remove_generator(name: str, run: Callable) -> None:
     run(["docker", "rm", "-f", name])
 
 
-def _wait_partitions(topic: str, polls: list[float], check: Callable[[], None]) -> None:
+def _wait_partitions(topic: str, polls: Polls, check: Callable[[], None]) -> None:
     """Until every partition has data: a partition that is idle at the job's start would take
     its history as late events (see scripts/demo.sh)."""
     deadline = time.monotonic() + PARTITIONS_TIMEOUT_S
     while True:
-        polls.append(time.monotonic())
+        polls.tick(time)
         check()
         ends = kafka_io.end_offsets(topic)
         if ends and all(o > 0 for o in ends.values()):
@@ -266,10 +279,10 @@ def _wait_partitions(topic: str, polls: list[float], check: Callable[[], None]) 
         time.sleep(POLL_S)
 
 
-def _wait_labels(path: Path, polls: list[float], check: Callable[[], None]) -> dict:
+def _wait_labels(path: Path, polls: Polls, check: Callable[[], None]) -> dict:
     deadline = time.monotonic() + LABELS_TIMEOUT_S
     while True:
-        polls.append(time.monotonic())
+        polls.tick(time)
         check()
         if path.is_file():
             return json.loads(path.read_text())
@@ -331,7 +344,7 @@ def _schedule_block() -> dict:
     }
 
 
-def _execute(args, run_id: str, run_dir: Path, env: dict, before: dict, polls: list) -> dict:
+def _execute(args, run_id: str, run_dir: Path, env: dict, before: dict, polls: Polls) -> dict:
     run = bench_env._sh
     topic = f"{run_id}.events"
     name = container_name(run_id)
@@ -349,9 +362,9 @@ def _execute(args, run_id: str, run_dir: Path, env: dict, before: dict, polls: l
             raise RunFailed(f"could not start the generator: {done.stderr.strip()}")
         _wait_partitions(topic, polls, check)
         job_id = holder["job_id"] = bench_flink.submit(run_id, topic)
-        polls.append(time.monotonic())
+        polls.tick(time)
         bench_throughput._wait_running(job_id)
-        polls.append(time.monotonic())
+        polls.tick(time)
         job = bench_flink._json(bench_flink.httpx.get, f"/jobs/{job_id}")
         src = bench_flink.vertex(job, "Source: events")
         offset = before["offset_s"]
@@ -382,7 +395,14 @@ def _execute(args, run_id: str, run_dir: Path, env: dict, before: dict, polls: l
     finally:
         reader = holder["reader"]
         (run_dir / "samples-lag.json").write_text(
-            json.dumps({"polls": polls, "lag": reader.samples if reader else []}, allow_nan=False)
+            json.dumps(
+                {
+                    "polls": list(polls),
+                    "polls_slept": polls.slept,
+                    "lag": reader.samples if reader else [],
+                },
+                allow_nan=False,
+            )
         )
 
     lag = reader.block(when["first_start_ms"], caught_up_lag)
@@ -403,8 +423,9 @@ def _execute(args, run_id: str, run_dir: Path, env: dict, before: dict, polls: l
     if failed:
         extra.append("the generator reported failed deliveries")
     extra += power_reasons(power_end, args.on_battery) + lag_reasons(lag)
-    sleeps = [round(g, 1) for g in bench_env.gaps(polls)]
-    valid, reasons = bench_env.validity(restarts, late or 0, sleeps, extra)
+    stalls = [round(g, 1) for g in bench_env.gaps(list(polls))]
+    asleep = round(bench_env.host_sleep_s(polls.slept + [s["slept"] for s in reader.samples]), 1)
+    valid, reasons = bench_env.validity(restarts, late or 0, stalls, extra, host_sleep_s=asleep)
     world = bench_world.build("delay", 1)
     return {
         "data": "synthetic",
@@ -426,7 +447,8 @@ def _execute(args, run_id: str, run_dir: Path, env: dict, before: dict, polls: l
         "generator": {"caught_up_ms": labels["t0_ms"], "failed_deliveries": failed},
         "late_events": late,
         "restarts": restarts,
-        "host_sleep_gaps_s": sleeps,
+        "stall_gaps_s": stalls,
+        "host_sleep_s": asleep,
         "power_end": power_end,
         "load_start": load_start,
         "load_end": load_end,
@@ -472,7 +494,7 @@ def main(argv: list[str] | None = None) -> None:
     run_id = "delay-" + datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
     run_dir = make_run_dir(DATA_BENCH, run_id)
     kafka_io.create_topic(f"{run_id}.events", PARTITIONS)
-    polls: list[float] = []
+    polls = Polls()
     result = _execute(args, run_id, run_dir, env, before, polls)
     path = bench_env.write_result("delay", result, run_dir, args.pilot)
     h = result["headline"]

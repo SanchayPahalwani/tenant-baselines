@@ -7,6 +7,7 @@ eval modules: `kafka_io` is only imported from.
 import json
 import re
 import subprocess
+import sys
 import time
 from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
@@ -29,7 +30,9 @@ __all__ = [
     "gaps",
     "load_record",
     "preflight",
+    "host_sleep_s",
     "read_stamped",
+    "slept_s",
     "validity",
     "vm_clock_offset",
     "write_result",
@@ -205,13 +208,44 @@ def vm_clock_offset(run: Callable = _sh, now: Callable = time.time, tries: int =
     return best
 
 
+def slept_s(time_=time, platform: str = sys.platform) -> float:
+    """The machine's cumulative sleep time in seconds, from the OS.
+
+    `time.monotonic()` stops while a Mac sleeps, so its intervals cannot show a lid-close sleep.
+    macOS: CLOCK_MONOTONIC counts sleep and CLOCK_UPTIME_RAW does not. Linux: CLOCK_BOOTTIME
+    counts it and CLOCK_MONOTONIC does not. Elsewhere: the wall clock minus the monotonic clock.
+    """
+    if hasattr(time_, "CLOCK_UPTIME_RAW") and platform == "darwin":
+        return time_.clock_gettime(time_.CLOCK_MONOTONIC) - time_.clock_gettime(
+            time_.CLOCK_UPTIME_RAW
+        )
+    if hasattr(time_, "CLOCK_BOOTTIME") and platform.startswith("linux"):
+        return time_.clock_gettime(time_.CLOCK_BOOTTIME) - time_.clock_gettime(
+            time_.CLOCK_MONOTONIC
+        )
+    return time_.time() - time_.monotonic()
+
+
+def host_sleep_s(slept: list[float]) -> float:
+    """The sleep a run saw: the counter's last reading minus its first."""
+    return max(slept) - min(slept) if slept else 0.0
+
+
 def gaps(monotonic_s: list[float], max_gap_s: float = 60) -> list[float]:
-    """Every interval between neighbouring readings longer than `max_gap_s`: a host sleep."""
+    """Every interval between neighbouring readings longer than `max_gap_s`: a stall of the driver.
+    A host sleep is not seen here (the monotonic clock stops during one); see `slept_s`."""
     return [b - a for a, b in zip(monotonic_s, monotonic_s[1:], strict=False) if b - a > max_gap_s]
 
 
+SLEEP_LIMIT_S = 1.0
+
+
 def validity(
-    restarts: int, late_events: int, sleep_gaps: list[float], extra: Iterable[str] = ()
+    restarts: int,
+    late_events: int,
+    stall_gaps: list[float],
+    extra: Iterable[str] = (),
+    host_sleep_s: float = 0.0,
 ) -> tuple[bool, list[str]]:
     """Why a run is invalid, in plain words; valid when there is no reason."""
     reasons = []
@@ -219,7 +253,9 @@ def validity(
         reasons.append(f"the job restarted {restarts} time(s)")
     if late_events:
         reasons.append(f"{late_events} event(s) were dropped as late")
-    reasons += [f"the host stalled for {g:.0f} s between two polls" for g in sleep_gaps]
+    if host_sleep_s > SLEEP_LIMIT_S:
+        reasons.append(f"the host slept {host_sleep_s:.0f} s during the run")
+    reasons += [f"the driver stalled for {g:.0f} s between two polls" for g in stall_gaps]
     reasons += list(extra)
     return not reasons, reasons
 
