@@ -286,9 +286,6 @@ def _utc_hour(start_ms: int, epoch_ms: int, offset_h: int = 0) -> str:
     return f"{_DAY_NAMES[day]} {minutes // 60:02d}:{minutes % 60:02d}"
 
 
-MEASURED_CODE_CHANGE_DATE = "2026-11-13"  # when the display-only exemption was added
-
-
 def outage_rows(summaries: list[dict], amplitude: float) -> list[dict]:
     """The week-5 regional outage of each run: region, hour, and each family's result."""
     out = []
@@ -1057,9 +1054,15 @@ def first_run_entry(
     }
 
 
+# The UTC date of the commit that added freeze.DISPLAY_ONLY_PATHS.
+MEASURED_CODE_CHANGE_DATE = "2026-11-12"
+
+
 def measured_code_diff(freeze_commit: str) -> list[str]:
     """The files under `freeze.MEASURED_PATHS` that differ between the freeze commit and HEAD."""
-    cmd = ["git", "-C", str(REPO), "diff", "--name-only", freeze_commit, "HEAD", "--"]
+    # --no-renames: a measured file moved into a display-only path must list its old path too.
+    cmd = ["git", "-C", str(REPO), "diff", "--name-only", "--no-renames"]
+    cmd += [freeze_commit, "HEAD", "--"]
     r = subprocess.run([*cmd, *MEASURED_PATHS], capture_output=True, text=True)
     if r.returncode != 0:
         raise RuntimeError(

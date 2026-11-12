@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from tenant_baselines import eval_report
+from tenant_baselines import eval_report, freeze
 from tenant_baselines.eval_report import (
     CURVE_HEADING,
     STATEMENT,
@@ -188,12 +188,12 @@ def test_outage_rows_carry_the_hour_from_labels(summaries):
 
 def test_outage_cell_carries_its_page_count(summaries):
     s = summaries[2]
-    for fam, pages in zip(FAMILIES, (3, 1, 3), strict=False):
+    for fam, pages in zip(FAMILIES, (3, 1, 2), strict=True):
         for e in s["selected_week5"][fam]["scenarios"]:
             if e["type"] == "regional_outage":
                 e["pages"] = pages
                 e["regional_formed"] = True
-    assert [outage_rows(summaries, 6.0)[0][f]["pages"] for f in FAMILIES][:2] == [3, 1]
+    assert [outage_rows(summaries, 6.0)[0][f]["pages"] for f in FAMILIES] == [3, 1, 2]
     t = text(summaries)
     assert "regional alert, 3 pages" in t
     assert "regional alert, 1 page |" in t
@@ -645,6 +645,8 @@ def test_display_only():
     assert eval_report.display_only([DASHBOARD])
     assert not eval_report.display_only(["infra/grafana/provisioning/datasources/clickhouse.yml"])
     assert not eval_report.display_only(["infra/grafana/dashboards/x.json", "docker-compose.yml"])
+    assert not eval_report.display_only(["infra/grafana/dashboards-old/x.json"])
+    assert not eval_report.display_only(["infra/grafana/dashboards"])
 
 
 @pytest.mark.parametrize("code", [1, 128])
@@ -659,11 +661,36 @@ def test_measured_code_diff_raises_when_git_fails(monkeypatch, code):
 
 def test_measured_code_diff_lists_sorted_paths(monkeypatch):
     def git(cmd, **kw):
-        assert "--name-only" in cmd
+        assert "--name-only" in cmd and "--no-renames" in cmd
         return subprocess.CompletedProcess(cmd, 0, "shared/b\nDOCKER\nshared/a\n", "")
 
     monkeypatch.setattr(eval_report.subprocess, "run", git)
     assert eval_report.measured_code_diff("a" * 40) == ["DOCKER", "shared/a", "shared/b"]
+
+
+def test_a_measured_file_moved_into_the_dashboards_is_caught(tmp_path, monkeypatch):
+    def git(*args):
+        subprocess.run(["git", "-C", str(tmp_path), *args], check=True, capture_output=True)
+
+    git("init", "-q")
+    git("config", "user.email", "t@example.com")
+    git("config", "user.name", "t")
+    src = tmp_path / "infra/grafana/provisioning/datasources/clickhouse.yml"
+    src.parent.mkdir(parents=True)
+    src.write_text("apiVersion: 1\n" * 20)
+    (tmp_path / "infra/grafana/dashboards").mkdir(parents=True)
+    git("add", ".")
+    git("commit", "-q", "-m", "freeze")
+    commit = subprocess.run(
+        ["git", "-C", str(tmp_path), "rev-parse", "HEAD"], capture_output=True, text=True
+    ).stdout.strip()
+    git("mv", "infra/grafana/provisioning/datasources/clickhouse.yml", "infra/grafana/dashboards/")
+    git("commit", "-q", "-m", "move")
+    monkeypatch.setattr(eval_report, "REPO", tmp_path)
+    diff = eval_report.measured_code_diff(commit)
+    assert "infra/grafana/provisioning/datasources/clickhouse.yml" in diff
+    with pytest.raises(ValueError, match="clickhouse.yml"):
+        eval_report.check_measured_code(diff, [])
 
 
 def test_check_measured_code_allows_only_display_files():
@@ -695,11 +722,10 @@ def test_method_notes_date_the_change(summaries):
 
 def test_no_measured_file_reads_grafana():
     """A pin: the exemption is safe because no measured file reads a dashboard."""
-    from tenant_baselines import freeze
-
     hits = []
     for rel in freeze.MEASURED_PATHS:
         base = freeze.REPO / rel
+        assert base.exists(), f"{rel} is a measured path and is missing"
         files = [base] if base.is_file() else [f for f in base.rglob("*") if f.is_file()]
         for f in files:
             r = f.relative_to(freeze.REPO).as_posix()
@@ -772,7 +798,13 @@ def test_main_refuses_when_the_measured_code_changed_without_a_bug_entry(tmp_pat
     with pytest.raises(ValueError, match="measured code"):
         main_official(tmp_path)
     (cmd,) = calls
-    assert cmd[cmd.index("diff") :][:4] == ["diff", "--name-only", FREEZE["commit"], "HEAD"]
+    assert cmd[cmd.index("diff") :][:5] == [
+        "diff",
+        "--name-only",
+        "--no-renames",
+        FREEZE["commit"],
+        "HEAD",
+    ]
     assert "flink-job/src/main" in cmd and "py/src/tenant_baselines/scoring.py" in cmd
     entry = {"commit": "e" * 40, "date": "2026-11-20", "what": "re-run", "why": "bug: the scorer"}
     (results / "run-log.jsonl").write_text(json.dumps(entry) + "\n")
@@ -876,3 +908,15 @@ def test_method_notes_name_every_tie_break_and_date_the_connector(summaries):
     t = text(summaries)
     assert "then the lower median delay, then the less sensitive setting" in t
     assert "connector 5.1.0, which is not released as of 2026-11-12" in t
+
+
+def test_dashboards_are_mounted_only_into_grafana():
+    """A pin: no measured service reads the dashboard directory."""
+    lines = (freeze.REPO / "docker-compose.yml").read_text().splitlines()
+    service, mounts = None, []
+    for line in lines:
+        if line.startswith("  ") and not line.startswith("   ") and line.strip().endswith(":"):
+            service = line.strip()[:-1]
+        if "infra/grafana/dashboards:" in line:
+            mounts.append(service)
+    assert mounts == ["grafana"]

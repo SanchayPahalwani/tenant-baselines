@@ -40,7 +40,7 @@ MEASURED_PATHS = (
         )
     ),
 )
-# Added 2026-11-13, after the official runs. A file under these may differ from the freeze
+# Added 2026-11-12 (UTC), after the official runs. A file under these may differ from the freeze
 # commit: the eval reads the alerts topic, and no run reads a dashboard. The report names each
 # such file.
 DISPLAY_ONLY_PATHS = ("infra/grafana/dashboards",)

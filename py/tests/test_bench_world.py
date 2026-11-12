@@ -45,7 +45,8 @@ def test_bench_latencies_stay_under_the_static_threshold():
 
 
 def test_measured_paths_equal_the_freeze():
-    """A pin: the sealed eval paths are byte-identical to the freeze commit."""
+    """A pin: the sealed eval paths are byte-identical to the freeze commit, apart from
+    `DISPLAY_ONLY_PATHS`."""
     commit = json.loads((freeze.REPO / "eval/freeze.json").read_text())["commit"]
     try:
         known = subprocess.run(
