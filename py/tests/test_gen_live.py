@@ -232,3 +232,59 @@ def test_delay_world_tick_rate():
     gen = LiveGenerator(w, 5, [])
     n = sum(len(gen.tick(T + i * 1000)) for i in range(2000))
     assert n / 2000 / len(w.keys) == pytest.approx(40 / 60, rel=0.10)
+
+
+def test_main_runs_the_bench_catch_up_through_start_bench(monkeypatch, tmp_path):
+    """`main` with `--script bench`: at catch-up it calls `start_bench` with the minute the
+    live stream starts at, then the loop goes on (stopped here by the fake sleep)."""
+    import types
+
+    import confluent_kafka
+
+    from tenant_baselines import gen_live
+
+    class Stop(Exception):
+        pass
+
+    class Producer:
+        def __init__(self, conf):
+            self.conf = conf
+
+        def poll(self, timeout):
+            return 0
+
+    now_ms = 1_800_000_000_000  # on a minute boundary
+    history_start = now_ms - 86_400_000
+    clock = iter([now_ms / 1000])  # the start; every later read is just after the history start
+
+    def fake_time():
+        return next(clock, (history_start + 500) / 1000)
+
+    def sleep(s):
+        raise Stop
+
+    calls = []
+    real = gen_live.start_bench
+
+    def spy(*args):
+        calls.append(args)
+        return real(*args)
+
+    fake = types.SimpleNamespace(
+        time=fake_time, sleep=sleep, monotonic=gen_live.time.monotonic,
+        strftime=gen_live.time.strftime, gmtime=gen_live.time.gmtime,
+    )  # fmt: skip
+    monkeypatch.setattr(gen_live, "time", fake)
+    monkeypatch.setattr(gen_live, "start_bench", spy)
+    monkeypatch.setattr(gen_live.signal, "signal", lambda *a: None)
+    monkeypatch.setattr(confluent_kafka, "Producer", Producer)
+    out = tmp_path / "labels.json"
+    argv = ["gen_live", "--world", "delay", "--script", "bench", "--labels-out", str(out)]
+    monkeypatch.setattr(sys, "argv", [*argv, "--history-days", "1", "--bench-incidents", "6"])
+    with pytest.raises(Stop):
+        main()
+    assert len(calls) == 1
+    world, gen, labels_out, t0_ms, n, seed = calls[0]
+    assert (labels_out, t0_ms, n, seed) == (out, history_start, 6, 1)
+    assert isinstance(gen, LiveGenerator) and len(world.keys) == 36
+    assert orjson.loads(out.read_bytes())["t0_ms"] == history_start

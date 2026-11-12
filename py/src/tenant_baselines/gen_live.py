@@ -272,11 +272,9 @@ def main() -> None:
                         _fmt_utc(spike.end_ms),
                     )
                 elif args.script == "bench":
-                    incidents = bench_delay.schedule(
-                        world, next_ms, args.bench_incidents, args.seed
+                    incidents = start_bench(
+                        world, gen, args.labels_out, next_ms, args.bench_incidents, args.seed
                     )
-                    gen.set_incidents(incidents)
-                    _write_labels(args.labels_out, bench_delay.labels(incidents, world, next_ms))
                     log.info(
                         "caught up after %.0f s, %d events; bench script: %d incidents "
                         "from %s to %s UTC",
