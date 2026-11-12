@@ -1,0 +1,171 @@
+{
+  "data": "synthetic",
+  "end_share": 0.9,
+  "env": {
+    "commit": "5dd2f9328d40c6fdbb20edd6f89194c321cdadc5",
+    "data": "synthetic",
+    "date_utc": "2026-11-12T11:04:55+00:00",
+    "dirty": false,
+    "flink": {
+      "parallelism.default": "2",
+      "taskmanager.memory.process.size": "2560m",
+      "taskmanager.numberOfTaskSlots": "4",
+      "version": "2.2.1"
+    },
+    "host": {
+      "arch": "arm64",
+      "cores": 12,
+      "cpu": "Apple M3 Pro",
+      "memory_gb": 18.0,
+      "os": "26.5.2"
+    },
+    "images": [
+      "apache/kafka:4.4.0",
+      "apache/kafka:4.4.0",
+      "clickhouse/clickhouse-server:26.8.36.3",
+      "flink:2.2.1-java17",
+      "flink:2.2.1-java17",
+      "flink:2.2.1-java17",
+      "grafana/grafana:13.2.5",
+      "prom/alertmanager:v0.34.2",
+      "tenant-baselines-forwarder",
+      "tenant-baselines-pager-sink"
+    ],
+    "on_battery": true,
+    "other_containers": 10,
+    "power": "Now drawing from 'Battery Power'",
+    "vm": {
+      "cpus": 8,
+      "memory_gb": 9.7,
+      "server_version": "28.4.0"
+    }
+  },
+  "fill": {
+    "bytes_per_event": 15.6,
+    "compression": "zstd",
+    "event_minutes": 30,
+    "events": 7196556,
+    "events_per_s": 578029.9,
+    "kafka_bytes": 112312320,
+    "keys": 2000,
+    "partitions": 8,
+    "rpm_per_key": 120,
+    "seconds": 12.5,
+    "topic": "tp-20261112T110455.events"
+  },
+  "invalid_reasons": [
+    "run tp-20261112T110455-r1: no sample lies between the warm-up and the last tenth of the fill; raise BENCH_MINUTES"
+  ],
+  "runs": [
+    {
+      "alert_rows": {},
+      "busiest_vertex": "minute-aggregator -> (aggregates-sink: Writer -> aggregates-sink: Committer, late-events -> late-events-discard: Writer)",
+      "checkpoint": {
+        "checkpointed_size": 5614210,
+        "id": 3,
+        "state_size": 6677649,
+        "vertices": [
+          {
+            "checkpointed_size": 42863,
+            "name": "population-baselines",
+            "state_size": 45078
+          },
+          {
+            "checkpointed_size": 940,
+            "name": "Source: events",
+            "state_size": 940
+          },
+          {
+            "checkpointed_size": 485133,
+            "name": "region-grouper -> (alerts-sink: Writer -> alerts-sink: Committer, unit-status-sink: Writer -> unit-status-sink: Committer)",
+            "state_size": 675493
+          },
+          {
+            "checkpointed_size": 265,
+            "name": "Source: ticks",
+            "state_size": 265
+          },
+          {
+            "checkpointed_size": 1483002,
+            "name": "minute-aggregator -> (aggregates-sink: Writer -> aggregates-sink: Committer, late-events -> late-events-discard: Writer)",
+            "state_size": 1483002
+          },
+          {
+            "checkpointed_size": 3602007,
+            "name": "scorer -> scores-sink: Writer -> scores-sink: Committer",
+            "state_size": 4472871
+          },
+          {
+            "checkpointed_size": 0,
+            "name": "drop-ticks",
+            "state_size": 0
+          }
+        ]
+      },
+      "drop_ticks_busy": 0.0723,
+      "events": 7196556,
+      "events_per_s_source_clock": 104039.5,
+      "host_sleep_gaps_s": [],
+      "job_id": "9dd5699f5f6adc3162c88accff639949",
+      "late_events": 0,
+      "max_read_s": 3.2,
+      "power_end": "Now drawing from 'Battery Power'",
+      "reread_samples": 0,
+      "restarts": 0,
+      "run_id": "tp-20261112T110455-r1",
+      "shares": {
+        "Source: events": {
+          "backpressured": 0.8267,
+          "busy": 0.1504,
+          "idle": 0.0196
+        },
+        "Source: ticks": {
+          "backpressured": 0.0,
+          "busy": 0.0017,
+          "idle": 0.9951
+        },
+        "drop-ticks": {
+          "backpressured": 0.9141,
+          "busy": 0.0723,
+          "idle": 0.0104
+        },
+        "minute-aggregator -> (aggregates-sink: Writer -> aggregates-sink: Committer, late-events -> late-events-discard: Writer)": {
+          "backpressured": 0.0,
+          "busy": 0.9705,
+          "idle": 0.0263
+        },
+        "population-baselines": {
+          "backpressured": 0.0,
+          "busy": 0.0798,
+          "idle": 0.9171
+        },
+        "region-grouper -> (alerts-sink: Writer -> alerts-sink: Committer, unit-status-sink: Writer -> unit-status-sink: Committer)": {
+          "backpressured": 0.0,
+          "busy": 0.0416,
+          "idle": 0.9551
+        },
+        "scorer -> scores-sink: Writer -> scores-sink: Committer": {
+          "backpressured": 0.0,
+          "busy": 0.1449,
+          "idle": 0.8523
+        }
+      },
+      "source": {
+        "backpressured": 0.8267,
+        "busy": 0.1504,
+        "idle": 0.0196
+      },
+      "stale_samples": 0,
+      "taskmanager_memory": {
+        "limit_bytes": 2684354560,
+        "used_bytes": 2127082553
+      },
+      "window_error": "no sample lies between the warm-up and the last tenth of the fill; raise BENCH_MINUTES"
+    }
+  ],
+  "sample_interval_s": 12,
+  "settings": 3,
+  "spread_pct": null,
+  "valid": false,
+  "warmup_s": 60
+}

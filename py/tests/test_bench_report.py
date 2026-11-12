@@ -25,7 +25,7 @@ def env(commit="abc1234"):
         "power": "Now drawing from 'AC Power'",
         "vm": {"cpus": 8, "memory_gb": 9.7, "server_version": "29.0"},
         "other_containers": 3,
-        "images": ["kafka:4.4.0", "clickhouse:26.8"],
+        "images": ["clickhouse:26.8", "kafka:4.4.0", "kafka:4.4.0"],
         "flink": {
             "version": "2.2.1",
             "parallelism.default": "2",
@@ -53,7 +53,11 @@ def tp_run(run_id, rate):
         "source": {"busy": 0.5, "backpressured": 0.25, "idle": 0.125},
         "drop_ticks_busy": 0.0875,
         "busiest_vertex": "scorer",
-        "shares": {"scorer": {"busy": 0.75, "backpressured": 0.0, "idle": 0.1}},
+        "shares": {
+            "Source: events": {"busy": 0.5, "backpressured": 0.25, "idle": 0.125},
+            "drop-ticks": {"busy": 0.0875, "backpressured": 0.9, "idle": 0.0125},
+            "scorer": {"busy": 0.75, "backpressured": 0.0, "idle": 0.1},
+        },
         "stall_gaps_s": [],
         "host_sleep_s": 0.0,
         "restarts": 0,
@@ -493,8 +497,20 @@ def test_no_key_count_reconciliation_sentence():
 
 def test_drop_ticks_sentence_is_a_design_explanation():
     out = render()
-    assert "handing each event on to the keyed shuffle" in out
-    assert "upper bound on the extra hop's cost" in out
+    assert "The hop adds one read of each event, the filter and one write." in out
+    assert "choosing the key's channel, which the source would do without the union" in out
+    assert "the share is an upper bound on what the hop adds" in out
+    assert "tp-x-r1: back-pressured 90.0% of the window" in out
+    assert "so it did not set the pace" in out
+
+
+def test_drop_ticks_that_was_not_back_pressured_is_not_said_to_follow():
+    t = throughput()
+    for r in t["runs"]:
+        r["shares"]["drop-ticks"]["backpressured"] = 0.2
+    out = render(t=t)
+    assert "back-pressured 20.0% of the window" in out
+    assert "did not set the pace" not in out
 
 
 def test_report_refuses_a_dirty_tree():
@@ -593,7 +609,8 @@ def test_no_alert_rows_prints_a_sentence_not_an_empty_table():
     for r in t["runs"]:
         r["alert_rows"] = {}
     out = render(t=t)
-    assert "No run wrote an alert row: the bench world stays under every fire level." in out
+    no_rows = "No run wrote an alert row: the bench world is built to stay under every fire level."
+    assert no_rows in out
     assert "| Detector / setting / scope |" not in out
     # with rows, the table stays
     assert "| Detector / setting / scope |" in render()
@@ -607,3 +624,381 @@ def test_spread_names_the_faster_run_and_does_not_assume_the_first_is_colder():
     out = render(t=t)
     assert "tp-x-r1 was the faster" in out
     assert "is the colder one" not in out
+
+
+# ---- the power source, read from power.json ----
+
+
+def iv(source, a, b, seconds):
+    day = "2026-11-12T"
+    return {"source": source, "from": f"{day}{a}+05:30", "to": f"{day}{b}+05:30",
+            "overlap_s": seconds}  # fmt: skip
+
+
+def power_run(run_id, start, end, intervals, **extra):
+    day = "2026-11-12T"
+    return {
+        "run_id": run_id,
+        "log": f"power/{run_id}.log",
+        "log_from": f"{day}20:55:02+05:30",
+        "log_read_at": f"{day}23:11:47+05:30",
+        "start": f"{day}{start}+05:30",
+        "end": f"{day}{end}+05:30",
+        "end_from": f"the write time of data/bench/{run_id}/result.json",
+        "covered_by_log": True,
+        "intervals": intervals,
+        **extra,
+    }
+
+
+def power():
+    day = "2026-11-12T"
+    incidents = {
+        "caught_up": f"{day}21:20:54+05:30",
+        "job_caught_up": f"{day}21:25:29.693549+05:30",
+        "settle_s": 300,
+        "first_incident_start": f"{day}21:26:40+05:30",
+        "shortest_time_to_page_s": 269.4,
+        "earliest_page": f"{day}21:31:09.400000+05:30",
+        "matched_page_on_battery": False,
+    }
+    delay_ivs = [
+        iv("AC Power", "20:55:02", "21:21:33", 287.0),
+        iv("Battery Power", "21:21:33", "21:27:03", 330.0),
+        iv("AC Power", "21:27:03", "22:44:24", 4071.0),
+    ]
+    return {
+        "source": "pmset -g log: the lines that say Using AC or Using Batt",
+        "runs": {
+            "throughput": power_run(
+                "tp-x", "21:02:47", "21:16:44", [iv("AC Power", "20:55:02", "21:21:33", 837.0)]
+            ),
+            "delay": power_run("delay-x", "21:16:46", "22:34:54", delay_ivs, incidents=incidents),
+            "state": power_run(
+                "state-x", "22:34:55", "22:38:35", [iv("AC Power", "21:27:03", "22:44:24", 220.0)]
+            ),
+        },
+    }
+
+
+def test_the_power_row_names_both_readings_and_says_when_they_were_taken():
+    out = render()
+    assert "| Power at start and end |" in out
+    assert "| Power |" not in out
+    assert "AC Power at the start, AC Power at the end" in out
+    assert "Power is read when a run starts and when it ends, not in between." in out
+
+
+def test_the_power_row_reads_the_last_throughput_run_and_the_files_power_end():
+    t, s = throughput(), state()
+    t["runs"][-1]["power_end"] = None
+    s["power_end"] = None
+    out = render(t=t, s=s)
+    assert "AC Power at the start, not recorded at the end" in out
+
+
+def test_without_power_json_the_page_says_the_log_was_not_read():
+    out = render()
+    sec = out[out.index("## Power during the runs") : out.index("## Throughput")]
+    assert "The OS power log was not read for these runs." in sec
+    assert "synthetic" in sec
+
+
+def test_the_power_section_lists_each_runs_sources_and_names_the_battery_span():
+    out = br.render(throughput(), delay(), state(), power=power())
+    sec = out[out.index("## Power during the runs") : out.index("## Throughput")]
+    assert "| Throughput | tp-x | 21:02:47 | 21:16:44 | AC Power, 837 s |" in sec
+    assert (
+        "| Delay | delay-x | 21:16:46 | 22:34:54 | AC Power, 287 s; Battery Power, 330 s"
+        " (21:21:33 to 21:27:03); AC Power, 4,071 s |"
+    ) in sec
+    assert "Start (IST)" in sec and "UTC+05:30" in sec
+    assert (
+        "The delay run (delay-x) had the charger out from 21:21:33 to 21:27:03 IST, for 330 s,"
+        " and ran on battery." in sec
+    )
+    assert "the generator had written the history at 21:20:54" in sec
+    assert "the job caught up on it at 21:25:29" in sec
+    assert "the 300 s settle period ended at 21:25:54" in sec
+    assert "the first incident started at 21:26:40" in sec
+    assert (
+        "So the charger was out for the job's catch-up from 21:21:33 on, the rest of the settle"
+        " period and the first 23 s of the first incident." in sec
+    )
+    assert "No incident was paged on battery" in sec
+    assert "shortest time-to-page of any setting, 269.4 s" in sec
+    assert "at 21:31:09, 246 s after the charger came back" in sec
+
+
+def test_the_power_section_says_so_when_every_run_was_on_ac():
+    p = power()
+    p["runs"]["delay"]["intervals"] = [iv("AC Power", "20:55:02", "22:44:24", 4688.0)]
+    out = br.render(throughput(), delay(), state(), power=p)
+    assert "The log shows AC Power throughout every run." in out
+    assert "charger out" not in out
+
+
+def test_a_page_window_on_battery_is_not_ruled_out():
+    p = power()
+    p["runs"]["delay"]["incidents"]["matched_page_on_battery"] = None
+    out = br.render(throughput(), delay(), state(), power=p)
+    assert "No incident was paged on battery" not in out
+    assert "The records cannot rule out a page appended on battery." in out
+
+
+def test_a_run_the_log_does_not_cover_is_named():
+    p = power()
+    p["runs"]["state"]["covered_by_log"] = False
+    out = br.render(throughput(), delay(), state(), power=p)
+    assert "The log does not cover the whole of the state run (state-x)." in out
+
+
+# ---- pilots ----
+
+
+def tp_pilot(run_id, rate, power_start, power_end=None, **edit):
+    doc = throughput()
+    doc["env"].update(power=power_start, on_battery=True, commit="8ac86e8a63")
+    doc["env"]["date_utc"] = "2026-11-12T09:49:26+00:00"
+    run = {"run_id": f"{run_id}-r1", "events_per_s": rate}
+    if power_end is not None:
+        run["power_end"] = power_end
+    doc["runs"] = [run | edit]
+    return doc
+
+
+def delay_pilot():
+    d = delay()
+    d["env"].update(power=BATTERY, on_battery=True, commit="e4c95759ab")
+    d["env"]["date_utc"] = "2026-11-12T14:39:35+00:00"
+    d["power_end"] = BATTERY
+    d["headline"]["pipeline_delay_s"] = pct(6, 21.5, 22.6, 21.4, 22.6)
+    return d
+
+
+def pilots():
+    no_window = {
+        "window_error": "no sample lies between the warm-up and the last tenth",
+        "events_per_s_source_clock": 104_039.5,
+        "load_start": {"other_containers_cpu_pct": 69.1},
+        "load_end": {"other_containers_cpu_pct": 154.8},
+    }
+    bad = tp_pilot("tp-b", None, "Now drawing from 'AC Power'", BATTERY, **no_window)
+    bad["runs"][0].pop("events_per_s")
+    bad.update(valid=False, invalid_reasons=["run tp-b-r1: no sample lies between the warm-up"])
+    bad["env"].update(dirty=True, date_utc="2026-11-12T11:04:55+00:00")
+    return {
+        "tp-a": tp_pilot("tp-a", 13_102.4, BATTERY),
+        "tp-b": bad,
+        "delay-p": delay_pilot(),
+    }
+
+
+def test_the_pilot_table_shows_each_pilot_as_it_is():
+    out = br.render(throughput(), delay(), state(), pilots=pilots())
+    sec = out[out.index("## Pilot runs (not the published figures)") :]
+    sec = sec[: sec.index("\n## ")]
+    assert "synthetic" in sec
+    assert (
+        "The pilots ran on the same machine with other projects' containers busier; their rates"
+        " show how much the figure depends on what else the VM is doing." in sec
+    )
+    assert "| tp-a | 8ac86e8 | 2026-11-12T09:49:26+00:00 | Battery Power at the start," in sec
+    assert "13,102 events a second" in sec
+    assert "no window; 104,040 events a second on the source's clock" in sec
+    assert "AC Power at the start, Battery Power at the end" in sec
+    assert "69.1 → 154.8" in sec
+    assert "pipeline delay p50 21.5 s, p95 22.6 s (n=6)" in sec
+    assert "| no |" in sec and "| yes |" in sec
+    assert "- tp-b: not valid: run tp-b-r1: no sample lies between the warm-up" in sec
+    assert "- tp-b: recorded from a dirty tree." in sec
+    # in the order they ran, and the published figures are not changed by them
+    assert sec.index("| tp-a |") < sec.index("| tp-b |") < sec.index("| delay-p |")
+    assert "123,457" in out[: out.index("## Pilot runs")]
+
+
+def test_a_state_pilot_shows_bytes_per_key_per_backend():
+    out = br.render(throughput(), delay(), state(), pilots={"state-p": state()})
+    assert "hashmap 765,432 bytes per key; rocksdb 700,001 bytes per key" in out
+
+
+def test_without_pilots_there_is_no_pilot_section():
+    assert "## Pilot runs" not in render()
+
+
+def test_the_battery_delay_pilot_is_set_beside_the_published_delay():
+    out = br.render(throughput(), delay(), state(), power=power(), pilots=pilots())
+    sec = out[out.index("## Power during the runs") : out.index("## Throughput")]
+    assert (
+        "The delay pilot delay-p was on battery at its start and at its end; it gave a pipeline"
+        " delay of 21.5 s at p50 and 22.6 s at p95, against 40.1 s and 98.7 s in this run." in sec
+    )
+
+
+def test_pilots_are_not_refused():
+    p = pilots()
+    p["tp-a"]["valid"] = False
+    p["tp-a"]["data"] = "unknown"
+    assert "## Pilot runs" in br.render(throughput(), delay(), state(), pilots=p)
+
+
+# ---- the static rows ----
+
+
+def test_equal_static_rows_are_explained():
+    d = delay()
+    d["by_detector"] = {
+        "global_static/p99.9": measured(58),
+        "per_key_static/p99.9": measured(58),
+        "seasonal/k4": measured(),
+    }
+    sentence = (
+        "The delay world's keys have no per-key entry in `thresholds-demo.json`, so"
+        " `per_key_static` falls back to the global level and its row equals `global_static`'s."
+    )
+    assert sentence in render(d=d)
+    d["by_detector"]["per_key_static/p99.9"] = measured(57)
+    assert sentence not in render(d=d)
+
+
+def test_the_throughput_settings_sentence_says_per_key_static_used_the_global_levels():
+    assert (
+        "The job ran 5 settings at once; the bench world's keys have no per-key entry in"
+        " `thresholds-demo.json`, so `per_key_static` used the global levels." in render()
+    )
+
+
+def test_the_bench_worlds_keys_have_no_per_key_level_and_the_global_levels_agree():
+    from tenant_baselines import bench_world, freeze
+
+    sets = json.loads((freeze.REPO / "infra/flink/thresholds-demo.json").read_text())["sets"]
+    by = {s["detector"]: s for s in sets}
+    per_key = set(by["per_key_static"]["per_key"])
+    assert per_key  # the demo world's keys
+    for name in ("bench", "delay"):
+        keys = {k.key for k in bench_world.build(name, 1).keys}
+        assert keys and not keys & per_key, name
+    assert by["per_key_static"]["global"] == by["global_static"]["global"]
+
+
+# ---- throughput wording ----
+
+
+def test_the_idle_share_conclusion_follows_the_data():
+    t = throughput()
+    out = render(t=t)  # idle 12.5%: the source did wait on the broker part of the time
+    assert "the job set the pace" not in out
+    assert "The source was idle 12.5% of the window in tp-x-r1" in out
+    for r in t["runs"]:
+        r["source"] = {"busy": 0.12, "backpressured": 0.875, "idle": 0.002}
+    out = render(t=t)
+    assert (
+        "The source was back-pressured 87.5% of the window and idle 0.2% in tp-x-r1, and"
+        " back-pressured 87.5% and idle 0.2% in tp-x-r2: the job set the pace, not the broker."
+        in out
+    )
+
+
+def test_the_run_order_sentence_follows_which_run_was_faster():
+    out = render()  # r2 faster: the colder first run was the slower one
+    assert "tp-x-r2 was the faster run." in out
+    assert "which would make it the slower one, and here it was." in out
+    t = throughput()
+    t["runs"][0]["events_per_s"] = 200_000.0
+    out = render(t=t)
+    assert "tp-x-r1 was the faster run." in out
+    assert (
+        "The first job on a TaskManager starts colder, which would make it the slower one. Here"
+        " it was the faster, so the order does not explain the spread." in out
+    )
+
+
+def test_every_vertex_share_is_printed_per_run():
+    out = render()
+    assert "| Vertex | tp-x-r1 busy | tp-x-r1 back-pressured | tp-x-r1 idle |" in out
+    assert "| drop-ticks | 8.8% | 90.0% | 1.2% | 8.8% | 90.0% | 1.2% |" in out
+    assert "| scorer | 75.0% | 0.0% | 10.0% | 75.0% | 0.0% | 10.0% |" in out
+
+
+def test_the_cold_baselines_are_explained_from_the_fill():
+    out = render()
+    assert (
+        "The fill is 120 event minutes, so no key has the history the seasonal detector needs and"
+        " every key is scored against the fallback baselines." in out
+    )
+    assert "The baselines are cold after the fill's event time" not in out
+    limits = out[out.index("## What these numbers do not show") :]
+    assert "Throughput was measured with cold baselines." not in limits
+    assert "the scorer was busy 75.0% of the window in tp-x-r1 and 75.0% in tp-x-r2" in limits
+
+
+def test_the_window_start_is_worded_from_the_samples():
+    assert "the first 60 s after the first sample that showed a count" in render()
+
+
+def test_each_image_is_printed_once():
+    assert "clickhouse:26.8, kafka:4.4.0 |" in render()
+
+
+def test_the_limits_name_the_shared_vm_and_the_power_between_readings():
+    limits = render()[render().index("## What these numbers do not show") :]
+    assert "the shared VM's load" in limits
+    assert "power between the two readings" in limits
+
+
+# ---- state, extrapolation and delay wording ----
+
+
+def test_the_rocksdb_range_and_the_backend_gap_are_explained():
+    out = render()
+    sec = out[out.index("## State size") : out.index("## Extrapolation")]
+    assert (
+        "The figure moves from one checkpoint to the next: the state is still growing in the last"
+        " stretch of the run, and SST files that are not yet compacted are counted." in sec
+    )
+    assert "The hashmap figure is 1.1 times the RocksDB figure." in sec
+    assert "`SNAPPY_COMPRESSION`" in sec and "state.backend.rocksdb.compression.per.level" in sec
+    assert "documented default, not measured here" in sec
+
+
+def test_the_extrapolation_names_the_keys_with_a_shorter_history():
+    out = render()
+    assert (
+        "2 of the 48 measured keys ran fewer weeks, so the per-key figure is slightly under a"
+        " full key's." in out
+    )
+    s = state()
+    s["world"]["keys_with_five_weeks"] = 48
+    assert "ran fewer weeks" not in render(s=s)
+
+
+def test_pipeline_delay_is_defined_from_the_hold():
+    assert (
+        "Pipeline delay is the time from a row's event time, which for a tenant alert is the end"
+        " of its hold, to the broker's append time of that row in `bench.alerts`." in render()
+    )
+
+
+def test_reproduce_lists_every_refusal():
+    out = render()
+    sec = out[out.index("## Reproduce") :]
+    assert "from a dirty tree" in sec and "on battery" in sec and "contradict" in sec
+    assert "`make power-log`" in sec
+
+
+# ---- main and the committed page ----
+
+
+def test_main_reads_power_json_and_the_pilots(tmp_path):
+    res = tmp_path / "performance"
+    (res / "pilots").mkdir(parents=True)
+    for name, doc in (("throughput", throughput()), ("delay", delay()), ("state", state())):
+        (res / f"{name}.json").write_text(json.dumps(doc))
+    (res / "power.json").write_text(json.dumps(power()))
+    for run_id, doc in pilots().items():
+        (res / "pilots" / f"{run_id}.json").write_text(json.dumps(doc))
+    out = tmp_path / "performance.md"
+    br.main(["--results", str(res), "--out", str(out)])
+    assert out.read_text() == br.render(
+        throughput(), delay(), state(), power=power(), pilots=pilots()
+    )

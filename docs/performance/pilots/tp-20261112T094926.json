@@ -1,0 +1,170 @@
+{
+  "data": "synthetic",
+  "end_share": 0.9,
+  "env": {
+    "commit": "8ac86e8a6388b833d4f2341969abcf0575b72eff",
+    "data": "synthetic",
+    "date_utc": "2026-11-12T09:49:26+00:00",
+    "dirty": false,
+    "flink": {
+      "parallelism.default": "2",
+      "taskmanager.memory.process.size": "2560m",
+      "taskmanager.numberOfTaskSlots": "4",
+      "version": "2.2.1"
+    },
+    "host": {
+      "arch": "arm64",
+      "cores": 12,
+      "cpu": "Apple M3 Pro",
+      "memory_gb": 18.0,
+      "os": "26.5.2"
+    },
+    "images": [
+      "apache/kafka:4.4.0",
+      "apache/kafka:4.4.0",
+      "clickhouse/clickhouse-server:26.8.36.3",
+      "flink:2.2.1-java17",
+      "flink:2.2.1-java17",
+      "flink:2.2.1-java17",
+      "grafana/grafana:13.2.5",
+      "prom/alertmanager:v0.34.2",
+      "tenant-baselines-forwarder",
+      "tenant-baselines-pager-sink"
+    ],
+    "on_battery": true,
+    "other_containers": 12,
+    "power": "Now drawing from 'Battery Power'",
+    "vm": {
+      "cpus": 8,
+      "memory_gb": 9.7,
+      "server_version": "28.4.0"
+    }
+  },
+  "fill": {
+    "bytes_per_event": 15.7,
+    "event_minutes": 30,
+    "events": 7196556,
+    "events_per_s": 320127.0,
+    "kafka_bytes": 112640000,
+    "keys": 2000,
+    "partitions": 8,
+    "rpm_per_key": 120,
+    "seconds": 22.5,
+    "topic": "tp-20261112T094926.events"
+  },
+  "invalid_reasons": [],
+  "runs": [
+    {
+      "alert_rows": {},
+      "busiest_vertex": "minute-aggregator -> (aggregates-sink: Writer -> aggregates-sink: Committer, late-events -> late-events-discard: Writer)",
+      "checkpoint": {
+        "checkpointed_size": 4308646,
+        "id": 19,
+        "state_size": 5248517,
+        "vertices": [
+          {
+            "checkpointed_size": 37221,
+            "name": "population-baselines",
+            "state_size": 44185
+          },
+          {
+            "checkpointed_size": 940,
+            "name": "Source: events",
+            "state_size": 940
+          },
+          {
+            "checkpointed_size": 337858,
+            "name": "region-grouper -> (alerts-sink: Writer -> alerts-sink: Committer, unit-status-sink: Writer -> unit-status-sink: Committer)",
+            "state_size": 972234
+          },
+          {
+            "checkpointed_size": 265,
+            "name": "Source: ticks",
+            "state_size": 265
+          },
+          {
+            "checkpointed_size": 1042657,
+            "name": "minute-aggregator -> (aggregates-sink: Writer -> aggregates-sink: Committer, late-events -> late-events-discard: Writer)",
+            "state_size": 1042657
+          },
+          {
+            "checkpointed_size": 2889705,
+            "name": "scorer -> scores-sink: Writer -> scores-sink: Committer",
+            "state_size": 3188236
+          },
+          {
+            "checkpointed_size": 0,
+            "name": "drop-ticks",
+            "state_size": 0
+          }
+        ]
+      },
+      "drop_ticks_busy": 0.0929,
+      "events": 7196556,
+      "events_per_s": 13102.4,
+      "host_sleep_gaps_s": [],
+      "intervals": 37,
+      "job_id": "97003753bb9811de5901453274efb0c7",
+      "late_events": 0,
+      "max_interval_rate": 28957.4,
+      "min_interval_rate": 0.0,
+      "restarts": 0,
+      "run_id": "tp-20261112T094926-r1",
+      "shares": {
+        "Source: events": {
+          "backpressured": 0.7643,
+          "busy": 0.212,
+          "idle": 0.0234
+        },
+        "Source: ticks": {
+          "backpressured": 0.0,
+          "busy": 0.0182,
+          "idle": 0.9815
+        },
+        "drop-ticks": {
+          "backpressured": 0.8978,
+          "busy": 0.0929,
+          "idle": 0.009
+        },
+        "minute-aggregator -> (aggregates-sink: Writer -> aggregates-sink: Committer, late-events -> late-events-discard: Writer)": {
+          "backpressured": 0.0,
+          "busy": 0.9872,
+          "idle": 0.0125
+        },
+        "population-baselines": {
+          "backpressured": 0.0,
+          "busy": 0.1313,
+          "idle": 0.8684
+        },
+        "region-grouper -> (alerts-sink: Writer -> alerts-sink: Committer, unit-status-sink: Writer -> unit-status-sink: Committer)": {
+          "backpressured": 0.0,
+          "busy": 0.102,
+          "idle": 0.8976
+        },
+        "scorer -> scores-sink: Writer -> scores-sink: Committer": {
+          "backpressured": 0.0,
+          "busy": 0.258,
+          "idle": 0.7414
+        }
+      },
+      "source": {
+        "backpressured": 0.7643,
+        "busy": 0.212,
+        "idle": 0.0234
+      },
+      "taskmanager_memory": {
+        "limit_bytes": 2684354560,
+        "used_bytes": 1908039221
+      },
+      "timing_error_pct": 0.5,
+      "window_end_s": 504.0,
+      "window_s": 444.0,
+      "window_start_s": 60.0
+    }
+  ],
+  "sample_interval_s": 12,
+  "settings": 3,
+  "spread_pct": 0.0,
+  "valid": true,
+  "warmup_s": 60
+}

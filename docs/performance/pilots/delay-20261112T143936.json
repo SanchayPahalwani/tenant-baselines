@@ -1,0 +1,266 @@
+{
+  "by_detector": {
+    "global_static/p99.9": {
+      "emit_delay_s": {
+        "max": 22.6,
+        "min": 21.5,
+        "n": 6,
+        "p50": 21.6,
+        "p95": 22.6
+      },
+      "extra_matched_rows": 0,
+      "incidents": 6,
+      "matched": 6,
+      "missed": [],
+      "pipeline_delay_s": {
+        "max": 22.6,
+        "min": 21.5,
+        "n": 6,
+        "p50": 21.6,
+        "p95": 22.6
+      },
+      "regional_firing_rows": 0,
+      "sink_delay_s": {
+        "max": 0.0,
+        "min": 0.0,
+        "n": 6,
+        "p50": 0.0,
+        "p95": 0.0
+      },
+      "time_to_page_s": {
+        "max": 332.6,
+        "min": 282.6,
+        "n": 6,
+        "p50": 324.5,
+        "p95": 332.6
+      },
+      "under_five_minutes": 1,
+      "unmatched_firing_rows": 0
+    },
+    "per_key_static/p99.9": {
+      "emit_delay_s": {
+        "max": 22.6,
+        "min": 21.5,
+        "n": 6,
+        "p50": 21.6,
+        "p95": 22.6
+      },
+      "extra_matched_rows": 0,
+      "incidents": 6,
+      "matched": 6,
+      "missed": [],
+      "pipeline_delay_s": {
+        "max": 22.6,
+        "min": 21.5,
+        "n": 6,
+        "p50": 21.6,
+        "p95": 22.6
+      },
+      "regional_firing_rows": 0,
+      "sink_delay_s": {
+        "max": 0.0,
+        "min": 0.0,
+        "n": 6,
+        "p50": 0.0,
+        "p95": 0.0
+      },
+      "time_to_page_s": {
+        "max": 332.6,
+        "min": 282.6,
+        "n": 6,
+        "p50": 324.5,
+        "p95": 332.6
+      },
+      "under_five_minutes": 1,
+      "unmatched_firing_rows": 0
+    },
+    "seasonal/k4": {
+      "emit_delay_s": {
+        "max": 22.6,
+        "min": 21.3,
+        "n": 6,
+        "p50": 21.5,
+        "p95": 22.6
+      },
+      "extra_matched_rows": 0,
+      "incidents": 6,
+      "matched": 6,
+      "missed": [],
+      "pipeline_delay_s": {
+        "max": 22.6,
+        "min": 21.4,
+        "n": 6,
+        "p50": 21.5,
+        "p95": 22.6
+      },
+      "regional_firing_rows": 0,
+      "sink_delay_s": {
+        "max": 0.0,
+        "min": 0.0,
+        "n": 6,
+        "p50": 0.0,
+        "p95": 0.0
+      },
+      "time_to_page_s": {
+        "max": 329.5,
+        "min": 272.4,
+        "n": 6,
+        "p50": 317.6,
+        "p95": 329.5
+      },
+      "under_five_minutes": 2,
+      "unmatched_firing_rows": 0
+    }
+  },
+  "clock_offset": {
+    "after": {
+      "bracket_s": 0.0912320613861084,
+      "offset_s": 0.06348776817321777
+    },
+    "before": {
+      "bracket_s": 0.09623193740844727,
+      "offset_s": 0.045773983001708984
+    }
+  },
+  "data": "synthetic",
+  "design": {
+    "fire_after_minutes": 3,
+    "group_wait_s": 30,
+    "hold_s": 120,
+    "idleness_s": 60,
+    "watermark_bound_s": 20
+  },
+  "env": {
+    "commit": "e4c95759ab2a1afce9db236ae9e9e687bf9a8800",
+    "data": "synthetic",
+    "date_utc": "2026-11-12T14:39:35+00:00",
+    "dirty": false,
+    "flink": {
+      "parallelism.default": "2",
+      "taskmanager.memory.process.size": "2560m",
+      "taskmanager.numberOfTaskSlots": "4",
+      "version": "2.2.1"
+    },
+    "host": {
+      "arch": "arm64",
+      "cores": 12,
+      "cpu": "Apple M3 Pro",
+      "memory_gb": 18.0,
+      "os": "26.5.2"
+    },
+    "images": [
+      "apache/kafka:4.4.0",
+      "apache/kafka:4.4.0",
+      "clickhouse/clickhouse-server:26.8.36.3",
+      "flink:2.2.1-java17",
+      "flink:2.2.1-java17",
+      "flink:2.2.1-java17",
+      "grafana/grafana:13.2.5",
+      "prom/alertmanager:v0.34.2",
+      "tenant-baselines-forwarder",
+      "tenant-baselines-pager-sink"
+    ],
+    "on_battery": true,
+    "other_containers": 12,
+    "power": "Now drawing from 'Battery Power'",
+    "vm": {
+      "cpus": 8,
+      "memory_gb": 9.7,
+      "server_version": "28.4.0"
+    }
+  },
+  "generator": {
+    "caught_up_ms": 1794494659000,
+    "failed_deliveries": 0
+  },
+  "headline": {
+    "detector": "seasonal",
+    "emit_delay_s": {
+      "max": 22.6,
+      "min": 21.3,
+      "n": 6,
+      "p50": 21.5,
+      "p95": 22.6
+    },
+    "extra_matched_rows": 0,
+    "incidents": 6,
+    "matched": 6,
+    "missed": [],
+    "pipeline_delay_s": {
+      "max": 22.6,
+      "min": 21.4,
+      "n": 6,
+      "p50": 21.5,
+      "p95": 22.6
+    },
+    "regional_firing_rows": 0,
+    "setting": "k4",
+    "sink_delay_s": {
+      "max": 0.0,
+      "min": 0.0,
+      "n": 6,
+      "p50": 0.0,
+      "p95": 0.0
+    },
+    "time_to_page_s": {
+      "max": 329.5,
+      "min": 272.4,
+      "n": 6,
+      "p50": 317.6,
+      "p95": 329.5
+    },
+    "under_five_minutes": 2,
+    "unmatched_firing_rows": 0
+  },
+  "host_sleep_s": 0.0,
+  "incidents": 6,
+  "invalid_reasons": [],
+  "job_id": "fc1def6f3a0aa9130df85fe8b48d13a1",
+  "lag_check": {
+    "at_first_incident_s": 22.0,
+    "caught_up_lag_s": 21.2,
+    "no_watermark_samples": 0,
+    "samples_from_first_incident": 14,
+    "stale_lag_samples": 0
+  },
+  "late_events": 0,
+  "load_end": {
+    "cpu_pct_unit": "percent of one CPU",
+    "host_load_1m": 4.65,
+    "other_containers_cpu_pct": 49.7,
+    "project_containers_cpu_pct": 34.8,
+    "vm_cpus": 8
+  },
+  "load_start": {
+    "cpu_pct_unit": "percent of one CPU",
+    "host_load_1m": 4.72,
+    "other_containers_cpu_pct": 55.6,
+    "project_containers_cpu_pct": 16.7,
+    "vm_cpus": 8
+  },
+  "power_end": "Now drawing from 'Battery Power'",
+  "restarts": 0,
+  "run_id": "delay-20261112T143936",
+  "schedule": {
+    "duration_s": 360,
+    "magnitude": 0.2,
+    "settle_s": 300,
+    "spacing_s": 180,
+    "tail_s": 180
+  },
+  "settings": 3,
+  "stall_gaps_s": [],
+  "valid": true,
+  "watermark_lag_s": {
+    "max": 23.8,
+    "median": 21.7,
+    "min": 21.3,
+    "samples": 14
+  },
+  "world": {
+    "history_days": 21,
+    "keys": 36,
+    "partitions": 8,
+    "rpm_per_key": 40.0
+  }
+}

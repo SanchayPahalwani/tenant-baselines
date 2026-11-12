@@ -1,0 +1,257 @@
+{
+  "data": "synthetic",
+  "env": {
+    "commit": "e4c95759ab2a1afce9db236ae9e9e687bf9a8800",
+    "data": "synthetic",
+    "date_utc": "2026-11-12T15:07:05+00:00",
+    "dirty": false,
+    "flink": {
+      "parallelism.default": "2",
+      "taskmanager.memory.process.size": "2560m",
+      "taskmanager.numberOfTaskSlots": "4",
+      "version": "2.2.1"
+    },
+    "host": {
+      "arch": "arm64",
+      "cores": 12,
+      "cpu": "Apple M3 Pro",
+      "memory_gb": 18.0,
+      "os": "26.5.2"
+    },
+    "images": [
+      "apache/kafka:4.4.0",
+      "apache/kafka:4.4.0",
+      "clickhouse/clickhouse-server:26.8.36.3",
+      "flink:2.2.1-java17",
+      "flink:2.2.1-java17",
+      "flink:2.2.1-java17",
+      "grafana/grafana:13.2.5",
+      "prom/alertmanager:v0.34.2",
+      "tenant-baselines-forwarder",
+      "tenant-baselines-pager-sink"
+    ],
+    "on_battery": true,
+    "other_containers": 12,
+    "power": "Now drawing from 'Battery Power'",
+    "vm": {
+      "cpus": 8,
+      "memory_gb": 9.7,
+      "server_version": "28.4.0"
+    }
+  },
+  "extrapolation": {
+    "hashmap": [
+      {
+        "bytes": 1244476167,
+        "keys": 2000
+      },
+      {
+        "bytes": 12444761667,
+        "keys": 20000
+      },
+      {
+        "bytes": 62223808333,
+        "keys": 100000
+      }
+    ],
+    "label": "extrapolation, not measured",
+    "rocksdb": [
+      {
+        "bytes": 551471292,
+        "keys": 2000
+      },
+      {
+        "bytes": 5514712917,
+        "keys": 20000
+      },
+      {
+        "bytes": 27573564583,
+        "keys": 100000
+      }
+    ]
+  },
+  "headline_backend": "hashmap",
+  "headline_per_key_bytes": 622238.0833333334,
+  "invalid_reasons": [],
+  "power_end": "Now drawing from 'Battery Power'",
+  "runs": [
+    {
+      "aggregate_rows": 2358720,
+      "backend": "hashmap",
+      "checkpoint": {
+        "checkpointed_size": 33897269,
+        "id": 3,
+        "state_size": 33897269,
+        "trigger_share": 0.9622641509433962,
+        "vertices": [
+          {
+            "checkpointed_size": 3975618,
+            "name": "population-baselines",
+            "state_size": 3975618
+          },
+          {
+            "checkpointed_size": 29867428,
+            "name": "scorer",
+            "state_size": 29867428
+          },
+          {
+            "checkpointed_size": 234,
+            "name": "Source: aggregates",
+            "state_size": 234
+          },
+          {
+            "checkpointed_size": 53989,
+            "name": "region-grouper -> (alerts-sink: Writer -> alerts-sink: Committer, unit-status-sink: Writer -> unit-status-sink: Committer)",
+            "state_size": 53989
+          }
+        ]
+      },
+      "checkpoints_after_tasks_finish": true,
+      "cleanup_error": null,
+      "history_checkpoints": 3,
+      "history_entries": 3,
+      "host_sleep_s": 0.0,
+      "interval_ms": 5000,
+      "job_id": "7925006b95d3f799bb749d452623422c",
+      "job_seconds": 12.732,
+      "keys": 48,
+      "load_end": {
+        "cpu_pct_unit": "percent of one CPU",
+        "host_load_1m": 4.5,
+        "other_containers_cpu_pct": 29.1,
+        "project_containers_cpu_pct": 14.1,
+        "vm_cpus": 8
+      },
+      "load_start": {
+        "cpu_pct_unit": "percent of one CPU",
+        "host_load_1m": 5.17,
+        "other_containers_cpu_pct": 164.5,
+        "project_containers_cpu_pct": 178.5,
+        "vm_cpus": 8
+      },
+      "per_key": {
+        "other_vertices": [
+          {
+            "name": "population-baselines",
+            "state_size": 3975618
+          },
+          {
+            "name": "Source: aggregates",
+            "state_size": 234
+          },
+          {
+            "name": "region-grouper -> (alerts-sink: Writer -> alerts-sink: Committer, unit-status-sink: Writer -> unit-status-sink: Committer)",
+            "state_size": 53989
+          }
+        ],
+        "per_key_bytes": 622238.0833333334,
+        "scorer_bytes": 29867428
+      },
+      "range": {
+        "checkpoints": 1,
+        "max": 33897269,
+        "min": 33897269
+      },
+      "restarts": 0,
+      "run_id": "state-hashmap-20261112T150705",
+      "settings": 12,
+      "stall_gaps_s": [],
+      "state_backend": "HashMapStateBackend"
+    },
+    {
+      "aggregate_rows": 2358720,
+      "backend": "rocksdb",
+      "checkpoint": {
+        "checkpointed_size": 14318010,
+        "id": 23,
+        "state_size": 14497673,
+        "trigger_share": 0.9980452511100497,
+        "vertices": [
+          {
+            "checkpointed_size": 823889,
+            "name": "population-baselines",
+            "state_size": 827715
+          },
+          {
+            "checkpointed_size": 13203950,
+            "name": "scorer",
+            "state_size": 13235311
+          },
+          {
+            "checkpointed_size": 234,
+            "name": "Source: aggregates",
+            "state_size": 234
+          },
+          {
+            "checkpointed_size": 289937,
+            "name": "region-grouper -> (alerts-sink: Writer -> alerts-sink: Committer, unit-status-sink: Writer -> unit-status-sink: Committer)",
+            "state_size": 434413
+          }
+        ]
+      },
+      "checkpoints_after_tasks_finish": true,
+      "cleanup_error": null,
+      "history_checkpoints": 10,
+      "history_entries": 10,
+      "host_sleep_s": 0.0,
+      "interval_ms": 5000,
+      "job_id": "762aeb098c7ed4bb899419506a27181f",
+      "job_seconds": 113.101,
+      "keys": 48,
+      "load_end": {
+        "cpu_pct_unit": "percent of one CPU",
+        "host_load_1m": 5.63,
+        "other_containers_cpu_pct": 56.4,
+        "project_containers_cpu_pct": 9.8,
+        "vm_cpus": 8
+      },
+      "load_start": {
+        "cpu_pct_unit": "percent of one CPU",
+        "host_load_1m": 4.22,
+        "other_containers_cpu_pct": 20.3,
+        "project_containers_cpu_pct": 21.8,
+        "vm_cpus": 8
+      },
+      "per_key": {
+        "other_vertices": [
+          {
+            "name": "population-baselines",
+            "state_size": 827715
+          },
+          {
+            "name": "Source: aggregates",
+            "state_size": 234
+          },
+          {
+            "name": "region-grouper -> (alerts-sink: Writer -> alerts-sink: Committer, unit-status-sink: Writer -> unit-status-sink: Committer)",
+            "state_size": 434413
+          }
+        ],
+        "per_key_bytes": 275735.6458333333,
+        "scorer_bytes": 13235311
+      },
+      "range": {
+        "checkpoints": 4,
+        "max": 14817257,
+        "min": 14497673
+      },
+      "restarts": 0,
+      "run_id": "state-rocksdb-20261112T150749",
+      "settings": 12,
+      "stall_gaps_s": [],
+      "state_backend": "EmbeddedRocksDBStateBackend"
+    }
+  ],
+  "settings": 12,
+  "spec_estimate_bytes_per_key": 604800,
+  "valid": true,
+  "world": {
+    "aggregate_rows": 2358720,
+    "amplitude": 6.0,
+    "keys": 48,
+    "keys_with_five_weeks": 46,
+    "name": "eval",
+    "seed": 7,
+    "weeks": 5
+  }
+}
