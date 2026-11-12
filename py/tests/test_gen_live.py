@@ -5,6 +5,7 @@ import pytest
 
 from tenant_baselines.gen_live import DeliveryStats, LiveGenerator, main, next_step
 from tenant_baselines.incidents import Incident
+from tenant_baselines.traffic import shape
 from tenant_baselines.world import build_world
 
 T = 1_767_182_400_000  # a fixed second
@@ -119,16 +120,21 @@ def test_tick_uses_the_key_rate():
     world = build_world("demo", 1)
     keys = [k for k in world.keys if k.tenant == "t02"]
     assert len(keys) == 2
+    t02 = next(t for t in world.tenants if t.name == "t02")
     gen = LiveGenerator(world, 3, [])
-    second = 1_767_182_400_000 + 3_600_000 * 2  # Wednesday 14:00 UTC
-    expected = gen.key_rate_rpm(keys[0], second) / 60.0
+    second = 1_767_182_400_000 + 3_600_000 * 2  # Wednesday 14:00 UTC, 15:00 in t02's zone
+    # From the tenant, not from the generator: 15:00 on a weekday is at the weekday peak.
+    assert shape(15.0, 2) == 1.0
+    expected = t02.peak_rpm * shape(15.0, 2) / 2 / 60.0
+    assert gen.key_rate_rpm(keys[0], second) / 60.0 == pytest.approx(expected)
     counts = [0, 0]
     for _ in range(2000):
         for key, _ in gen.tick(second):
             for i, k in enumerate(keys):
                 counts[i] += key == k.key
+    # about 2.41 events per tick and key: the mean of 2,000 ticks is within 1.4% at one sigma
     for c in counts:
-        assert c / 2000 == pytest.approx(expected, rel=0.10)
+        assert c / 2000 == pytest.approx(expected, rel=0.05)
 
 
 @pytest.mark.parametrize("world", ["eval", "paths"])

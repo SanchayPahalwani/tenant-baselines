@@ -77,12 +77,15 @@ def test_amplitude_sets_the_night_level(amplitude, ratio):
 def test_new_tenant_is_silent_before_week_four():
     w = build_world("eval", 7)
     r = rates(w, TrafficParams(), 7)
-    k = next(i for i, key in enumerate(w.keys) if key.tenant == "t24")
-    assert r.start[k] == 3 * 10_080
-    assert np.all(r.base[k, : r.start[k]] == 0)
-    assert np.all(r.base[k, r.start[k] :] > 0)
-    others = [i for i in range(len(w.keys)) if i != k and w.keys[i].tenant != "t24"]
+    new = [i for i, key in enumerate(w.keys) if key.tenant == "t24"]
+    assert len(new) == 2
+    for k in new:
+        assert r.start[k] == 3 * 10_080
+        assert np.all(r.base[k, : 3 * 10_080] == 0)
+        assert np.all(r.base[k, 3 * 10_080 :] > 0)
+    others = [i for i in range(len(w.keys)) if i not in new]
     assert np.all(r.start[others] == 0)
+    assert np.all(r.base[others] > 0)  # every other key has traffic from the first minute
 
 
 def test_day_factor_changes_at_local_midnight():
@@ -102,10 +105,13 @@ def test_bursts_last_five_minutes_and_do_not_stack():
     assert np.allclose(full, plain * day * trend * burst)
     assert set(np.unique(burst)) <= {1.0, 1.8}
     on = burst > 1
-    # a run of burst minutes is a whole number of 5-minute bursts
     edges = np.flatnonzero(np.diff(np.concatenate([[0], on.astype(int), [0]])))
-    runs = edges[1::2] - edges[0::2]
-    assert runs.min() >= 5 or edges[-1] >= MINUTES  # a burst may be cut by the end
+    starts, ends = edges[0::2], edges[1::2]
+    runs = ends - starts
+    # Bursts are 5 minutes; overlapping ones merge into a longer run, never a shorter one. Only
+    # a run cut by the first or the last minute of the replay may be shorter.
+    inside = (starts > 0) & (ends < MINUTES)
+    assert inside.sum() >= 25 and runs[inside].min() == 5
     assert on.sum() / MINUTES == pytest.approx(5 / 1440, rel=0.4)
 
 

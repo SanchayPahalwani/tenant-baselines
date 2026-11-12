@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -63,10 +64,14 @@ def test_volume_uses_the_mirrored_percentile_and_resolves_above_fire():
     sets = fit(a, [], 1, 1, 0, None)
     by = {s["setting"]: s for s in sets if s["detector"] == "global_static"}
     assert [s for s, _, _ in PERCENTILES] == list(by)
+    # the 5-minute sums of both keys, from each key's fifth minute on (a loop, not the code's ring)
+    sums = [float(sum(a.count[k, m - 4 : m + 1])) for k in range(2) for m in range(4, WEEK)]
     for setting, up, low in PERCENTILES:
         g = by[setting]["global"]["volume_5m"]
         assert g["resolve"] > g["fire"]
-        assert g["fire"] < 500 * 5 and low < 50 and up > 50
+        assert g["fire"] == pytest.approx(np.percentile(sums, low))
+        assert g["fire"] != pytest.approx(np.percentile(sums, up))
+        assert g["resolve"] == pytest.approx((np.median(sums) + g["fire"]) / 2)
     # lower percentile fires lower
     assert by["p99.99"]["global"]["volume_5m"]["fire"] <= by["p99"]["global"]["volume_5m"]["fire"]
 
@@ -165,3 +170,44 @@ def test_demo_thresholds_are_two_open_ended_p999_sets():
     assert all(s["valid_from_ms"] == 0 and s["valid_to_ms"] is None for s in sets)
     assert sets[1]["per_key"]
     json.dumps(sets, allow_nan=False)
+
+
+def test_a_key_needs_a_thousand_values_for_its_own_threshold():
+    """MIN_VALUES is 1,000: a key with 1,000 values of a signal gets its own level for it, one
+    with 999 falls back to the global level."""
+    for first, own in ((WEEK - 1000, True), (WEEK - 999, False)):
+        a = agg(weeks=1, first=[0, first])
+        a.errors[1, first:] = 5  # the key's own error rate differs from the pooled one
+        assert len(calibration_values(a, [], 1, 1)["error_rate"][1]) == WEEK - first
+        pk = next(s for s in fit(a, [], 1, 1, 0, None) if s["detector"] == "per_key_static")
+        mine = pk["per_key"].get("t1|r0|u0", {})
+        assert ("error_rate" in mine) is own, first
+        assert ("latency_p95" in mine) is own
+        assert "volume_5m" not in mine  # four fewer five-minute sums than minutes
+
+
+def test_the_week_four_fit_sees_weeks_one_to_three_only():
+    """No leak from the tuning and test weeks: the week-4 sets equal a fit on the first three
+    weeks alone, however different weeks 4 and 5 are."""
+    a = agg(weeks=5)
+    a.errors[:, 3 * WEEK :] = 60
+    a.count[1, 3 * WEEK :] = 400
+    a.p95[:, 3 * WEEK :] = 900.0
+    first3 = Aggregates(
+        list(a.keys),
+        a.first,
+        a.count[:, : 3 * WEEK],
+        a.errors[:, : 3 * WEEK],
+        a.p95[:, : 3 * WEEK],
+        a.epoch_ms,
+    )
+    w4 = [s for s in eval_thresholds(a, [])["sets"] if s["valid_from_ms"] == week_range(4)[0]]
+    assert w4 == fit(first3, [], 1, 3, week_range(4)[0], week_range(4)[1])
+    w5 = [s for s in eval_thresholds(a, [])["sets"] if s["valid_from_ms"] == week_range(5)[0]]
+    assert w5[0]["global"] != w4[0]["global"]  # the week-5 refit does see week 4
+
+
+def test_the_committed_demo_file_is_what_the_script_writes():
+    path = Path(__file__).resolve().parents[2] / "infra" / "flink" / "thresholds-demo.json"
+    text = json.dumps(demo_thresholds(), indent=2, sort_keys=True, allow_nan=False) + "\n"
+    assert path.read_text() == text

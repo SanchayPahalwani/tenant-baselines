@@ -28,6 +28,66 @@ def test_first_eight_tenants_are_unchanged():
     assert w.keys[19].key == "t09|ap-southeast|ap-southeast-d-t09"
 
 
+def test_demo_world_unchanged():
+    """The live demo's world (seed 1), pinned whole: milestones 1 to 3 measured on it."""
+    w = build_world("demo", 1)
+    assert [(r.name, r.utc_offset_h) for r in w.regions] == [
+        ("us-east", -5),
+        ("eu-central", 1),
+        ("ap-southeast", 8),
+    ]
+    assert [(t.name, t.home_region, t.tz_offset_h, t.peak_rpm, t.steady) for t in w.tenants] == [
+        ("t01", "us-east", -5, 197.8, False),
+        ("t02", "eu-central", 1, 289.4, False),
+        ("t03", "ap-southeast", 8, 195.4, False),
+        ("t04", "us-east", -5, 52.9, False),
+        ("t05", "eu-central", -8, 309.5, False),
+        ("t06", "ap-southeast", 8, 214.4, False),
+        ("t07", "us-east", -5, 97.6, False),
+        ("t08", "eu-central", 1, 238.8, False),
+        ("t09", "ap-southeast", 8, 60.0, True),
+        ("t10", "ap-southeast", 8, 30.0, True),
+        ("t11", "ap-southeast", 8, 30.0, True),
+    ]
+    assert all(t.start_week == 1 for t in w.tenants)
+    assert [(u.name, u.region, u.dedicated_for, u.base_latency_ms) for u in w.units] == [
+        ("us-east-s1", "us-east", None, 63.0),
+        ("us-east-s2", "us-east", None, 31.7),
+        ("eu-central-s1", "eu-central", None, 75.2),
+        ("eu-central-s2", "eu-central", None, 62.3),
+        ("ap-southeast-s1", "ap-southeast", None, 49.8),
+        ("ap-southeast-s2", "ap-southeast", None, 77.3),
+        ("us-east-d-t01", "us-east", "t01", 48.2),
+        ("eu-central-d-t02", "eu-central", "t02", 57.2),
+        ("ap-southeast-d-t09", "ap-southeast", "t09", 55.0),
+    ]
+    assert [k.key for k in w.keys] == [
+        "t01|us-east|us-east-s1",
+        "t01|us-east|us-east-d-t01",
+        "t01|eu-central|eu-central-s1",
+        "t02|eu-central|eu-central-s1",
+        "t02|eu-central|eu-central-d-t02",
+        "t03|ap-southeast|ap-southeast-s1",
+        "t03|ap-southeast|ap-southeast-s2",
+        "t04|us-east|us-east-s1",
+        "t04|us-east|us-east-s2",
+        "t04|eu-central|eu-central-s1",
+        "t05|eu-central|eu-central-s1",
+        "t05|eu-central|eu-central-s2",
+        "t06|ap-southeast|ap-southeast-s1",
+        "t06|ap-southeast|ap-southeast-s2",
+        "t07|us-east|us-east-s1",
+        "t07|us-east|us-east-s2",
+        "t08|eu-central|eu-central-s1",
+        "t08|eu-central|eu-central-s2",
+        "t09|ap-southeast|ap-southeast-s1",
+        "t09|ap-southeast|ap-southeast-d-t09",
+        "t10|ap-southeast|ap-southeast-s1",
+        "t11|ap-southeast|ap-southeast-s1",
+    ]
+    assert all(k.peak_rpm is None for k in w.keys)  # the tenant's peak is split over its keys
+
+
 def test_key_string_and_offsets():
     w = build_world("demo", 1)
     k = w.keys[0]

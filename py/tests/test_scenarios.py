@@ -4,6 +4,7 @@ from functools import cache
 import numpy as np
 import pytest
 
+from tenant_baselines import scenarios as scenarios_mod
 from tenant_baselines.evalmodel import (
     EPOCH_MS,
     MINUTE_MS,
@@ -244,6 +245,83 @@ def test_eligibility_holds():
             assert s.keys == want
             assert not s.should_page and s.expected_signal is None
     assert seen == set(LENGTHS)
+
+
+# Friday and Saturday of week 4: weekday and weekend, every local hour of every zone.
+SLICE = range(3 * 10_080 + 4 * 1440, 3 * 10_080 + 6 * 1440)
+
+
+def test_eligibility_masks_equal_an_independent_loop():
+    """Every subject and start minute of SLICE: the masks equal a plain loop over the rules of
+    spec 5.4, both ways. The test above checks the placed scenarios only, so it would pass with
+    a mask that is too strict."""
+    world, r = world_and_rates()
+    ctx = scenarios_mod._Context(world, r)
+    tz = {t.name: t.tz_offset_h for t in world.tenants}
+    dedicated = {u.name for u in world.units if u.dedicated_for}
+    keys = world.keys
+    lo, hi = SLICE.start - 4, SLICE.stop + 420
+    base = {k: r.base[k, lo:hi].tolist() for k in range(len(keys))}
+
+    def b(k: int, m: int) -> float:
+        return base[k][m - lo]
+
+    def local(k: int, m: int) -> tuple[int, int]:
+        loc = m + tz[keys[k].tenant] * 60
+        return loc % 1440, (loc // 1440) % 7
+
+    def working(k: int, s: int, length: int) -> bool:
+        md, wd = local(k, s)
+        return wd < 5 and md >= 540 and md + length <= 1020
+
+    def night(k: int, m: int) -> bool:
+        md, wd = local(k, m)
+        return md >= 1200 or md < 420 or wd >= 5
+
+    def sum5(k: int, m: int) -> float:
+        return sum(b(k, j) for j in range(m - 4, m + 1))
+
+    def creep(ks: tuple[int, ...], s: int) -> bool:
+        cells = sum(b(k, m) >= 20 for k in ks for m in range(s, s + 420))
+        return 2 * cells > len(ks) * 420
+
+    rules = {
+        "drop_work": lambda ks, s: working(ks[0], s, 60),
+        "drop_night": lambda ks, s: all(
+            night(ks[0], m) and sum5(ks[0], m) >= 15 for m in range(s, s + 60)
+        ),
+        "latency_creep": creep,
+        "offhours_latency": lambda ks, s: (
+            local(ks[0], s)[0] + 30 <= 360 and all(b(ks[0], m) >= 25 for m in range(s, s + 30))
+        ),
+        "error_burst": lambda ks, s: all(b(ks[0], m) >= 30 for m in range(s, s + 20)),
+        "launch_surge": lambda ks, s: working(ks[0], s, 180),
+    }
+    by_unit = [
+        tuple(i for i, k in enumerate(keys) if k.unit == u.name)
+        for u in world.units
+        if any(k.unit == u.name for k in keys)
+    ]
+    by_tenant = [
+        tuple(i for i, k in enumerate(keys) if k.tenant == name)
+        for name in sorted({k.tenant for k in keys})
+    ]
+    subjects = {
+        "drop_work": [(i,) for i, k in enumerate(keys) if k.unit in dedicated],
+        "drop_night": [(i,) for i, k in enumerate(keys) if k.unit in dedicated],
+        "latency_creep": by_unit,
+        "offhours_latency": [(i,) for i in range(len(keys))],
+        "error_burst": [(i,) for i, k in enumerate(keys) if k.unit not in dedicated],
+        "launch_surge": by_tenant,
+    }
+    for kind, rule in rules.items():
+        got = ctx.subjects(kind)
+        assert got.keys == subjects[kind], kind
+        mask = got.valid[:, SLICE.start : SLICE.stop]
+        want = np.array([[rule(ks, s) for s in SLICE] for ks in got.keys])
+        diff = np.argwhere(mask != want)
+        assert len(diff) == 0, (kind, [(got.keys[i], SLICE.start + j) for i, j in diff[:5]])
+        assert want.any() and not want.all(), kind  # the slice has both answers
 
 
 def test_scenarios_stay_inside_their_week_and_apart():

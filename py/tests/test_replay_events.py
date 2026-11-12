@@ -126,3 +126,22 @@ def test_failed_count_per_minute_is_the_drawn_one(setup):
 
 def test_partition_rule():
     assert [partition_of(k, 3) for k in range(5)] == [0, 1, 2, 0, 1]
+
+
+def test_eight_partitions_in_one_default_chunk(setup):
+    """check-paths' layout: 8 partitions, the default chunk (a week, so one chunk for a day)."""
+    world, draws = setup
+    seen = defaultdict(list)
+    got = defaultdict(list)
+    for p, key, payload in partition_events(world, list(draws.values()), EPOCH_MS, SEED, 8):
+        e = orjson.loads(payload)
+        seen[p].append(e["ts"])
+        got[key].append((e["ts"], e["lat"], e["ok"]))
+        assert p == partition_of(next(i for i, k in enumerate(world.keys) if k.key == key), 8)
+    assert len(world.keys) == 10 and set(seen) == set(range(8))  # keys 8 and 9 share 0 and 1
+    for ts in seen.values():
+        assert ts == sorted(ts)
+    for k, d in draws.items():
+        ts, latency, ok = key_events(d, EPOCH_MS, SEED, k)
+        want = sorted(zip(ts.tolist(), latency.tolist(), ok.tolist(), strict=True))
+        assert sorted(got[world.keys[k].key]) == want
