@@ -88,7 +88,22 @@ results:
 
 # The official runs (synthetic data), once per (seed, amplitude), then docs/results.md. The jar is
 # the one built at the freeze, so `up` and not `jar`. Resumes after an interruption.
+# `make eval` ran the 15 official runs. Each pair runs once, so it now only renders
+# `docs/results.md`.
 # EVAL_ARGS="--only-seed 4101 --only-amplitude 6 --rerun-reason 'bug: ...'" repeats one run.
+#
+# Re-running after a bug fix (spec 5.3). A bug is code that disagrees with the spec; anything
+# else is a setting change and may not be re-run.
+#   1. Fix the bug and commit the fix.
+#   2. If the Java code changed: `make jar`, copy flink-job/target/tenant-baselines-job.jar to
+#      data/frozen/<its sha256>.jar, set `jar_sha256` in eval/freeze.json to that hash, and
+#      commit. data/frozen/ is not in git: keep it, with the old copy beside the new one.
+#   3. Re-run every pair, one invocation each (15 in all), for example
+#      make eval EVAL_ARGS="--only-seed 4101 --only-amplitude 6 --rerun-reason 'bug: <what>'"
+#      Each writes a run-log line before it runs and moves the pair's old summary to
+#      docs/results/superseded/ once it finishes.
+#   4. `make results` renders docs/results.md. It refuses summaries of two commits, so every
+#      pair must have been re-run.
 # KEEP_AWAKE=1 wraps the driver in caffeinate; the default touches nothing about sleep.
 KEEP_AWAKE ?= 0
 ifeq ($(KEEP_AWAKE),1)

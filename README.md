@@ -36,7 +36,7 @@ The eval compares three detectors on labelled, synthetic replays: the seasonal b
 
 **What the result shows.** All traffic is synthetic, and it follows working hours because the generator says so. The eval tests whether this implementation delivers the benefit when that assumption holds, and how the benefit changes as seasonality weakens. It is not evidence about any real fleet, and it makes no claim of production use.
 
-At the main amplitude (6:1), pooled over the 5 seeds (copied from [docs/results.md](docs/results.md)):
+At the main amplitude (6:1), pooled over the 5 seeds (copied from [docs/results.md](docs/results.md); `py/tests/test_docs.py` checks the copy and every figure below against the records):
 
 | Family | Expected-signal recall, pooled k/n (interval) | False pages per day, pooled |
 |---|---|---|
@@ -44,9 +44,9 @@ At the main amplitude (6:1), pooled over the 5 seeds (copied from [docs/results.
 | per key static | 38/50 (0.63–0.86) | 21.20 |
 | global static | 31/50 (0.48–0.74) | 12.69 |
 
-At 6:1 the seasonal detector found more scenarios than either static detector and paged less than both. The recall intervals of seasonal and per key static overlap, so with 5 seeds that recall gap is not settled. At 1.5:1 the seasonal detector found every scenario (50/50), but the global static detector paged less (12.46 against 13.63 false pages per day, pooled). The full tables, the sweep, every setting and the per-scenario results are in [docs/results.md](docs/results.md).
+At 6:1 the seasonal detector found more scenarios than either static detector. Pooled over the seeds it had fewer false pages per day than both (9.63 against 21.20 and 12.69). Per seed, the global static range (5.29–17.71) overlaps the seasonal range (7.86–11.14), so the gap to global static is not settled with 5 seeds. The recall intervals of seasonal and per key static overlap, so with 5 seeds that recall gap is not settled. Most pages are false in every family: at the selected settings, 73 of 410 pages matched a scenario (seasonal), 60 of 802 (per key static) and 51 of 495 (global static). The traffic model's unlabelled bursts and per-day level factors (spec 5.2) are the expected cause; this eval does not measure the split. At 1.5:1 the seasonal detector found every scenario (50/50), but the global static detector had fewer false pages per day (12.46 against 13.63, pooled). The full tables, the sweep, every setting and the per-scenario results are in [docs/results.md](docs/results.md).
 
-`make eval` runs the 15 official runs (5 seeds at 3 amplitudes) and renders `docs/results.md`. It took 40.5 minutes on this machine (an Apple M3 Pro laptop), from the first run's start to the last run's end in `docs/results/official-runs.jsonl`. `make check-paths` sends one synthetic world through the job as events and as pre-built minute aggregates. At the freeze commit both alert logs and both sets of aggregates were identical ([docs/results/check-paths.json](docs/results/check-paths.json)). It checks that the two paths agree, not that the detectors are right.
+`make eval` ran the 15 official runs. Each pair runs once, so it now only renders `docs/results.md`. The runs took 40.5 minutes on this machine (an Apple M3 Pro laptop), from the first run's start to the last run's end in `docs/results/official-runs.jsonl`. A re-run after a bug fix (spec 5.3) follows the steps in the comment above `eval` in the `Makefile`. `make check-paths` sends one synthetic world through the job as events and as pre-built minute aggregates. At commit `49c7b72`, with a jar built from the same source as the frozen one (`flink-job/pom.xml`, `flink-job/src/main` and `shared/` are unchanged since 9f25a23), both alert logs and both sets of aggregates were identical ([docs/results/check-paths.json](docs/results/check-paths.json)). It checks that the two paths agree, not that the detectors are right.
 
 The plan for this milestone is [docs/superpowers/plans/2026-11-12-m4-eval.md](docs/superpowers/plans/2026-11-12-m4-eval.md).
 
