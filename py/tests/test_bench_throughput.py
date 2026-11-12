@@ -137,7 +137,7 @@ def sampled(k, count, stale=False, read_s=1.0, par=2, **extra):
     v = {"busy_ms": 1000 * k, "backpressured_ms": 0, "idle_ms": 0, "parallelism": par}
     return {
         "t": 1000.0 + 12 * k, "mono": 5.0 + 12 * k, "count": count, "stale": stale,
-        "clock_ms": 12_000.0 * k * par, "read_s": read_s, "reread": False,
+        "clock_ms": 12_000.0 * k * par, "read_s": read_s, "reread": False, "slept": 0.0,
         "vertices": {"Source: events": v, "drop-ticks": dict(v)}, **extra,
     }  # fmt: skip
 
@@ -374,3 +374,10 @@ def test_power_at_the_end_of_a_run_without_on_battery():
     ]
     assert bt.power_reasons(runs, on_battery=True) == []
     assert bt.power_reasons([{"run_id": "a", "power_end": None}], on_battery=False) == []
+
+
+def test_a_sample_without_a_sleep_reading_is_refused():
+    s = [sampled(k, k * 1_000_000) for k in range(3)]
+    del s[1]["slept"]
+    with pytest.raises(ValueError, match=r"samples \[1\] carry no sleep-counter reading"):
+        bt._host_sleep(s)

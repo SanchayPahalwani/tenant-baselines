@@ -219,13 +219,18 @@ def test_clock_read_failure_names_the_output(bad):
     assert isinstance(e.value, PreflightFailed) and repr(bad) in str(e.value)
 
 
-def test_gaps_finds_a_host_sleep():
+def test_gaps_finds_a_stall():
     assert bench_env.gaps([0, 12, 24, 300, 312]) == [276]
     assert bench_env.gaps([0, 60, 120]) == []
 
 
 def fake_time(**clocks):
-    names = {"CLOCK_MONOTONIC": 1, "CLOCK_UPTIME_RAW": 2, "CLOCK_BOOTTIME": 3}
+    names = {
+        "CLOCK_MONOTONIC": 1,
+        "CLOCK_UPTIME_RAW": 2,
+        "CLOCK_BOOTTIME": 3,
+        "CLOCK_MONOTONIC_RAW": 4,
+    }
     attrs = {k: v for k, v in names.items() if k in clocks}
     values = {names[k]: v for k, v in clocks.items() if k in names}
     return SimpleNamespace(
@@ -235,7 +240,11 @@ def fake_time(**clocks):
 
 def test_slept_s_picks_the_clock_pair_of_the_platform():
     mac = fake_time(CLOCK_MONOTONIC=3_200_000.0, CLOCK_UPTIME_RAW=1_700_000.0)
-    assert bench_env.slept_s(mac, "darwin") == 1_500_000.0
+    assert bench_env.slept_s(mac, "darwin") == 1_500_000.0  # no raw clock: the slewed one
+    raw = fake_time(
+        CLOCK_MONOTONIC=3_199_980.0, CLOCK_MONOTONIC_RAW=3_200_000.0, CLOCK_UPTIME_RAW=1_700_000.0
+    )
+    assert bench_env.slept_s(raw, "darwin") == 1_500_000.0  # the raw pair, not the slewed one
     linux = fake_time(CLOCK_MONOTONIC=500.0, CLOCK_BOOTTIME=530.0)
     assert bench_env.slept_s(linux, "linux") == 30.0
     plain = fake_time()  # no sleep-aware clock: wall clock minus monotonic

@@ -387,6 +387,7 @@ def _execute(args, run_id: str, run_dir: Path, env: dict, before: dict, polls: P
             raise RunFailed(f"could not stop the generator: {stopped.stderr.strip()}")
         bench_flink.cancel_and_clean(job_id, run_id)
         after = bench_env.vm_clock_offset()
+        polls.tick(time)  # the sleep window covers the end phase too
         load_end = bench_throughput._load()
         power_end = bench_env._power_line(run)
     except BaseException:

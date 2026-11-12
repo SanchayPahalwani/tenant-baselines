@@ -212,13 +212,14 @@ def slept_s(time_=time, platform: str = sys.platform) -> float:
     """The machine's cumulative sleep time in seconds, from the OS.
 
     `time.monotonic()` stops while a Mac sleeps, so its intervals cannot show a lid-close sleep.
-    macOS: CLOCK_MONOTONIC counts sleep and CLOCK_UPTIME_RAW does not. Linux: CLOCK_BOOTTIME
-    counts it and CLOCK_MONOTONIC does not. Elsewhere: the wall clock minus the monotonic clock.
+    macOS: CLOCK_MONOTONIC_RAW counts sleep and CLOCK_UPTIME_RAW does not; both count raw ticks,
+    so the difference is the sleep alone (CLOCK_MONOTONIC is frequency-adjusted, so it would add
+    the clock's slew; it is the fallback when the raw clock is missing). Linux: CLOCK_BOOTTIME
+    counts sleep and CLOCK_MONOTONIC does not. Elsewhere: the wall clock minus the monotonic clock.
     """
     if hasattr(time_, "CLOCK_UPTIME_RAW") and platform == "darwin":
-        return time_.clock_gettime(time_.CLOCK_MONOTONIC) - time_.clock_gettime(
-            time_.CLOCK_UPTIME_RAW
-        )
+        counting = getattr(time_, "CLOCK_MONOTONIC_RAW", time_.CLOCK_MONOTONIC)
+        return time_.clock_gettime(counting) - time_.clock_gettime(time_.CLOCK_UPTIME_RAW)
     if hasattr(time_, "CLOCK_BOOTTIME") and platform.startswith("linux"):
         return time_.clock_gettime(time_.CLOCK_BOOTTIME) - time_.clock_gettime(
             time_.CLOCK_MONOTONIC
@@ -227,7 +228,7 @@ def slept_s(time_=time, platform: str = sys.platform) -> float:
 
 
 def host_sleep_s(slept: list[float]) -> float:
-    """The sleep a run saw: the counter's last reading minus its first."""
+    """The sleep a run saw: the counter's highest reading minus its lowest (it only rises)."""
     return max(slept) - min(slept) if slept else 0.0
 
 

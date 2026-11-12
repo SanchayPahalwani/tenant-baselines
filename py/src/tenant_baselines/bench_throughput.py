@@ -430,7 +430,10 @@ def _gaps(samples: list[dict]) -> list[float]:
 
 def _host_sleep(samples: list[dict]) -> float:
     """The OS sleep counter's rise over the run's samples (the monotonic clock stops in a sleep)."""
-    return round(bench_env.host_sleep_s([s["slept"] for s in samples if "slept" in s]), 1)
+    missing = [i for i, s in enumerate(samples) if "slept" not in s]
+    if missing:
+        raise ValueError(f"samples {missing} carry no sleep-counter reading")
+    return round(bench_env.host_sleep_s([s["slept"] for s in samples]), 1)
 
 
 def _source_clock_rate(a: dict, b: dict, name: str = "Source: events") -> float:
