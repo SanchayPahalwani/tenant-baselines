@@ -58,7 +58,10 @@ class ScoresTest {
     assertThat(Scores.score(Signal.ERROR_RATE, nan, 1, 1)).isNaN();
     assertThat(Scores.score(Signal.ERROR_RATE, 1, nan, 1)).isNaN();
     assertThat(Scores.score(Signal.ERROR_RATE, 1, 1, nan)).isNaN();
-    assertThat(Scores.score(Signal.ERROR_RATE, 1, 1, 0)).isNaN();
+    // A zero or negative spread is unscored too. 2 - 1 over 0 would be +Infinity, not NaN, so
+    // only the guard makes these NaN.
+    assertThat(Scores.score(Signal.ERROR_RATE, 2, 1, 0)).isNaN();
+    assertThat(Scores.score(Signal.ERROR_RATE, 2, 1, -1)).isNaN();
     assertThat(Scores.judge(nan, 4, 2)).isEqualTo(Judgement.UNSCORED);
   }
 

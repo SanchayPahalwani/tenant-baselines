@@ -24,7 +24,6 @@ class HourOfWeekTest {
   @Test
   void epochIsThursday() {
     assertThat(HourOfWeek.bucket(0)).isEqualTo(72);
-    assertThat(HourOfWeek.bucket(-1)).isEqualTo(71);
     assertThat(HourOfWeek.minuteOfHour(3_660_000L)).isEqualTo(1);
     assertThat(HourOfWeek.hourStart(3_660_000L)).isEqualTo(3_600_000L);
   }

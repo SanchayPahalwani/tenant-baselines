@@ -30,11 +30,66 @@ class ThresholdsFileTest {
         }
       }
       assertThat(global.perKey()).isEmpty();
-      assertThat(perKey.perKey()).isNotEmpty();
-      String demoKey = perKey.perKey().keySet().iterator().next();
+      String demoKey = "t01|us-east|us-east-d-t01"; // the demo's dedicated unit of t01
+      assertThat(perKey.perKey()).containsKey(demoKey);
       assertThat(perKey.levelFor(demoKey, Signal.ERROR_RATE))
           .isNotEqualTo(perKey.levelFor("no-such-key", Signal.ERROR_RATE));
     }
+  }
+
+  private static final long WEEK_4_MS = 1_769_385_600_000L;
+  private static final long WEEK_5_MS = 1_769_990_400_000L;
+  private static final long REPLAY_END_MS = 1_770_595_200_000L;
+
+  /**
+   * The file `eval_run.prepare` writes, here for dev seed 7 at 6:1 (synthetic): both static
+   * detectors at four settings, fitted on weeks 1-3 for week 4 and on weeks 1-4 for week 5.
+   */
+  @Test
+  void loadsAnEvalWorldFile() throws Exception {
+    try (InputStream in = getClass().getResourceAsStream("/thresholds-eval-dev-s7-a6.json")) {
+      List<ThresholdSet> sets = ThresholdsFile.load(in);
+      assertThat(sets).hasSize(16);
+      for (ThresholdSet s : sets) {
+        assertThat(s.detector()).isIn("global_static", "per_key_static");
+        assertThat(s.setting()).isIn("p99", "p99.9", "p99.97", "p99.99");
+        assertThat(s.validFromMs()).isIn(WEEK_4_MS, WEEK_5_MS);
+        long end = s.validFromMs() == WEEK_4_MS ? WEEK_5_MS : REPLAY_END_MS;
+        assertThat(s.validToMs()).isEqualTo(end);
+        assertThat(s.global()).containsOnlyKeys(Signal.values());
+        if (s.detector().equals("global_static")) {
+          assertThat(s.perKey()).isEmpty();
+        } else {
+          // t24 starts in week 4: no values of its own for the week-4 fit, a week of them later
+          assertThat(s.perKey()).hasSize(s.validFromMs() == WEEK_4_MS ? 46 : 48);
+        }
+      }
+      ThresholdSet week4 = find(sets, "per_key_static", "p99.9", WEEK_4_MS);
+      ThresholdSet week5 = find(sets, "per_key_static", "p99.9", WEEK_5_MS);
+      String newKey = "t24|ap-southeast|ap-southeast-s1";
+      assertThat(week4.levelFor(newKey, Signal.ERROR_RATE))
+          .isEqualTo(week4.global().get(Signal.ERROR_RATE));
+      assertThat(week5.perKey().get(newKey)).containsOnlyKeys(Signal.values());
+      String oldKey = "t01|us-east|us-east-d-t01";
+      assertThat(week4.levelFor(oldKey, Signal.ERROR_RATE))
+          .isNotEqualTo(week4.global().get(Signal.ERROR_RATE));
+      for (ThresholdSet s : sets) {
+        assertThat(s.activeAt(WEEK_4_MS)).isEqualTo(s.validFromMs() == WEEK_4_MS);
+        assertThat(s.activeAt(WEEK_5_MS)).isEqualTo(s.validFromMs() == WEEK_5_MS);
+      }
+    }
+  }
+
+  private static ThresholdSet find(
+      List<ThresholdSet> sets, String detector, String setting, long validFromMs) {
+    return sets.stream()
+        .filter(
+            s ->
+                s.detector().equals(detector)
+                    && s.setting().equals(setting)
+                    && s.validFromMs() == validFromMs)
+        .findFirst()
+        .orElseThrow();
   }
 
   private static final String G_OK =

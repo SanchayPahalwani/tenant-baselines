@@ -556,22 +556,30 @@ class RegionGrouperTest {
     }
   }
 
+  /**
+   * A determinism pin: the candidates of one minute are sorted before they apply, so the output
+   * does not depend on the order they arrive in. The input, a resolve and a new firing of one
+   * alert family in one minute, is one the Scorer cannot produce (a firing needs three breaching
+   * minutes); it only makes the two arrival orders differ.
+   */
   @Test
-  void candidatesOfOneMinuteAreSortedBeforeTheyApply() throws Exception {
+  void candidatesOfOneMinuteGiveTheSameOutputInEitherArrivalOrder() throws Exception {
     List<String> first = resolvedAndFiringArrivingAs(true);
     List<String> second = resolvedAndFiringArrivingAs(false);
 
     assertThat(second).isEqualTo(first);
-    // Sorted, the firing candidate comes before the resolved one ("firing" < "resolved"), so the
-    // resolve ends the held alert: nothing is released, not even at the hold's end (minute 63).
-    // Applied in arrival order, resolved-first would pass the resolve and release a firing alert.
+    // What sorting gives: the firing candidate comes before the resolved one ("firing" <
+    // "resolved"), so the resolve ends the held alert and nothing is released, not even at the
+    // hold's end (minute 63). Applied in arrival order, resolved-first would release a firing.
     assertThat(first).isEmpty();
   }
 
   @Test
   void lastActiveKeyLeavingEmptiesTheDenominator() throws Exception {
-    // Five warm tenants; d and e are warm at minute 0 and x (d) goes silent so its hour sum
-    // drops to 0 at minute 60. a and b fire at 60: their holds end at minute 62.
+    // Five active tenants: a, b and c from minute 59, d and e from minute 0. a and b fire at 60,
+    // so their holds end at minute 62; the share is counted then. d's only key reports 0
+    // requests at minute 60, so its hour sum drops to 0 and d leaves the count. When the holds
+    // end, 2 of the 4 active tenants alert: half, and one regional alert forms.
     try (var h = harness()) {
       warm(h, "a", "b", "c");
       warmAt(h, 0, "d", "e");
@@ -586,6 +594,8 @@ class RegionGrouperTest {
           .extracting(AlertEvent::state, AlertEvent::tenant)
           .containsExactlyInAnyOrder(tuple("absorbed", "a"), tuple("absorbed", "b"));
     }
+    // c, d and e all go silent: when the holds end only a and b are active, under the minimum
+    // of three active tenants, so both tenant alerts page.
     try (var h = harness()) {
       warm(h, "a", "b");
       warmAt(h, 0, "c", "d", "e");
