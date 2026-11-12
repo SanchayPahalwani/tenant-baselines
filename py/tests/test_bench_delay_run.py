@@ -103,13 +103,18 @@ def fake_sample_fn(clock, lags, par=2):
 
     def fn(job_id, offset_s, source, previous=None, **kw):
         v = lags(clock.host) if callable(lags) else lags.pop(0)
+        stale = v == "stale" or isinstance(v, tuple)  # ("stale", lag): an old, numeric lag
+        if v == "stale":
+            v = 900.0
+        elif isinstance(v, tuple):
+            v = v[1]
         clock.host += 3.0
         clock.mono += 3.0
         return {
             "t": clock.host - 3.0,
-            "lag_s": None if v in ("stale", None) else v,
+            "lag_s": v,
             "clock_ms": (clock.host - T0 / 1000) * 1000 * par,
-            "stale": v == "stale",
+            "stale": stale,
             "read_s": 3.0,
             "reread": False,
         }
@@ -161,6 +166,21 @@ def test_catch_up_returns_the_first_fresh_lag_below_60():
     assert all(s == 10 for s in clock.slept)
 
 
+def test_catch_up_does_not_accept_a_stale_read_below_60():
+    clock = Clock()
+    r = reader_for(clock, [("stale", 30.0), ("stale", 20.0), 45.0])
+    got = bdr.wait_caught_up(r, T0 + 600_000, 0.0, polls=[], check=lambda: None, time_=clock)
+    assert got == 45.0 and len(r.samples) == 3
+
+
+def test_catch_up_failure_does_not_print_none():
+    clock = Clock()
+    r = reader_for(clock, lambda t: None)
+    with pytest.raises(RunFailed, match="no fresh lag read") as e:
+        bdr.wait_caught_up(r, T0 + 120_000, 0.0, polls=[], check=lambda: None, time_=clock)
+    assert "None" not in str(e.value)
+
+
 def test_catch_up_fails_one_minute_before_the_first_incident():
     clock = Clock()
     r = reader_for(clock, lambda t: 500.0)
@@ -187,7 +207,7 @@ def test_watch_polls_every_30_s_samples_every_second_poll_and_checks_the_generat
     polls, checks = [], []
     bdr.watch(r, T0 + 300_000, 0.0, polls=polls, check=lambda: checks.append(1), time_=clock)
     assert len(checks) == len(polls) >= 9
-    assert len(r.samples) == (len(polls) + 1) // 2
+    assert len(r.samples) == len(polls) // 2  # the first poll only waits
     gaps = [b - a for a, b in zip(polls, polls[1:], strict=False)]
     assert all(29.9 < g < 34 for g in gaps)  # a sampling poll runs a few seconds long
     assert clock.host * 1000 >= T0 + 300_000
@@ -205,7 +225,7 @@ def test_watch_fails_when_the_generator_exits():
 
     with pytest.raises(RunFailed, match="exited"):
         bdr.watch(r, T0 + 900_000, 0.0, polls=[], check=check, time_=clock)
-    assert len(r.samples) == 1
+    assert len(r.samples) == 1  # the second poll's
 
 
 def test_lag_block_keeps_samples_from_the_first_incident_and_counts_the_dropped():
@@ -223,6 +243,17 @@ def test_lag_block_keeps_samples_from_the_first_incident_and_counts_the_dropped(
     assert block["at_first_incident_s"] == 25.0
 
 
+def test_a_stale_read_is_out_of_the_summary_and_the_first_incident_lag():
+    clock = Clock()
+    r = reader_for(clock, [("stale", 900.0), 25.0, 23.0])
+    for _ in range(3):
+        r.read()
+    block = r.block(T0, caught_up_lag=5.0)
+    assert block["summary"] == {"samples": 2, "min": 23.0, "median": 24.0, "max": 25.0}
+    assert block["at_first_incident_s"] == 25.0
+    assert block["stale_lag_samples"] == 1 and block["samples_from_first_incident"] == 3
+
+
 def test_lag_block_has_no_first_incident_lag_without_a_kept_sample():
     clock = Clock()
     r = reader_for(clock, [900.0])
@@ -231,10 +262,23 @@ def test_lag_block_has_no_first_incident_lag_without_a_kept_sample():
     assert block["summary"]["samples"] == 0 and block["at_first_incident_s"] is None
 
 
-def test_the_lag_at_the_first_incident_is_a_reason_when_not_near_the_bound():
-    assert bdr.lag_reasons({"at_first_incident_s": 30.0}) == []
-    assert bdr.lag_reasons({"at_first_incident_s": None}) == []
-    assert len(bdr.lag_reasons({"at_first_incident_s": 61.0})) == 1
+def lagb(at=22.0, kept=10, stale=0, total=None):
+    return {
+        "at_first_incident_s": at,
+        "summary": {"samples": kept},
+        "stale_lag_samples": stale,
+        "samples_from_first_incident": total if total is not None else kept + stale,
+    }
+
+
+def test_lag_reasons_boundary_and_floor():
+    assert bdr.lag_reasons(lagb(59.9)) == []
+    assert len(bdr.lag_reasons(lagb(60.0))) == 1  # 60.0 is not under 60
+    assert bdr.lag_reasons(lagb(at=None, kept=0, total=0))[0].startswith("no watermark-lag")
+    assert bdr.lag_reasons(lagb(kept=4, stale=5)) == [
+        "more than half of the lag samples from the first incident on were stale"
+    ]
+    assert bdr.lag_reasons(lagb(kept=5, stale=5)) == []
 
 
 # ---- the whole driver, on fakes ----
@@ -302,7 +346,12 @@ def build_harness(monkeypatch, tmp_path, *, gen_exits_at=None, lag=lambda t: 22.
                 "event_time_ms": ev, "emitted_at_ms": ev + 1000, "run_id": h.run_id(),
             }  # fmt: skip
             rows.append((ev + 25_000, row))
-            rows.append((ev + 26_000, {**row, "run_id": "someone-else"}))
+        for inc in state["labels"]["incidents"]:
+            ev = inc["start_ms"] + 240_000
+            other = {"alert_id": f"a{inc['id']}", "state": "firing", "detector": "seasonal"}
+            other |= {"setting": "k4", "scope": "tenant", "key": inc["key"], "run_id": "other"}
+            other |= {"signal": inc["signal"], "event_time_ms": ev, "emitted_at_ms": ev + 1}
+            rows.append((ev + 1_000, other))  # earlier than this run's row
         return rows
 
     monkeypatch.setattr(bdr.bench_env, "read_stamped", read_stamped)
@@ -343,6 +392,7 @@ def test_a_clean_run_writes_a_valid_result_from_this_runs_rows_only(monkeypatch,
     assert r["late_events"] == 0 and r["restarts"] == 0 and r["host_sleep_gaps_s"] == []
     assert r["power_end"] == AC and r["load_start"] and r["load_end"]
     assert (d / "samples-lag.json").is_file() and (d / "labels.json").is_file()
+    assert (d / "generator.log").is_file()
     assert h.cancelled == [("j" * 32, r["run_id"])]
     names = [c[1] for c in h.cmds if c[0] == "docker" and len(c) > 1]
     assert names.index("stop") < names.index("logs") < names.index("rm")
@@ -352,6 +402,7 @@ def test_the_rows_of_other_runs_are_not_measured(monkeypatch, tmp_path):
     h = build_harness(monkeypatch, tmp_path, matched=2)
     r, _ = run_main(h, tmp_path)
     assert r["headline"]["matched"] == 2 and r["headline"]["incidents"] == 3
+    assert r["headline"]["pipeline_delay_s"]["p50"] == 25.0  # not the other run's 1.0
     assert r["valid"] is False
     assert "fewer than 90% of the incidents were matched" in r["invalid_reasons"]
 
@@ -420,3 +471,182 @@ def test_a_failure_before_the_job_cancels_only_the_generator(monkeypatch, tmp_pa
         bdr.main(["--incidents", "3", "--pilot"])
     assert h.cancelled == []
     assert any(c[:2] == ["docker", "rm"] for c in h.cmds)
+
+
+def test_the_generator_log_is_saved_before_the_container_is_removed(monkeypatch, tmp_path):
+    h = build_harness(monkeypatch, tmp_path, logs="line one\nline two\n")
+    _, d = run_main(h, tmp_path)
+    assert (d / "generator.log").read_text() == "line one\nline two\n"
+    docker = [c[1] for c in h.cmds if c[0] == "docker" and len(c) > 1]
+    assert docker.index("logs") < docker.index("rm")
+
+
+def test_the_generator_log_is_saved_on_a_failure_too(monkeypatch, tmp_path):
+    build_harness(monkeypatch, tmp_path, gen_exits_at=10, logs="it died\n")
+    with pytest.raises(RunFailed):
+        bdr.main(["--incidents", "3", "--pilot"])
+    d = next((tmp_path / "bench").iterdir())
+    assert (d / "generator.log").read_text() == "it died\n"
+
+
+def test_polls_are_recorded_after_submit_and_after_the_wait_for_running(monkeypatch, tmp_path):
+    h = build_harness(monkeypatch, tmp_path)
+    marks = []
+
+    def slow_submit(run_id, topic):
+        h.clock.sleep(40)
+        marks.append(h.clock.mono)
+        return "j" * 32
+
+    def slow_wait(job_id):
+        h.clock.sleep(30)
+        marks.append(h.clock.mono)
+
+    monkeypatch.setattr(bdr.bench_flink, "submit", slow_submit)
+    monkeypatch.setattr(bdr.bench_throughput, "_wait_running", slow_wait)
+    _, d = run_main(h, tmp_path)
+    polls = json.loads((d / "samples-lag.json").read_text())["polls"]
+    assert all(m in polls for m in marks) and len(marks) == 2
+
+
+def test_a_run_whose_watch_is_all_stale_is_invalid(monkeypatch, tmp_path):
+    first_watch = T0 / 1000 + 280
+    h = build_harness(monkeypatch, tmp_path, lag=lambda t: "stale" if t > first_watch else 22.0)
+    r, _ = run_main(h, tmp_path)
+    assert r["valid"] is False
+    assert any("no watermark-lag sample" in x for x in r["invalid_reasons"])
+    assert r["lag_check"]["stale_lag_samples"] >= 1
+
+
+def test_ctrl_c_in_the_watch_cancels_removes_and_keeps_the_samples(monkeypatch, tmp_path):
+    h = build_harness(monkeypatch, tmp_path)
+    n = []
+    real = bdr.bench_env._sh
+
+    def sh(cmd):
+        if cmd[:2] == ["docker", "inspect"]:
+            n.append(1)
+            if len(n) == 12:
+                raise KeyboardInterrupt
+        return real(cmd)
+
+    monkeypatch.setattr(bdr.bench_env, "_sh", sh)
+    with pytest.raises(KeyboardInterrupt):
+        bdr.main(["--incidents", "3", "--pilot"])
+    d = next((tmp_path / "bench").iterdir())
+    assert h.cancelled and any(c[:2] == ["docker", "rm"] for c in h.cmds)
+    assert json.loads((d / "samples-lag.json").read_text())["lag"]
+    assert (d / "generator.log").is_file()
+
+
+def overview(h, name_of_run, state="RUNNING"):
+    jid = "a" * 32
+
+    def fake_json(get, path):
+        if path == "/jobs/overview":
+            return {"jobs": [{"jid": jid, "name": name_of_run(), "state": state}]}
+        if path == f"/jobs/{jid}/config":
+            return {"execution-config": {"user-config": {}}}
+        raise AssertionError(path)
+
+    return jid, fake_json
+
+
+def test_ctrl_c_during_submit_cancels_the_job_that_carries_this_run_id(monkeypatch, tmp_path):
+    h = build_harness(monkeypatch, tmp_path)
+    jid, fake_json = overview(h, lambda: f"bench {h.run_id()}")
+    monkeypatch.setattr(bdr.bench_flink, "_json", fake_json)
+
+    def interrupted(run_id, topic):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(bdr.bench_flink, "submit", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        bdr.main(["--incidents", "3", "--pilot"])
+    assert h.cancelled == [(jid, h.run_id())]
+
+
+def test_ctrl_c_during_submit_leaves_other_jobs_alone_and_says_so(monkeypatch, tmp_path, capsys):
+    h = build_harness(monkeypatch, tmp_path)
+    _, fake_json = overview(h, lambda: "someone else's job")
+    monkeypatch.setattr(bdr.bench_flink, "_json", fake_json)
+
+    def interrupted(run_id, topic):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(bdr.bench_flink, "submit", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        bdr.main(["--incidents", "3", "--pilot"])
+    assert h.cancelled == []
+    assert "no running job carries" in capsys.readouterr().out
+
+
+def test_a_stale_late_events_read_is_retried_once_11_s_later(monkeypatch, tmp_path):
+    h = build_harness(monkeypatch, tmp_path)
+    calls = []
+
+    def late(job_id, fresh_after=None):
+        calls.append(h.clock.mono)
+        if len(calls) == 1:
+            raise RunFailed("the late-events read is stale")
+        return 0
+
+    monkeypatch.setattr(bdr.bench_flink, "late_events", late)
+    r, _ = run_main(h, tmp_path)
+    assert r["late_events"] == 0 and r["valid"] is True
+    assert calls[1] - calls[0] == 11
+
+
+def test_a_late_events_read_that_stays_stale_fails(monkeypatch, tmp_path):
+    h = build_harness(monkeypatch, tmp_path)
+
+    def late(job_id, fresh_after=None):
+        raise RunFailed("the late-events read is stale")
+
+    monkeypatch.setattr(bdr.bench_flink, "late_events", late)
+    with pytest.raises(RunFailed, match="stale"):
+        bdr.main(["--incidents", "3", "--pilot"])
+    assert h.cancelled
+
+
+def test_watermark_lag_script_tells_no_watermark_from_a_replay(tmp_path):
+    import os
+    import shutil
+    import subprocess
+    import textwrap
+    import time
+
+    repo = Path(__file__).resolve().parents[2]
+    shutil.copy(repo / "scripts" / "watermark-lag.sh", tmp_path / "watermark-lag.sh")
+    (tmp_path / "flink_metrics.py").write_text(
+        textwrap.dedent(
+            """
+            import os, sys, time
+
+            class Fake:
+                def find_job(self): pass
+                def refresh(self): return time.time()
+                def find_metric(self, suffix): return "v", ["0.x"]
+                def values(self, vid, ids): return {"0.x": float(os.environ["WM_MS"])}
+                def die(self, msg):
+                    print(f"watermark-lag: {msg}", file=sys.stderr)
+                    sys.exit(1)
+
+            def run(prog, base, body):
+                body(Fake())
+            """
+        )
+    )
+
+    def run(wm_ms):
+        env = {**os.environ, "WM_MS": str(wm_ms)}
+        return subprocess.run(
+            ["bash", str(tmp_path / "watermark-lag.sh"), "1", "11"],
+            capture_output=True, text=True, env=env,
+        )  # fmt: skip
+
+    none = run(-9223372036854775808)
+    assert none.returncode == 1 and "no watermark yet" in none.stderr
+    old = run(int((time.time() - 22 * 86400) * 1000))
+    assert old.returncode == 1
+    assert "22.0 days behind the wall clock: the job is replaying history" in old.stderr

@@ -111,10 +111,17 @@ def power_reasons(power_end: str | None, on_battery: bool) -> list[str]:
 
 
 def lag_reasons(block: dict) -> list[str]:
+    reasons = []
+    if block["summary"]["samples"] == 0:
+        reasons.append("no watermark-lag sample from the first incident on was kept")
+    elif block["stale_lag_samples"] > block["samples_from_first_incident"] / 2:
+        reasons.append("more than half of the lag samples from the first incident on were stale")
     at = block["at_first_incident_s"]
-    if at is None or at < CAUGHT_UP_LAG_S:
-        return []
-    return [f"the watermark lag at the first incident's start was {at:.1f} s, not under 60 s"]
+    if at is not None and at >= CAUGHT_UP_LAG_S:
+        reasons.append(
+            f"the watermark lag at the first incident's start was {at:.1f} s, not under 60 s"
+        )
+    return reasons
 
 
 class LagReader:
@@ -157,6 +164,7 @@ class LagReader:
         late = [s for s in self.samples if (s["t"] + self.offset_s) * 1000 >= first_start_ms]
         return {
             "summary": lag_summary([s["lag_s"] for s in kept]),
+            "samples_from_first_incident": len(late),
             "stale_lag_samples": sum(s["stale"] for s in late),
             "no_watermark_samples": sum(not s["stale"] and s["lag_s"] is None for s in late),
             "caught_up_lag_s": round(caught_up_lag, 1),
@@ -190,9 +198,13 @@ def wait_caught_up(
         if not s["stale"] and s["lag_s"] is not None and s["lag_s"] < CAUGHT_UP_LAG_S:
             return s["lag_s"]
         if _vm_now_ms(offset_s, time_) >= first_start_ms - CATCH_UP_MARGIN_MS:
+            seen = (
+                "no fresh lag read"
+                if s["stale"] or s["lag_s"] is None
+                else f"the watermark lag was still {s['lag_s']:.1f} s"
+            )
             raise RunFailed(
-                "the job did not catch up in time: the watermark lag was still"
-                f" {s['lag_s']} s one minute before the first incident"
+                f"the job did not catch up in time: {seen} one minute before the first incident"
             )
         time_.sleep(POLL_S)
 
@@ -210,7 +222,7 @@ def watch(
     second poll, and a check that the generator still runs. No other REST call."""
     time_ = time_ or time
     due = time_.monotonic()
-    n = 0
+    n = 1  # the first poll only waits: a sample then would be a stale read, 4 s after catch-up's
     while _vm_now_ms(offset_s, time_) < read_at_ms:
         polls.append(time_.monotonic())
         check()
@@ -225,9 +237,12 @@ def _generator_running(name: str, run: Callable) -> bool:
     return run(["docker", "inspect", "-f", "{{.State.Running}}", name]).stdout.strip() == "true"
 
 
-def _failed_deliveries(name: str, run: Callable) -> int:
+def _save_generator_log(name: str, run: Callable, run_dir: Path) -> int:
+    """Write the container's log to `generator.log`; returns the count of failed deliveries."""
     done = run(["docker", "logs", name])
-    return sum("delivery failed" in line for line in (done.stdout + done.stderr).splitlines())
+    text = done.stdout + done.stderr
+    (run_dir / "generator.log").write_text(text)
+    return sum("delivery failed" in line for line in text.splitlines())
 
 
 def _remove_generator(name: str, run: Callable) -> None:
@@ -263,14 +278,34 @@ def _wait_labels(path: Path, polls: list[float], check: Callable[[], None]) -> d
         time.sleep(POLL_S)
 
 
-def _cleanup(job_id: str | None, run_id: str, name: str, run: Callable) -> None:
+def _find_job(run_id: str) -> str | None:
+    """The id of a running job whose name or configuration carries `run_id`, else None."""
+    get = bench_flink.httpx.get
+    for job in bench_flink._json(get, "/jobs/overview")["jobs"]:
+        if job["state"] in ("FINISHED", "CANCELED", "FAILED"):
+            continue
+        config = json.dumps(bench_flink._json(get, f"/jobs/{job['jid']}/config"))
+        if run_id in job["name"] or run_id in config:
+            return job["jid"]
+    return None
+
+
+def _cleanup(job_id: str | None, run_id: str, name: str, run: Callable, run_dir: Path) -> None:
     """The one rule for every failure after the generator started: cancel the job and clean its
-    checkpoints if it was submitted, stop and remove the generator. Each step is tried."""
-    if job_id:
-        try:
+    checkpoints, save the generator's log, then remove the generator. Each step is tried. With no
+    job id (an interrupt during the submit) the job is looked up by the run id."""
+    try:
+        job_id = job_id or _find_job(run_id)
+        if job_id:
             bench_flink.cancel_and_clean(job_id, run_id)
-        except Exception as e:
-            print(f"bench: could not clean {run_id}: {e}")
+        else:
+            print(f"bench: no running job carries {run_id}; none to cancel")
+    except Exception as e:
+        print(f"bench: could not clean {run_id}: {e}")
+    try:
+        _save_generator_log(name, run, run_dir)
+    except Exception as e:
+        print(f"bench: could not save the log of {name}: {e}")
     try:
         _remove_generator(name, run)
     except Exception as e:
@@ -314,7 +349,9 @@ def _execute(args, run_id: str, run_dir: Path, env: dict, before: dict, polls: l
             raise RunFailed(f"could not start the generator: {done.stderr.strip()}")
         _wait_partitions(topic, polls, check)
         job_id = holder["job_id"] = bench_flink.submit(run_id, topic)
+        polls.append(time.monotonic())
         bench_throughput._wait_running(job_id)
+        polls.append(time.monotonic())
         job = bench_flink._json(bench_flink.httpx.get, f"/jobs/{job_id}")
         src = bench_flink.vertex(job, "Source: events")
         offset = before["offset_s"]
@@ -331,7 +368,7 @@ def _execute(args, run_id: str, run_dir: Path, env: dict, before: dict, polls: l
         time.sleep(METRIC_CACHE_WAIT_S)
         late, restarts = _late_and_restarts(job_id, src, reader)
         stopped = run(["docker", "stop", name])
-        failed = _failed_deliveries(name, run)
+        failed = _save_generator_log(name, run, run_dir)
         _remove_generator(name, run)
         if stopped.returncode != 0:
             raise RunFailed(f"could not stop the generator: {stopped.stderr.strip()}")
@@ -340,7 +377,7 @@ def _execute(args, run_id: str, run_dir: Path, env: dict, before: dict, polls: l
         load_end = bench_throughput._load()
         power_end = bench_env._power_line(run)
     except BaseException:
-        _cleanup(holder["job_id"], run_id, name, run)
+        _cleanup(holder["job_id"], run_id, name, run, run_dir)
         raise
     finally:
         reader = holder["reader"]
@@ -405,15 +442,18 @@ def _late_and_restarts(job_id: str, src: dict, reader: LagReader) -> tuple[int |
         if restarts:
             return None, restarts
         raise RunFailed("no lag sample was fresh; cannot check the late events")
-    try:
-        late = bench_flink.late_events(
-            job_id, fresh_after=(src["id"], src["parallelism"], fresh[-1])
-        )
-    except RunFailed:
-        restarts = bench_flink.restarts(job_id)
-        if not restarts:
-            raise
-        return None, restarts  # a restart reset the clock, so the read looked stale
+    after = (src["id"], src["parallelism"], fresh[-1])
+    for attempt in (0, 1):
+        try:
+            late = bench_flink.late_events(job_id, fresh_after=after)
+            break
+        except RunFailed:
+            restarts = bench_flink.restarts(job_id)
+            if restarts:
+                return None, restarts  # a restart reset the clock, so the read looked stale
+            if attempt == 1:
+                raise
+            time.sleep(METRIC_CACHE_WAIT_S)  # the cache may refresh; try once more
     return late, bench_flink.restarts(job_id)
 
 

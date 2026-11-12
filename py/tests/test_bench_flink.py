@@ -550,3 +550,17 @@ def test_lag_sample_before_the_first_watermark_has_no_lag_and_is_not_stale():
     routes = lag_routes(wm(NO_WATERMARK, 978_000), reads(10, 20, busy=60_000))
     got = lag(routes)
     assert got["lag_s"] is None and got["stale"] is False
+
+
+def test_lag_sample_reads_the_watermark_between_the_two_clock_reads():
+    wm_query = "/jobs/j/vertices/m/metrics?get=" + ",".join(
+        f"{i}.minute-aggregator.currentInputWatermark" for i in range(2)
+    )
+    routes = lag_routes(wm(980_000, 978_000), reads(10, 20, busy=60_000))
+    calls = []
+    clock = iter([1000.0, 1001.0])
+    bench_flink.watermark_lag_sample(
+        "j", 0.0, ("s", 2), get=seq_getter(routes, calls), now=lambda: next(clock),
+        sleep=lambda s: None,
+    )  # fmt: skip
+    assert calls[-3:] == [QUERY, wm_query, QUERY]
