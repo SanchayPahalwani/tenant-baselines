@@ -13,7 +13,7 @@ These results test the implementation under the stated traffic assumption; they 
 - Docker VM: Docker 28.4.0, 8 CPUs, 9.7 GiB memory
 - Machine facts: from the Setup block that `make eval` rendered right after the official runs on 2026-11-12 (`docs/results.md` at commit `7fba0be`, whose Setup names commit `b97503c`)
 - Versions: Flink 2.2.1 (Java 17); Flink Kafka connector 5.0.0-2.2; Kafka 4.4.0; ClickHouse 26.8; Grafana 13.2.5; Alertmanager v0.34.2; Python 3.12.15; numpy 2.5.4
-- Rendered at commit `87d90a3` on 2026-11-12
+- Rendered at commit `4a5f10c` on 2026-11-12
 - Measured code at the render commit equals the freeze commit: yes
 
 ## Headline: 6:1 day/night amplitude, selected settings on the test week
@@ -117,11 +117,11 @@ Regional outages on week 5, with their hour (the hour is reported, spec 5.4):
 
 | Seed | Region | Start (UTC) | Start (local) | seasonal | per key static | global static |
 |---|---|---|---|---|---|---|
-| 4101 | eu-central | Fri 18:12 UTC | Fri 19:12 local | k6: expected-signal page, delay 5.0 min, regional alert | p99.9: expected-signal page, delay 5.0 min, regional alert | p99: expected-signal page, delay 5.0 min, regional alert |
-| 4102 | eu-central | Wed 11:34 UTC | Wed 12:34 local | k6: expected-signal page, delay 5.0 min, regional alert | p99: expected-signal page, delay 5.0 min, regional alert | p99.9: expected-signal page, delay 5.0 min, regional alert |
-| 4103 | ap-southeast | Thu 21:08 UTC | Fri 05:08 local | k6: expected-signal page, delay 5.0 min, regional alert | p99.9: expected-signal page, delay 5.0 min, regional alert | p99: expected-signal page, delay 5.0 min, regional alert |
-| 4104 | us-east | Mon 12:55 UTC | Mon 07:55 local | k6: expected-signal page, delay 5.0 min, regional alert | p99: expected-signal page, delay 5.0 min, regional alert | p99: expected-signal page, delay 5.0 min, regional alert |
-| 4105 | eu-central | Tue 23:08 UTC | Wed 00:08 local | k6: expected-signal page, delay 5.0 min, regional alert | p99: expected-signal page, delay 5.0 min, regional alert | p99: expected-signal page, delay 5.0 min, regional alert |
+| 4101 | eu-central | Fri 18:12 UTC | Fri 19:12 local | k6: expected-signal page, delay 5.0 min, regional alert, 2 pages | p99.9: expected-signal page, delay 5.0 min, regional alert, 2 pages | p99: expected-signal page, delay 5.0 min, regional alert, 1 page |
+| 4102 | eu-central | Wed 11:34 UTC | Wed 12:34 local | k6: expected-signal page, delay 5.0 min, regional alert, 6 pages | p99: expected-signal page, delay 5.0 min, regional alert, 2 pages | p99.9: expected-signal page, delay 5.0 min, regional alert, 2 pages |
+| 4103 | ap-southeast | Thu 21:08 UTC | Fri 05:08 local | k6: expected-signal page, delay 5.0 min, regional alert, 1 page | p99.9: expected-signal page, delay 5.0 min, regional alert, 2 pages | p99: expected-signal page, delay 5.0 min, regional alert, 3 pages |
+| 4104 | us-east | Mon 12:55 UTC | Mon 07:55 local | k6: expected-signal page, delay 5.0 min, regional alert, 2 pages | p99: expected-signal page, delay 5.0 min, regional alert, 4 pages | p99: expected-signal page, delay 5.0 min, regional alert, 5 pages |
+| 4105 | eu-central | Tue 23:08 UTC | Wed 00:08 local | k6: expected-signal page, delay 5.0 min, regional alert, 4 pages | p99: expected-signal page, delay 5.0 min, regional alert, 1 page | p99: expected-signal page, delay 5.0 min, regional alert, 1 page |
 
 ## Event-path equivalence check
 
@@ -143,6 +143,7 @@ Run at commit `e57f621` on 2026-11-12T08:53:03Z. Recorded: run id `paths-s7-a6-2
 - **The clip at the replay end.** The replay ends at the end of week 5. Alert rows with an event time past it are dropped before scoring: 6 rows over all runs here. Alerts still open at the end count as pages: 388 over all runs here. Duplicate rows dropped: 0.
 - **Inclusive fire comparison.** The shared state machine fires at or past the fire level (spec 4.5). The values are discrete (bucketed p95, error counts over request counts, whole 5-minute sums), so a static threshold is breached on calibration minutes more often than its nominal percentile. Static false pages therefore run somewhat higher than the percentile alone suggests. The comparison was not changed.
 - **What check-paths shows.** It shows that the events path and the aggregates path give the same alert log. It does not show that the detectors are right: both paths share the thresholds, every operator from the minute aggregates on, and the random draws.
+- **Measured code.** Changed 2026-11-13, after the official runs: the dashboard files under infra/grafana/dashboards may differ from the freeze commit, and the Setup line names each one that does. The dashboards only draw; the eval reads pages from the alerts topic. Everything else under infra/, and docker-compose.yml, is still compared.
 - **Replay mode can fail.** Replay mode aligns the watermarks of the Kafka partitions. That can hit a race in the Kafka connector (FLINK-39728). It is fixed in connector 5.1.0, which is not released as of 2026-11-12; this repo pins 5.0.0-2.2. A run that hits it fails and gives no output, so no wrong result is possible, and check-paths can be run again. The official runs use aggregates mode. It has one partition and no alignment, so it cannot hit the race.
 - **Events-path speed.** The events path of check-paths is bound by the alignment: about 44 minutes for five weeks. The alignment drift was not changed.
 - **Single-key creeps.** A latency creep is placed on one unit. A dedicated unit is a unit, so a creep can land on a unit with a single key.
