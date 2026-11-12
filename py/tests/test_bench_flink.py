@@ -67,7 +67,7 @@ def test_sample_sums_task_level_ids_only():
     )  # fmt: skip
     assert calls == [base, "sleep", base + "?get=0.numRecordsOut,1.numRecordsOut", "/jobs/j"]
     assert got["count"] == 30 and got["t"] == 5.0 and got["mono"] == 7.0
-    assert slept == [1.0]
+    assert slept == [bench_flink.REFRESH_WAIT_S] == [3.0]
     assert got["vertices"] == {
         "Source: events": {
             "busy_ms": 100,

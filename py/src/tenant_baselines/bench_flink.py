@@ -3,7 +3,7 @@
 Synthetic data only. Every function that calls REST takes `get` (and `patch`) callables, which
 default to httpx. Metrics are read the way `scripts/flink_metrics.py` does: the REST API answers
 from a cache that a request refreshes only when it finds the cache more than 10 s old, so a
-sample is one burst (a request that starts the refresh, a 1 s wait, then the reads), and a
+sample is one burst (a request that starts the refresh, a 3 s wait, then the reads), and a
 driver makes no other REST call between two samples.
 """
 
@@ -18,7 +18,8 @@ import httpx
 from tenant_baselines.eval_run import REST, RunFailed
 from tenant_baselines.freeze import REPO
 
-REFRESH_WAIT_S = 1.0
+# A 1 s wait read the old cache in 2 of 5 samples on the loaded stack; 3 s did not in 6 of 6.
+REFRESH_WAIT_S = 3.0
 CANCEL_WAIT_S = 60
 _WATERMARK_FLOOR = 0  # a lowest watermark below this means no watermark yet (Long.MIN_VALUE)
 _SUBMIT = (
