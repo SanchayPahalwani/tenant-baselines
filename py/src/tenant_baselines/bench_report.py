@@ -63,6 +63,10 @@ def check_results(docs: dict[str, dict]) -> None:
     """Raise ReportRefused, naming the file, unless all three results may be published."""
     for name in NAMES:
         doc, file = docs[name], f"{name}.json"
+        if doc["env"].get("dirty"):
+            raise ReportRefused(
+                f"{file}: recorded from a dirty tree; run it again from a clean tree"
+            )
         if doc.get("data") != "synthetic":
             raise ReportRefused(f"{file}: the data is not marked synthetic ({doc.get('data')!r})")
         if not doc.get("valid"):
@@ -123,9 +127,13 @@ def _what_this_is() -> str:
     )
 
 
+def _text(x) -> str:
+    return "not recorded" if x is None else str(x)
+
+
 def _env_rows(docs: dict[str, dict]) -> list[tuple[str, list[str]]]:
     def row(label, get):
-        return label, [str(get(docs[k]["env"])) for k in NAMES]
+        return label, [_text(get(docs[k]["env"])) for k in NAMES]
 
     return [
         row("Date (UTC)", lambda e: e["date_utc"]),
@@ -205,9 +213,10 @@ def _share_note(loads: list[dict]) -> str:
     others = [x["other_containers_cpu_pct"] for x in seen]
     first = seen[0]
     return (
-        "The Docker VM is shared. At the readings above, other projects' containers were using"
-        f" {n(min(others))} to {n(max(others))} ({first['cpu_pct_unit']}) of a VM with"
-        f" {first['vm_cpus']} CPUs, so run-to-run rates can differ.\n"
+        "The Docker VM is shared. At the readings above, other projects' containers used"
+        f" {n(min(others))} to {n(max(others))} {first['cpu_pct_unit']} (the VM has"
+        f" {first['vm_cpus']} CPUs, so {count(first['vm_cpus'] * 100)} in all), so run-to-run"
+        " rates can differ.\n"
     )
 
 
@@ -286,9 +295,10 @@ def _throughput(t: dict) -> str:
         f" window's two ends over the window: {errors}.\n\n"
         f"The busiest vertex: {busiest}.\n\n"
         "The `drop-ticks` vertex's busy share, as a share of parallelism times the window, is"
-        f" {ticks}. This is an upper bound on what the events/ticks union costs in CPU, not a"
-        " throughput difference: the task also serializes each event for the keyed shuffle,"
-        " which the source would do itself without the union.\n\n"
+        f" {ticks}. It is reported as a share of CPU time, not as a"
+        " throughput difference. The drop-ticks task's busy time also covers handing each event"
+        " on to the keyed shuffle, work the source task would do itself without the union, so"
+        " this share is an upper bound on the extra hop's cost.\n\n"
         f"The job ran {count(t['settings'])} settings at once. The alert rows each run wrote,"
         f" counted from `bench.alerts`:\n\n{alerts}\n\n"
         "The TaskManager's memory against its limit. The first reading is for one job; the"
@@ -332,9 +342,10 @@ def _delay(d: dict) -> str:
     return (
         "## Delay\n\n"
         "This section uses synthetic data. "
-        f"The world has {count(w['keys'])} keys at {count(w['rpm_per_key'])} requests a minute"
-        f" each, in {count(w['partitions'])} partitions, with {count(w['history_days'])} days of"
-        f" history before live traffic. The run injected {count(d['incidents'])} incidents, each"
+        f"The world has {count(w['keys'])} keys at up to {count(w['rpm_per_key'])} requests a"
+        f" minute per key, in {count(w['partitions'])} partitions, with"
+        f" {count(w['history_days'])} days of history before live traffic."
+        f" The run injected {count(d['incidents'])} incidents, each"
         f" an error-rate rise of {n(sch['magnitude'] * 100, 0)} points on one key for"
         f" {count(sch['duration_s'])} s. The first starts {count(sch['settle_s'])} s after the"
         f" generator catches up; incidents in one region are {count(sch['spacing_s'])} s apart;"
@@ -407,11 +418,24 @@ def _state_run(r: dict, spec: int, label: str) -> str:
     )
     rng = r.get("range") or {}
     if rng.get("checkpoints"):
-        out += (
-            f"\nOver the {count(rng['checkpoints'])} checkpoints of the last stretch of the run,"
-            f" the total state size ranged from {count(rng['min'])} to {count(rng['max'])} bytes."
-            " The figure moves because SST files that are not yet compacted are counted.\n"
-        )
+        if rng["checkpoints"] == 1 or rng["min"] == rng["max"]:
+            how = (
+                "one checkpoint"
+                if rng["checkpoints"] == 1
+                else f"the same in all {count(rng['checkpoints'])} checkpoints"
+            )
+            out += (
+                f"\nOver the last stretch of the run the total state size was"
+                f" {count(rng['min'])} bytes ({how}).\n"
+            )
+        else:
+            out += (
+                f"\nOver the {count(rng['checkpoints'])} checkpoints of the last stretch of the"
+                f" run, the total state size ranged from {count(rng['min'])} to"
+                f" {count(rng['max'])} bytes.\n"
+            )
+        if r["backend"] == "rocksdb":
+            out += "The figure moves because SST files that are not yet compacted are counted.\n"
     return out
 
 
@@ -430,8 +454,8 @@ def _state(s: dict, throughput_settings: int) -> str:
         "This section uses synthetic data. "
         f"The world is `{w['name']}` (seed {w['seed']}, amplitude {n(w['amplitude'])}) with"
         f" {count(w['keys'])} keys, {count(w['keys_with_five_weeks'])} of which run all"
-        f" {count(w['weeks'])} weeks. The spec's section 6 names a different key count; the world"
-        f" has this many. {count(w['aggregate_rows'])} aggregate rows went through the job in"
+        f" {count(w['weeks'])} weeks."
+        f" {count(w['aggregate_rows'])} aggregate rows went through the job in"
         " aggregates mode.\n\n" + "\n".join(parts) + "\n"
         f"This job ran against {count(s['settings'])} settings; the live job runs"
         f" {count(throughput_settings)}. The baseline history, which all settings share, is most"
@@ -489,18 +513,28 @@ def _reproduce() -> str:
     )
 
 
+def _guard(file: str, build):
+    """Run `build`; a missing key or a wrong shape is a refusal naming the file and the key."""
+    try:
+        return build()
+    except KeyError as e:
+        raise ReportRefused(f"{file}: the result has no key {e.args[0]!r}") from e
+    except (TypeError, IndexError, ValueError) as e:
+        raise ReportRefused(f"{file}: the result has an unexpected shape ({e})") from e
+
+
 def render(throughput: dict, delay: dict, state: dict) -> str:
     docs = {"throughput": throughput, "delay": delay, "state": state}
-    check_results(docs)
+    _guard("a result file", lambda: check_results(docs))
     return "\n".join(
         [
             _what_this_is(),
-            _machine(docs),
-            _throughput(throughput),
-            _delay(delay),
-            _state(state, throughput["settings"]),
-            _extrapolation(state),
-            _limits(delay),
+            _guard("a result file's env record", lambda: _machine(docs)),
+            _guard("throughput.json", lambda: _throughput(throughput)),
+            _guard("delay.json", lambda: _delay(delay)),
+            _guard("state.json", lambda: _state(state, throughput["settings"])),
+            _guard("state.json", lambda: _extrapolation(state)),
+            _guard("delay.json", lambda: _limits(delay)),
             _reproduce(),
         ]
     )
@@ -516,7 +550,10 @@ def main(argv: list[str] | None = None) -> None:
         path = Path(args.results) / f"{name}.json"
         if not path.is_file():
             raise ReportRefused(f"{name}.json: not found in {args.results}; run `make bench`")
-        docs[name] = json.loads(path.read_text())
+        try:
+            docs[name] = json.loads(path.read_text())
+        except ValueError as e:
+            raise ReportRefused(f"{name}.json: not valid JSON ({e})") from e
     text = render(docs["throughput"], docs["delay"], docs["state"])
     Path(args.out).write_text(text)
     print(f"bench-report: wrote {args.out}")

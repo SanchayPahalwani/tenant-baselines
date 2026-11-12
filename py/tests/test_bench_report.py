@@ -187,7 +187,9 @@ def state_run(backend, per_key, with_range):
             "checkpointed_size": 40_000_000,
             "vertices": [{"name": "scorer", "state_size": 36_000_000, "checkpointed_size": 1}],
         },
-        "range": {"checkpoints": 4, "min": 30_000_000, "max": 41_000_000} if with_range else {},
+        "range": {"checkpoints": 4, "min": 30_000_000, "max": 41_000_000}
+        if with_range
+        else {"checkpoints": 3, "min": 39_000_000, "max": 40_000_000},
         "per_key": {
             "scorer_bytes": 36_000_000,
             "per_key_bytes": per_key,
@@ -430,3 +432,82 @@ def test_render_does_not_change_its_inputs():
     before = copy.deepcopy((t, d, s))
     br.render(t, d, s)
     assert (t, d, s) == before
+
+
+def test_sst_sentence_only_in_the_rocksdb_paragraph():
+    out = render()
+    sec = out[out.index("## State size") : out.index("## Extrapolation")]
+    split = sec.index("The RocksDB run")
+    hashmap, rocks = sec[:split], sec[split:]
+    assert "SST" not in hashmap
+    assert "SST" in rocks
+    assert "39,000,000" in hashmap and "40,000,000" in hashmap
+    assert "30,000,000" in rocks and "41,000,000" in rocks
+
+
+def test_a_range_of_one_checkpoint_is_not_a_range():
+    s = state()
+    s["runs"][0]["range"] = {"checkpoints": 1, "min": 39_500_000, "max": 39_500_000}
+    out = render(s=s)
+    assert "was 39,500,000 bytes (one checkpoint)" in out
+    assert "ranged from 39,500,000 to 39,500,000" not in out
+
+
+def test_no_key_count_reconciliation_sentence():
+    assert "section 6" not in render()
+
+
+def test_drop_ticks_sentence_is_a_design_explanation():
+    out = render()
+    assert "handing each event on to the keyed shuffle" in out
+    assert "upper bound on the extra hop's cost" in out
+
+
+def test_report_refuses_a_dirty_tree():
+    t = throughput()
+    t["env"]["dirty"] = True
+    with pytest.raises(br.ReportRefused, match=r"throughput\.json.*(dirty|clean)"):
+        render(t=t)
+
+
+def test_commit_is_printed():
+    assert "abc1234" in render()
+
+
+def test_missing_config_value_prints_not_recorded():
+    t = throughput()
+    t["env"]["flink"]["taskmanager.memory.process.size"] = None
+    out = render(t=t)
+    assert "None" not in out
+    assert "not recorded" in out
+
+
+def test_delay_world_says_up_to_requests_per_key():
+    assert "up to 40 requests a minute per key" in render()
+
+
+def test_load_sentence_gives_the_vm_total():
+    out = render()
+    assert "used 87.6 to 140.2 percent of one CPU" in out
+    assert "the VM has 8 CPUs, so 800 in all" in out
+
+
+def test_a_missing_key_is_a_refusal_naming_file_and_key():
+    d = delay()
+    del d["watermark_lag_s"]
+    with pytest.raises(br.ReportRefused, match=r"delay\.json.*watermark_lag_s"):
+        render(d=d)
+    t = throughput()
+    del t["runs"][0]["source"]
+    with pytest.raises(br.ReportRefused, match=r"throughput\.json.*source"):
+        render(t=t)
+
+
+def test_main_wraps_a_json_decode_error(tmp_path):
+    res = tmp_path / "performance"
+    res.mkdir()
+    for name, doc in (("throughput", throughput()), ("delay", delay()), ("state", state())):
+        (res / f"{name}.json").write_text(json.dumps(doc))
+    (res / "state.json").write_text("{not json")
+    with pytest.raises(br.ReportRefused, match=r"state\.json"):
+        br.main(["--results", str(res), "--out", str(tmp_path / "x.md")])
