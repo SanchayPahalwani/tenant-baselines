@@ -721,7 +721,8 @@ def test_setup_line_names_display_only_files(summaries):
 
 def test_method_notes_date_the_change(summaries):
     t = text(summaries)
-    assert f"Changed {eval_report.MEASURED_CODE_CHANGE_DATE}, after the official runs" in t
+    # Every other time on the page is UTC, and the change's local date was a day later.
+    assert f"Changed {eval_report.MEASURED_CODE_CHANGE_DATE} (UTC), after the official runs" in t
     assert "Everything else under infra/, and docker-compose.yml, is still compared." in t
 
 

@@ -730,11 +730,11 @@ def _method_section(
         "- **What check-paths shows.** It shows that the events path and the aggregates path give"
         " the same alert log. It does not show that the detectors are right: both paths share the"
         " thresholds, every operator from the minute aggregates on, and the random draws.",
-        f"- **Measured code.** Changed {MEASURED_CODE_CHANGE_DATE}, after the official runs: the"
-        " dashboard files under infra/grafana/dashboards may differ from the freeze commit, and"
-        " the Setup line names each one that does. The dashboards only draw; the eval reads pages"
-        " from the alerts topic. Everything else under infra/, and docker-compose.yml, is still"
-        " compared.",
+        f"- **Measured code.** Changed {MEASURED_CODE_CHANGE_DATE} (UTC), after the official runs:"
+        " the dashboard files under infra/grafana/dashboards may differ from the freeze commit,"
+        " and the Setup line names each one that does. The dashboards only draw; the eval reads"
+        " pages from the alerts topic. Everything else under infra/, and docker-compose.yml, is"
+        " still compared.",
         "- **Replay mode can fail.** Replay mode aligns the watermarks of the Kafka partitions."
         " That can hit a race in the Kafka connector (FLINK-39728). It is fixed in connector"
         f" 5.1.0, {released}; this repo pins 5.0.0-2.2. A run that hits it fails and gives"
