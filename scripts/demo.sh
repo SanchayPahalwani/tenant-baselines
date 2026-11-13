@@ -104,7 +104,7 @@ while :; do
   sleep "$POLL_S"
 done
 
-echo "caught up after $((SECONDS - start)) s"
+echo "caught up $((SECONDS - start)) s after scripts/demo.sh started"
 # Flink serves job metrics from a cache that refreshes every 10 s, so the counter can be missing
 # for a short while after the job starts. Try for up to 30 s before giving up.
 late=unknown

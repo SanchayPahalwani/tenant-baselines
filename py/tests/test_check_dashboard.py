@@ -1,5 +1,7 @@
 import json
 
+import httpx
+
 from tenant_baselines import check_dashboard as cd
 
 FILE = json.loads(cd.DASHBOARD_PATH.read_text())
@@ -73,3 +75,18 @@ def test_check_allows_an_empty_panel_unless_rows_are_required():
     problems = cd.check(get=get, post=post, require_rows=True)
     assert problems
     assert any("no rows" in p and "Unit status (live)" in p for p in problems)
+
+
+def test_check_reports_a_dashboard_answer_that_is_not_200():
+    _, post = fakes()
+    problems = cd.check(get=lambda url, **_: Resp(500, {"message": "boom"}), post=post)
+    assert problems == ["Grafana answered HTTP 500 for the dashboard"]
+
+
+def test_check_reports_grafana_that_is_not_reachable():
+    def refused(url, **_):
+        raise httpx.ConnectError("[Errno 61] Connection refused")
+
+    _, post = fakes()
+    problems = cd.check(get=refused, post=post)
+    assert problems == ["Grafana is not reachable ([Errno 61] Connection refused)"]

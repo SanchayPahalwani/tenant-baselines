@@ -19,8 +19,8 @@ ALERT = {
 
 
 @contextmanager
-def running(log_path):
-    server = make_server("127.0.0.1", 0, str(log_path))
+def running(log_path, **kwargs):
+    server = make_server("127.0.0.1", 0, str(log_path), **kwargs)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         yield f"http://127.0.0.1:{server.server_address[1]}"
@@ -116,6 +116,31 @@ def test_get_notifications_keeps_the_last_500_records(tmp_path):
     assert len(rows) == 500
     assert rows[0]["tenant"] == "t10"
     assert rows[-1]["tenant"] == "t509"
+
+
+def record_line(n, received_at="2026-01-01T00:00:00+00:00"):
+    body = json.loads(alert_body(n))
+    return json.dumps({"received_at": received_at, "receiver": "/tenant", "body": body})
+
+
+def test_get_notifications_skips_a_last_line_cut_mid_record(tmp_path):
+    """A read outside the write lock can see a line that is still being written."""
+    log = tmp_path / "n.jsonl"
+    log.write_text(record_line(1) + "\n" + record_line(2)[:40])
+    with running(log) as base:
+        _, _, body = get(base, "/notifications")
+    assert [json.loads(line)["tenant"] for line in body.decode().splitlines()] == ["t1"]
+
+
+def test_get_notifications_does_not_wait_for_a_write(tmp_path):
+    """A dashboard refresh must not hold up a webhook POST, nor wait for one."""
+    log = tmp_path / "n.jsonl"
+    log.write_text(record_line(1) + "\n")
+    lock = threading.Lock()
+    with running(log, write_lock=lock) as base, lock:
+        status, _, body = get(base, "/notifications")
+    assert status == 200
+    assert [json.loads(line)["tenant"] for line in body.decode().splitlines()] == ["t1"]
 
 
 def test_get_of_another_path_is_404(tmp_path):

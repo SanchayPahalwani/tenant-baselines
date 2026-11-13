@@ -90,10 +90,16 @@ def check(
     get=httpx.get,
     post=httpx.post,
 ) -> list[str]:
-    """The problems found; empty when all is well."""
+    """The problems found; empty when all is well. Without the served dashboard, that is the
+    only problem: the panel checks need it."""
     dashboard = json.loads(Path(path).read_text())
     problems = []
-    resp = get(f"{grafana}/api/dashboards/uid/{UID}", timeout=30)
+    try:
+        resp = get(f"{grafana}/api/dashboards/uid/{UID}", timeout=30)
+    except httpx.HTTPError as e:
+        return [f"Grafana is not reachable ({e})"]
+    if resp.status_code != 200:
+        return [f"Grafana answered HTTP {resp.status_code} for the dashboard"]
     served = {p["title"] for p in resp.json().get("dashboard", {}).get("panels", [])}
     for title in sorted({p["title"] for p in dashboard["panels"]} - served):
         problems.append(f"panel '{title}' is not served by Grafana")

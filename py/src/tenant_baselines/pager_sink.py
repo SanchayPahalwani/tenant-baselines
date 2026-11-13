@@ -4,6 +4,7 @@ import argparse
 import json
 import logging
 import threading
+from contextlib import AbstractContextManager
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -54,8 +55,11 @@ def _latest_rows(log_path: str) -> bytes:
     return "".join(out).encode("utf-8")
 
 
-def make_server(host: str, port: int, log_path: str) -> ThreadingHTTPServer:
-    write_lock = threading.Lock()
+def make_server(
+    host: str, port: int, log_path: str, write_lock: AbstractContextManager | None = None
+) -> ThreadingHTTPServer:
+    """The server; `write_lock` (a new lock by default) orders the log's writes."""
+    write_lock = write_lock or threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self) -> None:
@@ -84,8 +88,9 @@ def make_server(host: str, port: int, log_path: str) -> ThreadingHTTPServer:
             if self.path != "/notifications":
                 self.send_error(404)
                 return
-            with write_lock:
-                payload = _latest_rows(log_path)
+            # Read without the write lock, so a webhook POST never waits on a dashboard refresh.
+            # A line still being written does not parse, and _latest_rows skips it.
+            payload = _latest_rows(log_path)
             self.send_response(200)
             self.send_header("Content-Type", "application/x-ndjson")
             self.send_header("Content-Length", str(len(payload)))
