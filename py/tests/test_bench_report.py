@@ -756,10 +756,11 @@ def test_a_run_the_log_does_not_cover_is_named():
 # ---- pilots ----
 
 
-def tp_pilot(run_id, rate, power_start, power_end=None, **edit):
+def tp_pilot(run_id, rate, power_start, power_end=None, minutes=30, **edit):
     doc = throughput()
     doc["env"].update(power=power_start, on_battery=True, commit="8ac86e8a63")
     doc["env"]["date_utc"] = "2026-11-12T09:49:26+00:00"
+    doc["fill"]["event_minutes"] = minutes
     run = {"run_id": f"{run_id}-r1", "events_per_s": rate}
     if power_end is not None:
         run["power_end"] = power_end
@@ -799,10 +800,8 @@ def test_the_pilot_table_shows_each_pilot_as_it_is():
     sec = out[out.index("## Pilot runs (not the published figures)") :]
     sec = sec[: sec.index("\n## ")]
     assert "synthetic" in sec
-    assert (
-        "The pilots ran on the same machine with other projects' containers busier; their rates"
-        " show how much the figure depends on what else the VM is doing." in sec
-    )
+    assert "None is in the figures above; each is shown as it is." in sec
+    assert "busier; their rates" not in sec
     assert "| tp-a | 8ac86e8 | 2026-11-12T09:49:26+00:00 | Battery Power at the start," in sec
     assert "13,102 events a second" in sec
     assert "no window; 104,040 events a second on the source's clock" in sec
@@ -815,6 +814,77 @@ def test_the_pilot_table_shows_each_pilot_as_it_is():
     # in the order they ran, and the published figures are not changed by them
     assert sec.index("| tp-a |") < sec.index("| tp-b |") < sec.index("| delay-p |")
     assert "123,457" in out[: out.index("## Pilot runs")]
+
+
+AC = "Now drawing from 'AC Power'"
+
+
+def busier_pilot():
+    """A valid pilot on AC with a 90-minute fill, its neighbours above every published reading
+    (the published fixture's are 87.6 and 140.2)."""
+    loads = {
+        "load_start": {"other_containers_cpu_pct": 150.1},
+        "load_end": {"other_containers_cpu_pct": 154.8},
+    }
+    doc = tp_pilot("tp-c", 66_533.2, AC, AC, minutes=90, **loads)
+    doc["env"].update(on_battery=False, date_utc="2026-11-12T11:18:14+00:00")
+    return doc
+
+
+def pilot_section(pilots):
+    out = br.render(throughput(), delay(), state(), pilots=pilots)
+    sec = out[out.index("## Pilot runs (not the published figures)") :]
+    return sec[: sec.index("\n## ")]
+
+
+def test_the_pilot_table_gives_each_fill_and_says_only_what_the_files_show():
+    pilots = {"tp-a": tp_pilot("tp-a", 13_102.4, BATTERY), "tp-c": busier_pilot()}
+    pilots["delay-p"] = delay_pilot()
+    sec = pilot_section(pilots)
+    assert "| Valid | Event minutes | Rate, live setting's delay or bytes per key |" in sec
+    assert "| yes | 30 | 13,102 events a second |" in sec
+    assert "| yes | 90 | 66,533 events a second |" in sec
+    assert "| yes |  | pipeline delay p50 21.5 s, p95 22.6 s (n=6) |" in sec
+    assert (
+        "Every valid throughput pilot read lower than the published runs: 13,102 to 66,533"
+        " events a second, against 123,457 to 130,000. The throughput pilots ran on earlier"
+        " commits of the drivers, with fills of 30 or 90 event minutes against 120, and some on"
+        " battery. One throughput pilot, tp-c, recorded busier neighbours: other projects'"
+        " containers used 150.1 → 154.8 percent of one CPU, above every published reading"
+        " (87.6 to 140.2). No run measured which of these moved the rate." in sec
+    )
+
+
+def test_the_pilot_sentence_claims_nothing_the_files_do_not_show():
+    # A pilot faster than a published run, on AC, with neighbours not above every reading.
+    fast = tp_pilot("tp-f", 125_000.0, AC, AC, minutes=240)
+    fast["runs"][0]["load_start"] = {"other_containers_cpu_pct": 150.1}
+    fast["runs"][0]["load_end"] = {"other_containers_cpu_pct": 12.0}
+    sec = pilot_section({"tp-f": fast})
+    assert (
+        "The valid throughput pilots read 125,000 events a second, against 123,457 to 130,000"
+        " in the published runs. The throughput pilots ran on earlier commits of the drivers,"
+        " with fills of 240 event minutes against 120. No run measured which of these moved the"
+        " rate." in sec
+    )
+    assert "battery" not in sec[sec.index("The valid throughput") :]
+    assert "busier" not in sec
+
+
+def test_two_busier_pilots_are_named_together():
+    other = busier_pilot()
+    other["runs"][0]["run_id"] = "tp-d-r1"
+    sec = pilot_section({"tp-c": busier_pilot(), "tp-d": other})
+    assert (
+        "The throughput pilots tp-c and tp-d recorded busier neighbours: at each of their"
+        " readings, other projects' containers used more than at every published reading"
+        " (87.6 to 140.2 percent of one CPU)." in sec
+    )
+
+
+def test_without_throughput_pilots_there_is_no_pilot_sentence():
+    sec = pilot_section({"delay-p": delay_pilot()})
+    assert "No run measured" not in sec
 
 
 def test_a_state_pilot_shows_bytes_per_key_per_backend():
@@ -1051,14 +1121,24 @@ def test_extrapolation_table_is_inside_the_render():
     assert out.index("## Extrapolation, not measured") < out.index(table)
 
 
-def test_the_time_to_page_sentence_names_the_headline_setting():
-    # The count under five minutes is the headline setting's; the other settings have their own.
+def test_the_time_to_page_sentence_names_the_live_setting():
+    # The count under five minutes is the live setting's; the other settings have their own.
     out = br._delay(delay())
     assert (
-        "For the headline setting, seasonal/k4, the measured minimum is 263.4 s, and 31 of 57"
+        "For the live setting, seasonal/k4, the measured minimum is 263.4 s, and 31 of 57"
         " matched incidents were paged in under five minutes from their start." in out
     )
     assert "The measured minimum is" not in out
+
+
+def test_the_delay_section_calls_k4_the_live_setting_not_the_headline():
+    # The eval's headline is the setting each seed selected; the delay run measures the live one.
+    out = br._delay(delay())
+    assert "The live setting is seasonal/k4." in out
+    assert "| seasonal/k4 (the live setting) |" in out
+    assert "The split of the live setting's pipeline delay, in seconds:" in out
+    assert "For the live setting: 3 incidents were missed," in out
+    assert "headline" not in out
 
 
 def test_the_delay_section_does_not_point_at_the_readme():

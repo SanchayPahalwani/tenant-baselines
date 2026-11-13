@@ -646,7 +646,8 @@ def _delay(d: dict) -> str:
     lag, off = d["watermark_lag_s"], d["clock_offset"]
     heading = f"{h['detector']}/{h['setting']}"
     rows = [
-        _row(k + (" (headline)" if k == heading else ""), m) for k, m in d["by_detector"].items()
+        _row(k + (" (the live setting)" if k == heading else ""), m)
+        for k, m in d["by_detector"].items()
     ]
     return (
         "## Delay\n\n"
@@ -663,7 +664,7 @@ def _delay(d: dict) -> str:
         " of its hold, to the broker's append time of that row in `bench.alerts`. Time-to-page is"
         " the time from the incident's start to the append of the first matching row."
         " Percentiles are nearest-rank, with their `n`. Times are in"
-        f" seconds. The headline setting is {heading}.\n\n"
+        f" seconds. The live setting is {heading}.\n\n"
         + table(
             [
                 "Detector / setting",
@@ -684,7 +685,7 @@ def _delay(d: dict) -> str:
         f" for {count(dz['hold_s'])} s. Both are counted from the start of the first breaching"
         " minute, not from the incident's start. A spike of this size is expected to breach in"
         " the minute it starts in, so the count often starts up to a minute before the incident."
-        f" For the headline setting, {h['detector']}/{h['setting']}, the measured minimum is"
+        f" For the live setting, {h['detector']}/{h['setting']}, the measured minimum is"
         f" {n(h['time_to_page_s']['min'])} s, and"
         f" {count(h['under_five_minutes'])} of {count(h['time_to_page_s']['n'])} matched"
         " incidents were paged in under five minutes from their start.\n\n"
@@ -701,11 +702,11 @@ def _delay(d: dict) -> str:
         f" `group_wait` ({count(dz['group_wait_s'])} s, configured) come after it."
         " Page times read at the webhook include the forwarder and `group_wait`, and are not"
         " comparable.\n\n"
-        "The split of the headline pipeline delay, in seconds: decision to emit"
+        "The split of the live setting's pipeline delay, in seconds: decision to emit"
         f" {n(h['emit_delay_s']['p50'])} at p50 and {n(h['emit_delay_s']['p95'])} at p95; emit to"
         f" append {n(h['sink_delay_s']['p50'])} at p50 and {n(h['sink_delay_s']['p95'])} at"
         " p95.\n\n"
-        f"For the headline setting: {count(len(h['missed']))} incidents were missed,"
+        f"For the live setting: {count(len(h['missed']))} incidents were missed,"
         f" {count(h['unmatched_firing_rows'])} firing rows matched no incident, and"
         f" {count(h['regional_firing_rows'])} regional firing rows were written.\n\n"
         "What the machine was doing:\n\n"
@@ -918,7 +919,105 @@ def _pilot_loads(kind: str, doc: dict) -> str:
     return "; ".join(cells) or "not recorded"
 
 
-def _pilots(pilots: dict[str, dict]) -> str:
+def _pilot_minutes(kind: str, doc: dict) -> str:
+    """A throughput pilot's fill length; blank for the pilots that have no fill."""
+    if kind != "throughput":
+        return ""
+    minutes = doc["fill"].get("event_minutes")
+    return "not recorded" if minutes is None else count(minutes)
+
+
+def _range(values: Sequence[float], digits: int = 1) -> str:
+    lo, hi = n(min(values), digits), n(max(values), digits)
+    return lo if lo == hi else f"{lo} to {hi}"
+
+
+def _or(parts: Sequence[str]) -> str:
+    """'a', 'a or b', 'a, b or c'."""
+    return parts[0] if len(parts) < 2 else ", ".join(parts[:-1]) + " or " + parts[-1]
+
+
+def _other_cpu(loads: Sequence[dict | None]) -> list[dict]:
+    """The load readings that recorded the other containers' CPU."""
+    return [x for x in loads if x and x.get("other_containers_cpu_pct") is not None]
+
+
+def _pilots_against_published(pilots: dict[str, dict], throughput: dict) -> str:
+    """What the throughput pilots' own files show beside the published runs. The pilots' rates
+    differ in several recorded ways at once, and no run measured which one moved the rate, so
+    this names no cause."""
+    tp = {k: d for k, d in pilots.items() if _pilot_kind(d) == "throughput"}
+    if not tp:
+        return ""
+    runs = throughput["runs"]
+    published = [r["events_per_s"] for r in runs]
+    rates = [
+        r["events_per_s"]
+        for d in tp.values()
+        if d.get("valid")
+        for r in d.get("runs", [])
+        if r.get("events_per_s") is not None
+    ]
+    out = []
+    if rates and max(rates) < min(published):
+        out.append(
+            f"Every valid throughput pilot read lower than the published runs: {_range(rates, 0)}"
+            f" events a second, against {_range(published, 0)}."
+        )
+    elif rates:
+        out.append(
+            f"The valid throughput pilots read {_range(rates, 0)} events a second, against"
+            f" {_range(published, 0)} in the published runs."
+        )
+    minutes = sorted(
+        {d["fill"]["event_minutes"] for d in tp.values() if "event_minutes" in d["fill"]}
+    )
+    on_battery = [
+        d
+        for d in tp.values()
+        if _battery(d.get("env", {}).get("power")) or _battery(_power_end("throughput", d))
+    ]
+    ran = "The throughput pilots ran on earlier commits of the drivers"
+    if minutes:
+        ran += (
+            f", with fills of {_or([count(m) for m in minutes])} event minutes against"
+            f" {count(throughput['fill']['event_minutes'])}"
+        )
+    if on_battery:
+        ran += ", and " + ("all" if len(on_battery) == len(tp) else "some") + " on battery"
+    out.append(ran + ".")
+    seen = _other_cpu([x for r in runs for x in _loads_of(r)])
+    if seen:
+        # Busier: every reading the pilot recorded is above every published one.
+        cpu = [x["other_containers_cpu_pct"] for x in seen]
+        busier = {}
+        for run_id, d in tp.items():
+            mine = _other_cpu([x for r in d.get("runs", []) for x in _loads_of(r)])
+            if mine and min(x["other_containers_cpu_pct"] for x in mine) > max(cpu):
+                busier[run_id] = _pilot_loads("throughput", d)
+        unit = seen[0]["cpu_pct_unit"]
+        if len(busier) == 1:
+            ((run_id, cells),) = busier.items()
+            out.append(
+                f"One throughput pilot, {run_id}, recorded busier neighbours: other projects'"
+                f" containers used {cells} {unit}, above every published reading"
+                f" ({_range(cpu)})."
+            )
+        elif busier:
+            out.append(
+                f"The throughput pilots {_join(list(busier))} recorded busier neighbours: at"
+                " each of their readings, other projects' containers used more than at every"
+                f" published reading ({_range(cpu)} {unit})."
+            )
+    out.append("No run measured which of these moved the rate.")
+    return " ".join(out)
+
+
+def _loads_of(run: dict) -> tuple[dict | None, dict | None]:
+    return run.get("load_start"), run.get("load_end")
+
+
+def _pilots(pilots: dict[str, dict], throughput: dict) -> str:
     if not pilots:
         return ""
     order = sorted(pilots, key=lambda k: (pilots[k].get("env", {}).get("date_utc") or "", k))
@@ -934,6 +1033,7 @@ def _pilots(pilots: dict[str, dict]) -> str:
                 env.get("date_utc") or "not recorded",
                 _power_pair(env.get("power"), _power_end(kind, doc)),
                 "yes" if doc.get("valid") else "no",
+                _pilot_minutes(kind, doc),
                 _pilot_figure(kind, doc),
                 _pilot_loads(kind, doc),
             ]
@@ -943,12 +1043,12 @@ def _pilots(pilots: dict[str, dict]) -> str:
             notes.append(f"- {run_id}: not valid: {why}")
         if env.get("dirty"):
             notes.append(f"- {run_id}: recorded from a dirty tree.")
+    against = _pilots_against_published(pilots, throughput)
     return (
         "## Pilot runs (not the published figures)\n\n"
         "These pilot runs use synthetic data. They are the result files of the pilots that ran"
-        " to a result, committed unedited in `docs/performance/pilots/`. They ran on earlier"
-        " commits of the drivers, some on battery, and none is in the figures above; each is"
-        " shown as it is.\n\n"
+        " to a result, committed unedited in `docs/performance/pilots/`. None is in the figures"
+        " above; each is shown as it is.\n\n"
         + table(
             [
                 "Run",
@@ -956,14 +1056,14 @@ def _pilots(pilots: dict[str, dict]) -> str:
                 "Date (UTC)",
                 "Power at start and end",
                 "Valid",
-                "Rate, headline delay or bytes per key",
+                "Event minutes",
+                "Rate, live setting's delay or bytes per key",
                 "Other containers' CPU, start → end (percent of one CPU)",
             ],
             rows,
         )
-        + "\n\n"
-        "The pilots ran on the same machine with other projects' containers busier; their rates"
-        " show how much the figure depends on what else the VM is doing.\n"
+        + "\n"
+        + (f"\n{against}\n" if against else "")
         + ("\n" + "\n".join(notes) + "\n" if notes else "")
     )
 
@@ -1048,7 +1148,7 @@ def render(
         _guard("delay.json", lambda: _delay(delay)),
         _guard("state.json", lambda: _state(state, throughput["settings"])),
         _guard("state.json", lambda: _extrapolation(state)),
-        _guard("a pilot file", lambda: _pilots(pilots)),
+        _guard("a pilot file", lambda: _pilots(pilots, throughput)),
         _guard("delay.json", lambda: _limits(delay, throughput, power is not None)),
         _reproduce(),
     ]

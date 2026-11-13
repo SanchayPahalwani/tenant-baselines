@@ -114,25 +114,25 @@ The Docker VM is shared. At the readings above, other projects' containers used 
 
 This section uses synthetic data. The world has 36 keys at up to 40 requests a minute per key, in 8 partitions, with 21 days of history before live traffic. The run injected 60 incidents, each an error-rate rise of 20 points on one key for 360 s. The first starts 300 s after the generator catches up; incidents in one region are 180 s apart; the run reads for 180 s after the last one ends.
 
-Pipeline delay is the time from a row's event time, which for a tenant alert is the end of its hold, to the broker's append time of that row in `bench.alerts`. Time-to-page is the time from the incident's start to the append of the first matching row. Percentiles are nearest-rank, with their `n`. Times are in seconds. The headline setting is seasonal/k4.
+Pipeline delay is the time from a row's event time, which for a tenant alert is the end of its hold, to the broker's append time of that row in `bench.alerts`. Time-to-page is the time from the incident's start to the append of the first matching row. Percentiles are nearest-rank, with their `n`. Times are in seconds. The live setting is seasonal/k4.
 
 | Detector / setting | Incidents | Matched | Pipeline delay p50 | Pipeline delay p95 | Time to page p50 | Time to page p95 | Time to page minimum |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | global_static/p99.9 | 60 | 60 | 21.6 (n=60) | 22.5 (n=60) | 309.4 (n=60) | 364.4 (n=60) | 269.4 (n=60) |
 | per_key_static/p99.9 | 60 | 60 | 21.6 (n=60) | 22.5 (n=60) | 309.4 (n=60) | 364.4 (n=60) | 269.4 (n=60) |
-| seasonal/k4 (headline) | 60 | 60 | 21.6 (n=60) | 22.5 (n=60) | 296.7 (n=60) | 324.4 (n=60) | 269.4 (n=60) |
+| seasonal/k4 (the live setting) | 60 | 60 | 21.6 (n=60) | 22.5 (n=60) | 296.7 (n=60) | 324.4 (n=60) | 269.4 (n=60) |
 
 The delay world's keys have no per-key entry in `thresholds-demo.json`, so `per_key_static` falls back to the global level and its row equals `global_static`'s.
 
-How time-to-page is built (configured, not measured): the detector fires after 3 scored minutes in a row, and the alert is then held for 120 s. Both are counted from the start of the first breaching minute, not from the incident's start. A spike of this size is expected to breach in the minute it starts in, so the count often starts up to a minute before the incident. For the headline setting, seasonal/k4, the measured minimum is 269.4 s, and 35 of 60 matched incidents were paged in under five minutes from their start.
+How time-to-page is built (configured, not measured): the detector fires after 3 scored minutes in a row, and the alert is then held for 120 s. Both are counted from the start of the first breaching minute, not from the incident's start. A spike of this size is expected to breach in the minute it starts in, so the count often starts up to a minute before the incident. For the live setting, seasonal/k4, the measured minimum is 269.4 s, and 35 of 60 matched incidents were paged in under five minutes from their start.
 
 The watermark lag, measured during the run and corrected by the VM clock's offset (before 0.068 s, after 0.096 s): minimum 21.3 s, median 21.8 s, maximum 23.1 s over 68 samples. By design (configured, not measured), the lag is the 20 s watermark bound plus the age of the newest event on the slowest partition that is not idle. This benchmark sends at a fixed rate, so every partition is busy. A sparse partition adds up to 60 s (the idleness timeout, configured); that case was not measured here.
 
 Both figures end at the append to the alerts topic. The forwarder and Alertmanager's `group_wait` (30 s, configured) come after it. Page times read at the webhook include the forwarder and `group_wait`, and are not comparable.
 
-The split of the headline pipeline delay, in seconds: decision to emit 21.6 at p50 and 22.5 at p95; emit to append 0.0 at p50 and 0.0 at p95.
+The split of the live setting's pipeline delay, in seconds: decision to emit 21.6 at p50 and 22.5 at p95; emit to append 0.0 at p50 and 0.0 at p95.
 
-For the headline setting: 0 incidents were missed, 0 firing rows matched no incident, and 0 regional firing rows were written.
+For the live setting: 0 incidents were missed, 0 firing rows matched no incident, and 0 regional firing rows were written.
 
 What the machine was doing:
 
@@ -186,20 +186,20 @@ It assumes every key has a full 5-week history and that state grows linearly wit
 
 ## Pilot runs (not the published figures)
 
-These pilot runs use synthetic data. They are the result files of the pilots that ran to a result, committed unedited in `docs/performance/pilots/`. They ran on earlier commits of the drivers, some on battery, and none is in the figures above; each is shown as it is.
+These pilot runs use synthetic data. They are the result files of the pilots that ran to a result, committed unedited in `docs/performance/pilots/`. None is in the figures above; each is shown as it is.
 
-| Run | Commit | Date (UTC) | Power at start and end | Valid | Rate, headline delay or bytes per key | Other containers' CPU, start → end (percent of one CPU) |
-| --- | --- | --- | --- | --- | --- | --- |
-| tp-20261112T094926 | 8ac86e8 | 2026-11-12T09:49:26+00:00 | Battery Power at the start, not recorded at the end | yes | 13,102 events a second | not recorded |
-| tp-20261112T100846 | 56a6fda | 2026-11-12T10:08:46+00:00 | Battery Power at the start, not recorded at the end | yes | 17,767 events a second | not recorded |
-| tp-20261112T103845 | cf2a8a1 | 2026-11-12T10:38:44+00:00 | AC Power at the start, not recorded at the end | no | no window | not recorded |
-| tp-20261112T104138 | cf2a8a1 | 2026-11-12T10:41:38+00:00 | AC Power at the start, not recorded at the end | yes | 66,533 events a second | not recorded |
-| tp-20261112T110455 | 5dd2f93 | 2026-11-12T11:04:55+00:00 | Battery Power at the start, Battery Power at the end | no | no window; 104,040 events a second on the source's clock | not recorded |
-| tp-20261112T111814 | 0556053 | 2026-11-12T11:18:14+00:00 | AC Power at the start, AC Power at the end | yes | 31,340 events a second | 69.1 → 154.8 |
-| delay-20261112T143936 | e4c9575 | 2026-11-12T14:39:35+00:00 | Battery Power at the start, Battery Power at the end | yes | pipeline delay p50 21.5 s, p95 22.6 s (n=6) | 55.6 → 49.7 |
-| state-20261112T150705 | e4c9575 | 2026-11-12T15:07:05+00:00 | Battery Power at the start, Battery Power at the end | yes | hashmap 622,238 bytes per key; rocksdb 275,736 bytes per key | 164.5 → 29.1; 20.3 → 56.4 |
+| Run | Commit | Date (UTC) | Power at start and end | Valid | Event minutes | Rate, live setting's delay or bytes per key | Other containers' CPU, start → end (percent of one CPU) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| tp-20261112T094926 | 8ac86e8 | 2026-11-12T09:49:26+00:00 | Battery Power at the start, not recorded at the end | yes | 30 | 13,102 events a second | not recorded |
+| tp-20261112T100846 | 56a6fda | 2026-11-12T10:08:46+00:00 | Battery Power at the start, not recorded at the end | yes | 30 | 17,767 events a second | not recorded |
+| tp-20261112T103845 | cf2a8a1 | 2026-11-12T10:38:44+00:00 | AC Power at the start, not recorded at the end | no | 30 | no window | not recorded |
+| tp-20261112T104138 | cf2a8a1 | 2026-11-12T10:41:38+00:00 | AC Power at the start, not recorded at the end | yes | 90 | 66,533 events a second | not recorded |
+| tp-20261112T110455 | 5dd2f93 | 2026-11-12T11:04:55+00:00 | Battery Power at the start, Battery Power at the end | no | 30 | no window; 104,040 events a second on the source's clock | not recorded |
+| tp-20261112T111814 | 0556053 | 2026-11-12T11:18:14+00:00 | AC Power at the start, AC Power at the end | yes | 30 | 31,340 events a second | 69.1 → 154.8 |
+| delay-20261112T143936 | e4c9575 | 2026-11-12T14:39:35+00:00 | Battery Power at the start, Battery Power at the end | yes |  | pipeline delay p50 21.5 s, p95 22.6 s (n=6) | 55.6 → 49.7 |
+| state-20261112T150705 | e4c9575 | 2026-11-12T15:07:05+00:00 | Battery Power at the start, Battery Power at the end | yes |  | hashmap 622,238 bytes per key; rocksdb 275,736 bytes per key | 164.5 → 29.1; 20.3 → 56.4 |
 
-The pilots ran on the same machine with other projects' containers busier; their rates show how much the figure depends on what else the VM is doing.
+Every valid throughput pilot read lower than the published runs: 13,102 to 66,533 events a second, against 151,897 to 179,224. The throughput pilots ran on earlier commits of the drivers, with fills of 30 or 90 event minutes against 240, and some on battery. One throughput pilot, tp-20261112T111814, recorded busier neighbours: other projects' containers used 69.1 → 154.8 percent of one CPU, above every published reading (12.7 to 65.8). No run measured which of these moved the rate.
 
 - tp-20261112T100846: recorded from a dirty tree.
 - tp-20261112T103845: not valid: run tp-20261112T103845-r1: the window is 12 s and 1 intervals; it needs 120 s and 8. Raise BENCH_MINUTES
