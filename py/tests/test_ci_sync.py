@@ -15,10 +15,27 @@ WORKFLOW_COMMANDS = [
 ]
 
 
+def workflow_runs(workflow: str) -> list[str]:
+    """The `run:` commands of a workflow's steps, in order."""
+    return re.findall(r"^\s*(?:- )?run: (.+?)\s*$", workflow, flags=re.MULTILINE)
+
+
+def test_workflow_runs_finds_a_run_after_a_name():
+    workflow = (
+        "defaults:\n"
+        "  run:\n"
+        "    working-directory: py\n"
+        "steps:\n"
+        "  - name: x\n"
+        "    run: y\n"
+        "  - run: z\n"
+    )
+    assert workflow_runs(workflow) == ["y", "z"]
+
+
 def test_make_ci_runs_the_workflows_commands_in_order():
     workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-    runs = re.findall(r"^\s*- run: (.+?)\s*$", workflow, flags=re.MULTILINE)
-    assert runs == WORKFLOW_COMMANDS
+    assert workflow_runs(workflow) == WORKFLOW_COMMANDS
 
     lines = (ROOT / "Makefile").read_text().splitlines()
     start = lines.index("ci:") + 1

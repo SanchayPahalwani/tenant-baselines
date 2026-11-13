@@ -988,24 +988,67 @@ def test_first_word_skips_comments():
     assert first_word("INSERT INTO t VALUES (1)") == "INSERT"
 
 
+def _variable_sql(variable: dict):
+    """A query variable's SQL: its `query` (a string, or an object with one) and `definition`."""
+    for key in ("query", "definition"):
+        sql = variable.get(key)
+        if isinstance(sql, dict):
+            sql = sql.get("query")
+        if isinstance(sql, str) and sql.strip():
+            yield sql
+
+
+def dashboard_queries(node):
+    """Every SQL text of a dashboard that Grafana runs: each `rawSql`, and the SQL of each
+    query variable."""
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k == "rawSql":
+                yield v
+                continue
+            if k == "templating" and isinstance(v, dict):
+                for variable in v.get("list", []):
+                    if variable.get("type") == "query":
+                        yield from _variable_sql(variable)
+            yield from dashboard_queries(v)
+    elif isinstance(node, list):
+        for v in node:
+            yield from dashboard_queries(v)
+
+
+def dashboard_files(root):
+    """Every dashboard file under `root`, sub-folders included."""
+    return sorted(root.rglob("*.json"))
+
+
 def test_every_dashboard_query_only_reads():
     """A pin: Grafana logs in to ClickHouse as the admin user, so the dashboards must not write."""
-
-    def queries(node):
-        if isinstance(node, dict):
-            for k, v in node.items():
-                if k == "rawSql":
-                    yield v
-                else:
-                    yield from queries(v)
-        elif isinstance(node, list):
-            for v in node:
-                yield from queries(v)
-
-    files = sorted((freeze.REPO / "infra/grafana/dashboards").glob("*.json"))
+    files = dashboard_files(freeze.REPO / "infra/grafana/dashboards")
     assert files
-    found = [q for f in files for q in queries(json.loads(f.read_text()))]
+    found = [q for f in files for q in dashboard_queries(json.loads(f.read_text()))]
     assert found
     assert [q[:40] for q in found if first_word(q) not in ("SELECT", "WITH")] == []
     doc = {"panels": [{"targets": [{"rawSql": "-- x\nINSERT INTO tb.scores VALUES (1)"}]}]}
-    assert [first_word(q) for q in queries(doc)] == ["INSERT"]
+    assert [first_word(q) for q in dashboard_queries(doc)] == ["INSERT"]
+
+
+def test_a_variable_query_is_checked_too():
+    """Grafana runs a query variable's SQL on the same login as the panels'."""
+    insert = "INSERT INTO tb.scores VALUES (1)"
+    doc = {
+        "templating": {
+            "list": [
+                {"name": "a", "type": "query", "query": insert, "definition": "SELECT 1"},
+                {"name": "b", "type": "query", "query": {"query": "DROP TABLE tb.scores"}},
+                {"name": "c", "type": "custom", "query": "x,y"},
+            ]
+        }
+    }
+    assert sorted(first_word(q) for q in dashboard_queries(doc)) == ["DROP", "INSERT", "SELECT"]
+
+
+def test_dashboards_in_a_sub_folder_are_checked_too(tmp_path):
+    (tmp_path / "sub").mkdir()
+    for path in (tmp_path / "a.json", tmp_path / "sub" / "b.json"):
+        path.write_text("{}")
+    assert dashboard_files(tmp_path) == [tmp_path / "a.json", tmp_path / "sub" / "b.json"]
