@@ -259,9 +259,13 @@ def test_the_readme_performance_block_is_the_scripts():
 
 
 def test_the_readme_diagram_is_the_design_docs():
-    readme, design = FENCE.findall(README), FENCE.findall(DESIGN)
-    assert len(readme) == 1 and len(design) == 1
-    assert readme == design
+    """The README shows the rendered diagram; its source is the design doc's Mermaid block."""
+    assert FENCE.findall(README) == []
+    assert "](docs/images/architecture.png)" in README
+    design = FENCE.findall(DESIGN)
+    assert len(design) == 1
+    source = (REPO / "docs" / "images" / "architecture.mmd").read_text()
+    assert design[0] == "```mermaid\n" + source + "```"
 
 
 def test_readme_sections_in_order():

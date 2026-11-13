@@ -51,6 +51,8 @@ flowchart TB
   pg -. "notifications panel" .-> ch
 ```
 
+The README shows this diagram as `docs/images/architecture.png`, rendered with Mermaid 10.9.1 from `docs/images/architecture.mmd`. A test keeps that file equal to the source above.
+
 - **Namespaces** (spec 4.1). A namespace is `live`, `eval` or `bench`. Each has its own topics: `<ns>.events`, `<ns>.aggregates`, `<ns>.scores`, `<ns>.alerts` and `<ns>.unit-status`, made by `infra/kafka/create-topics.sh`.
 - ClickHouse has one database, `tb`. Each row carries an `ns`, taken from its source topic, and a `run_id`. *Reason:* one schema serves the demo, the eval and the benchmark. *Cost:* every query must filter on `ns`; the dashboard's queries of `tb` tables all read `ns = 'live'`.
 - **The key** is `tenant|region|unit` (spec 4.1). A unit is shared by several tenants or dedicated to one.

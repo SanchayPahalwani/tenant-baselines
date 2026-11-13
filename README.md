@@ -10,31 +10,9 @@ The question it tests: when traffic follows working hours, does a baseline per k
 
 ## Architecture
 
-```mermaid
-flowchart TB
-  gen["Event generator, Python (synthetic)"] --> ev[("Kafka: live.events")]
-  agen["Aggregate generator, Python (eval only)"] --> ain[("Kafka: eval input topic, one per run")]
-  subgraph job["Flink job, Java"]
-    agg["MinuteAggregator, by key"] --> sc["Scorer, by key"]
-    agg --> pop["PopulationBaselines, parallelism 1"]
-    agg --> grp
-    pop -. "region and global baselines" .-> sc
-    sc --> grp["RegionGrouper, by region"]
-  end
-  ev --> agg
-  ain --> sc
-  ain --> pop
-  ain --> grp
-  agg --> out[("Kafka: aggregates, scores, alerts, unit-status")]
-  sc --> out
-  grp --> out
-  out --> ch["ClickHouse, Kafka engine and materialized views"]
-  out --> fwd["forwarder, Python (live.alerts only)"]
-  fwd --> am["Alertmanager"]
-  am --> pg["pager-sink, webhook log"]
-  ch --> gf["Grafana"]
-  pg -. "notifications panel" .-> ch
-```
+![Architecture: the generators write to Kafka; the Flink job aggregates per minute, scores against the baselines and groups by region; results go back to Kafka, then to ClickHouse and Grafana, and through the forwarder to Alertmanager and the webhook log](docs/images/architecture.png)
+
+The diagram's source is in [docs/design.md](docs/design.md#2-architecture).
 
 For each key and minute, the job builds an aggregate, scores error rate, latency and volume against the key's baseline for that hour of the week, and raises or resolves an alert. Each tenant alert is held briefly; if enough of a region's active tenants alert on the same signal, one regional alert forms and mutes the tenant alerts. Alerts go to a Kafka topic, to ClickHouse and Grafana, and through a forwarder to Alertmanager and a webhook log.
 

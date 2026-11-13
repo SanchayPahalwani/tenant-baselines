@@ -1,0 +1,23 @@
+flowchart TB
+  gen["Event generator, Python (synthetic)"] --> ev[("Kafka: live.events")]
+  agen["Aggregate generator, Python (eval only)"] --> ain[("Kafka: eval input topic, one per run")]
+  subgraph job["Flink job, Java"]
+    agg["MinuteAggregator, by key"] --> sc["Scorer, by key"]
+    agg --> pop["PopulationBaselines, parallelism 1"]
+    agg --> grp
+    pop -. "region and global baselines" .-> sc
+    sc --> grp["RegionGrouper, by region"]
+  end
+  ev --> agg
+  ain --> sc
+  ain --> pop
+  ain --> grp
+  agg --> out[("Kafka: aggregates, scores, alerts, unit-status")]
+  sc --> out
+  grp --> out
+  out --> ch["ClickHouse, Kafka engine and materialized views"]
+  out --> fwd["forwarder, Python (live.alerts only)"]
+  fwd --> am["Alertmanager"]
+  am --> pg["pager-sink, webhook log"]
+  ch --> gf["Grafana"]
+  pg -. "notifications panel" .-> ch
