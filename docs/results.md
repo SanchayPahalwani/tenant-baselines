@@ -13,7 +13,7 @@ These results test the implementation under the stated traffic assumption; they 
 - Docker VM: Docker 28.4.0, 8 CPUs, 9.7 GiB memory
 - Machine facts: from the Setup block that `make eval` rendered right after the official runs on 2026-11-12 (`docs/results.md` at commit `7fba0be`, whose Setup names commit `b97503c`)
 - Versions: Flink 2.2.1 (Java 17); Flink Kafka connector 5.0.0-2.2; Kafka 4.4.0; ClickHouse 26.8; Grafana 13.2.5; Alertmanager v0.34.2; Python 3.12.15; numpy 2.5.4
-- Rendered at commit `c26c984` on 2026-11-12
+- Rendered at commit `98ec261` on 2026-11-13
 - Measured code at the render commit equals the freeze commit: yes, except display-only files: infra/grafana/dashboards/tenant-baselines.json
 
 ## Headline: 6:1 day/night amplitude, selected settings on the test week
@@ -143,8 +143,8 @@ Run at commit `e57f621` on 2026-11-12T08:53:03Z. Recorded: run id `paths-s7-a6-2
 - **The clip at the replay end.** The replay ends at the end of week 5. Alert rows with an event time past it are dropped before scoring: 6 rows over all runs here. Alerts still open at the end count as pages: 388 over all runs here. Duplicate rows dropped: 0.
 - **Inclusive fire comparison.** The shared state machine fires at or past the fire level (spec 4.5). The values are discrete (bucketed p95, error counts over request counts, whole 5-minute sums), so a static threshold is breached on calibration minutes more often than its nominal percentile. Static false pages therefore run somewhat higher than the percentile alone suggests. The comparison was not changed.
 - **What check-paths shows.** It shows that the events path and the aggregates path give the same alert log. It does not show that the detectors are right: both paths share the thresholds, every operator from the minute aggregates on, and the random draws.
-- **Measured code.** Changed 2026-11-12, after the official runs: the dashboard files under infra/grafana/dashboards may differ from the freeze commit, and the Setup line names each one that does. The dashboards only draw; the eval reads pages from the alerts topic. Everything else under infra/, and docker-compose.yml, is still compared.
-- **Replay mode can fail.** Replay mode aligns the watermarks of the Kafka partitions. That can hit a race in the Kafka connector (FLINK-39728). It is fixed in connector 5.1.0, which is not released as of 2026-11-12; this repo pins 5.0.0-2.2. A run that hits it fails and gives no output, so no wrong result is possible, and check-paths can be run again. The official runs use aggregates mode. It has one partition and no alignment, so it cannot hit the race.
+- **Measured code.** Changed 2026-11-12 (UTC), after the official runs: the dashboard files under infra/grafana/dashboards may differ from the freeze commit, and the Setup line names each one that does. The dashboards only draw; the eval reads pages from the alerts topic. Everything else under infra/, and docker-compose.yml, is still compared.
+- **Replay mode can fail.** Replay mode aligns the watermarks of the Kafka partitions. That can hit a race in the Kafka connector (FLINK-39728). It is fixed in connector 5.1.0, which is not released as of 2026-11-13; this repo pins 5.0.0-2.2. A run that hits it fails and gives no output, so no wrong result is possible, and check-paths can be run again. The official runs use aggregates mode. It has one partition and no alignment, so it cannot hit the race.
 - **Events-path speed.** The events path of check-paths is bound by the alignment: about 44 minutes for five weeks. The alignment drift was not changed.
 - **Single-key creeps.** A latency creep is placed on one unit. A dedicated unit is a unit, so a creep can land on a unit with a single key.
 - **No Monday holiday in two regions.** eu-central and ap-southeast never get a holiday dip on a Monday. Their local Monday starts before the UTC week, so that local day cannot lie inside the week.
