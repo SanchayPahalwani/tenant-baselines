@@ -36,6 +36,10 @@ flowchart LR
 
 For each key and minute, the job builds an aggregate, scores error rate, latency and volume against the key's baseline for that hour of the week, and raises or resolves an alert. Each tenant alert is held briefly; if enough of a region's active tenants alert on the same signal, one regional alert forms and mutes the tenant alerts. Alerts go to a Kafka topic, to ClickHouse and Grafana, and through a forwarder to Alertmanager and a webhook log.
 
+The running job in Flink's web UI during `make demo` (synthetic data):
+
+![The live job's graph in the Flink web UI: the events and ticks sources, the minute aggregator, the population baselines, the scorer and the region grouper](docs/images/flink-job-graph.png)
+
 ## Quick start
 
 Prerequisites: Docker with at least 8 CPUs and 10 GB of memory, `make`, and [`uv`](https://docs.astral.sh/uv/). The compose network uses the fixed subnet 10.231.0.0/24; change it in `docker-compose.yml` if it clashes with a local network. Published ports listen on 127.0.0.1 only.
@@ -50,6 +54,20 @@ The generator writes three weeks of synthetic history at full speed and then con
 Keep the machine awake while the demo runs. A sleep freezes the Docker VM, the job sees it as a total outage, and on wake the zero-traffic rule pages every busy key.
 
 The Grafana dashboard has five panels: one key's signals against its baseline band, the live alert log, the score by key for each region, the notifications the webhook received, and the unit status.
+
+The screenshots below come from one `make demo` run on synthetic data. They show what the demo looks like, not results.
+
+A tenant's error rate climbs out of its baseline band during the scripted error burst on its dedicated unit:
+
+![Error rate of one tenant key against its baseline band, rising well above the band once the scripted burst starts](docs/images/grafana-signal.png)
+
+The error spike across the region: one regional alert forms and absorbs the tenant alerts, and the region's scores turn red:
+
+![The alert log with one regional alert per detector and the tenant alerts it absorbed, above the region's scores by key](docs/images/grafana-regional.png)
+
+What the webhook received, and the dedicated unit that the regional alert released:
+
+![The notifications panel with two tenant pages and one regional page, and the unit status panel showing the unit undrained](docs/images/grafana-pages.png)
 
 - `make smoke` runs the demo and checks it end to end. Run `make reset` first.
 - `make test` runs the unit tests. `make ci` runs the same commands as the GitHub Actions workflow, `.github/workflows/ci.yml`, locally.
