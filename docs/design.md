@@ -2,7 +2,7 @@
 
 **Synthetic data only.** Every event and incident here comes from a generator in `py/`, and every figure from runs on one laptop. None of it describes a real system. The figures are not evidence about any real system or any larger deployment, and nothing here claims production use.
 
-This document gives the reason for each choice in [the spec](superpowers/specs/2026-11-09-tenant-baselines-design.md), what the choice costs, and where the build departs from the spec. It follows the data through the pipeline, then the eval, then the measurements.
+This document gives the reason for each choice in [the spec](process/specs/2026-11-09-tenant-baselines-design.md), what the choice costs, and where the build departs from the spec. It follows the data through the pipeline, then the eval, then the measurements.
 
 ## 1. What this is
 
@@ -21,12 +21,12 @@ This document gives the reason for each choice in [the spec](superpowers/specs/2
 - Figures sit in three blocks. Each is pasted unchanged from a script's output, and a test compares the two. The eval headline (§9) and the performance table (§10) are measured. The state extrapolation (§10) is arithmetic on a measurement, not a measurement.
 - A few other figures sit on lines that end with a source tag, `([results](results.md))` or `([performance](performance.md))`. A test checks that every number on such a line appears in the file the tag names.
 - A value marked "configured" is set in the code or in the stack's configuration. It is a design value, not a measurement. "spec 4.3" cites a section of the spec.
-- The milestone plans hold the detail behind the builder's calls: [milestone 1](superpowers/plans/2026-11-09-m1-static-end-to-end.md), [milestone 2](superpowers/plans/2026-11-10-m2-seasonal-baselines.md), [milestone 3](superpowers/plans/2026-11-11-m3-alert-noise-control.md), [milestone 4](superpowers/plans/2026-11-12-m4-eval.md), [milestone 5](superpowers/plans/2026-11-12-m5-throughput-delay.md) and [milestone 6](superpowers/plans/2026-11-13-m6-readme-design.md). What the build left open is in [the open items](superpowers/open-items.md).
+- The milestone plans hold the detail behind the builder's calls: [milestone 1](process/plans/2026-11-09-m1-static-end-to-end.md), [milestone 2](process/plans/2026-11-10-m2-seasonal-baselines.md), [milestone 3](process/plans/2026-11-11-m3-alert-noise-control.md), [milestone 4](process/plans/2026-11-12-m4-eval.md), [milestone 5](process/plans/2026-11-12-m5-throughput-delay.md) and [milestone 6](process/plans/2026-11-13-m6-readme-design.md). What the build left open is in [the open items](process/open-items.md).
 
 ## 2. Architecture
 
 ```mermaid
-flowchart LR
+flowchart TB
   gen["Event generator, Python (synthetic)"] --> ev[("Kafka: live.events")]
   agen["Aggregate generator, Python (eval only)"] --> ain[("Kafka: eval input topic, one per run")]
   subgraph job["Flink job, Java"]
@@ -212,7 +212,7 @@ flowchart LR
   - the notifications pager-sink received, one row per alert in each notification;
   - the live unit status, one row per unit.
 - The dashboard opens with every region selected, so the score panel repeats once per region.
-- The panels were checked on the running stack through Grafana's query API (`make smoke`, its dashboard check). No fallback was needed: the score panel stays a `status-history` panel with no transformation, and the notifications panel reads pager-sink through ClickHouse's `url()` with no setting change. How the panels render was not checked in a browser.
+- The panels were checked on the running stack through Grafana's query API (`make smoke`, its dashboard check). No fallback was needed: the score panel stays a `status-history` panel with no transformation, and the notifications panel reads pager-sink through ClickHouse's `url()` with no setting change. They also render in a browser: the README's screenshots were taken from a `make demo` run in headless Chromium.
 - **The notifications panel** reads pager-sink's log over HTTP (`GET /notifications`), through ClickHouse's `url()` table function, on each refresh. pager-sink reads the whole log for each call and returns the flattened rows of its last 500 records (configured). *Reason:* a Kafka topic, a ClickHouse table or a new plugin would each edit a measured path or add a dependency (builder's call, milestone 6). *Cost:* reading the whole log on every refresh suits a demo and nothing larger.
 - **The demo** (spec 4.10). `make demo` runs one continuous timeline: three weeks of synthetic history at full speed, then live traffic in real time. With no seam between them, there is no false volume drop at the switch.
 - The demo's static thresholds come from the same script, run on the demo history. After catch-up, the generator injects a scripted sequence of incidents.
@@ -439,7 +439,7 @@ Design reasoning, not measured. Nothing in this section was built or run.
 - **Holiday calendars, DST handling and change-point detection.** *Reason:* the synthetic world uses fixed offsets. The holiday dip is a should-not-page scenario, so the cost of having no calendar shows in the results instead of being hidden.
 - **The stretch items:** OTLP ingest through a collector, the Flink Kubernetes Operator, and a generated "what changed" note per alert. *Reason:* the spec drops them first, and the claim needs none of them.
 
-**Known gaps a reader could hit** (from [the open items](superpowers/open-items.md)):
+**Known gaps a reader could hit** (from [the open items](process/open-items.md)):
 
 - Alertmanager's state is on an anonymous volume, so silences do not survive `make down`. A fix edits `docker-compose.yml`, a measured path.
 - `tb.ingest_errors` has no TTL. A fix edits a measured file under `infra/`.

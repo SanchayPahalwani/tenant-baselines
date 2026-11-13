@@ -1,18 +1,16 @@
 # tenant-baselines Milestone 2 Implementation Plan: seasonal baselines
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** A seasonal detector (per-key hour-of-week median and MAD, with region and global fallback for new keys) runs beside the static detector, pages through Alertmanager, shows its baseline band in Grafana, and `make demo` warms it on one continuous 3-week timeline.
 
 **Architecture:** `MinuteAggregator` output now feeds two operators. `PopulationBaselines` (parallelism 1) keeps per-region and global histograms per hour-of-week bucket and broadcasts next week's fallback baseline when each hour ends. `Scorer` becomes a `KeyedBroadcastProcessFunction`: it keeps each key's weekly ring of minute values, scores every minute against the key's own baseline or the broadcast fallback, runs the seasonal settings and the static sets through the same state machine, writes scores to a side output and expires idle keys. The Python generator backfills 3 weeks in whole-minute batches, then continues second by second.
 
 **Tech stack:** unchanged from milestone 1 (Java 17, Flink 2.2.1, flink-connector-kafka 5.0.0-2.2, JUnit 5.11.4, AssertJ 3.27.7; Python 3.12 with uv, confluent-kafka 2.16.1, numpy 2.5.4, orjson 3.13.0; ClickHouse 26.8.36.3, Grafana 13.2.5). No new dependencies.
 
-**Spec:** `docs/superpowers/specs/2026-11-09-tenant-baselines-design.md` (v2, approved). Milestone 2 is §8 item 2. Read §4.2–§4.5, §4.9, §4.10, §7 and §10 before starting. Follow-ups folded in come from `docs/superpowers/m1-followups.md`.
+**Spec:** `docs/process/specs/2026-11-09-tenant-baselines-design.md` (v2, approved). Milestone 2 is §8 item 2. Read §4.2–§4.5, §4.9, §4.10, §7 and §10 before starting. Follow-ups folded in come from `docs/process/m1-followups.md`.
 
 ## Global Constraints
 
-- Everything in the milestone 1 plan's Global Constraints still applies (`docs/superpowers/plans/2026-11-09-m1-static-end-to-end.md`), with one correction: the TaskManager runs at **2560m** (`taskmanager.memory.process.size` and `mem_limit`), as `docker-compose.yml` has it, not the 3072m that plan wrote.
+- Everything in the milestone 1 plan's Global Constraints still applies (`docs/process/plans/2026-11-09-m1-static-end-to-end.md`), with one correction: the TaskManager runs at **2560m** (`taskmanager.memory.process.size` and `mem_limit`), as `docker-compose.yml` has it, not the 3072m that plan wrote.
 - Java package root `io.github.sanchaypahalwani.tenantbaselines` (written `<pkg>`). Tests run with `make test-java`; Python with `make test-py && make lint-py`.
 - **Buckets:** 168 hour-of-week buckets in UTC. A bucket keeps one-minute values in a ring of **5 weekly slots × 60 minutes**. Baseline = **median** and `1.4826 × MAD` over the **last 4 weeks, not counting the current week**.
 - **Warm:** a key is warm for a signal in a bucket with **≥ 2 weeks** of data there; a week counts with **≥ 30** stored minutes.
@@ -66,7 +64,7 @@ flink-job/src/main/java/<pkg>/
 flink-job/src/test/java/<pkg>/...        one test class per class above; LevelTest and JobConfigTest are new
 infra/clickhouse/init/01-schema.sql  infra/grafana/dashboards/tenant-baselines.json  docker-compose.yml  (Task 8)
 py/src/tenant_baselines/{incidents,traffic,gen_live,forwarder}.py  py/tests/...   (Tasks 1, 8, 9)
-scripts/demo.sh (new)  scripts/smoke.sh  Makefile  README.md  docs/superpowers/m1-followups.md  (Task 10)
+scripts/demo.sh (new)  scripts/smoke.sh  Makefile  README.md  docs/process/m1-followups.md  (Task 10)
 ```
 
 ---
@@ -517,7 +515,7 @@ The dedicated-unit drop goes to 10%, not §5.4's 30%: with the demo world a 30% 
 
 **Files:**
 - Create: `scripts/demo.sh`
-- Modify: `Makefile`, `scripts/smoke.sh`, `README.md`, `docs/superpowers/m1-followups.md`
+- Modify: `Makefile`, `scripts/smoke.sh`, `README.md`, `docs/process/m1-followups.md`
 
 **Behaviour:**
 - **`make demo`** becomes `demo: jar up` followed by `scripts/demo.sh`, which:
@@ -542,7 +540,7 @@ The dedicated-unit drop goes to 10%, not §5.4's 30%: with the demo world a 30% 
 - [ ] **Step 2: Run CI locally.** `make ci` → both jobs exit 0.
 - [ ] **Step 3: Run the end-to-end smoke test from empty volumes.**
   Run: `make reset && make smoke`
-  Expected: `PASS` for all 8 checks. On a FAIL, debug with superpowers:systematic-debugging before changing code.
+  Expected: `PASS` for all 8 checks. On a FAIL, find the cause before changing code.
   Then run `make demo` again without a reset. Expected: the refusal message and exit code 1 (Review Focus 5).
 - [ ] **Step 4: Record the measurements** (each is reported to the owner as measured on this machine, with the Colima size):
   - warm-up seconds, from `demo.sh`'s `caught up after` line, and the generator's own catch-up seconds and event count from its log;
@@ -554,7 +552,7 @@ The dedicated-unit drop goes to 10%, not §5.4's 30%: with the demo world a 30% 
 - [ ] **Step 6: Check by hand in the browser.** The Grafana dashboard shows three band panels for the dropped key, with the value leaving the band during the drop; the alert log lists both detectors; Alertmanager shows only `seasonal` alerts, none from the history.
 - [ ] **Step 7: Do the repo hygiene check.**
   Run: `git grep -n -i -E 'spearhead|leverag|synerg|cutting-edge|results-driven|passionate'`
-  Expected: no matches outside `docs/superpowers/`.
+  Expected: no matches outside `docs/process/`.
 - [ ] **Step 8: Commit and stop.**
   `git add -A && git commit -m "Milestone 2: seasonal baselines on one continuous demo timeline"`
   Then stop for the owner's review. Report the smoke output and the Step 4 measurements, and say plainly that the GitHub Actions workflow hasn't run on GitHub.

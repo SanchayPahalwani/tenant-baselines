@@ -1,5 +1,7 @@
 # tenant-baselines
 
+[![ci](https://github.com/SanchayPahalwani/tenant-baselines/actions/workflows/ci.yml/badge.svg)](https://github.com/SanchayPahalwani/tenant-baselines/actions/workflows/ci.yml)
+
 A laptop-sized reference pipeline for multi-tenant anomaly alerting. Request events go through Kafka into a Flink job. The job builds per-minute aggregates for each tenant, region and unit, scores them against a baseline and writes alerts back to Kafka. ClickHouse and Grafana show the data, and Prometheus Alertmanager routes the alerts.
 
 The question it tests: when traffic follows working hours, does a baseline per key and hour of the week catch more incidents and page less than fixed thresholds? On the synthetic replays here, the answer is partly yes and partly not settled. The figures are under [Results](#results).
@@ -9,7 +11,7 @@ The question it tests: when traffic follows working hours, does a baseline per k
 ## Architecture
 
 ```mermaid
-flowchart LR
+flowchart TB
   gen["Event generator, Python (synthetic)"] --> ev[("Kafka: live.events")]
   agen["Aggregate generator, Python (eval only)"] --> ain[("Kafka: eval input topic, one per run")]
   subgraph job["Flink job, Java"]
@@ -126,7 +128,9 @@ Time to page includes the confirmation minutes and the hold, both configured. It
 
 [docs/design.md](docs/design.md) gives the reason for each choice, why there is one OLAP store, and what a much larger deployment would change. The eval figures are in [docs/results.md](docs/results.md) and the measurements in [docs/performance.md](docs/performance.md).
 
-The planning material: [the spec](docs/superpowers/specs/2026-11-09-tenant-baselines-design.md), [the milestone 1 plan](docs/superpowers/plans/2026-11-09-m1-static-end-to-end.md), [the milestone 2 plan](docs/superpowers/plans/2026-11-10-m2-seasonal-baselines.md), [the milestone 3 plan](docs/superpowers/plans/2026-11-11-m3-alert-noise-control.md), [the milestone 4 plan](docs/superpowers/plans/2026-11-12-m4-eval.md), [the milestone 5 plan](docs/superpowers/plans/2026-11-12-m5-throughput-delay.md) and [the milestone 6 plan](docs/superpowers/plans/2026-11-13-m6-readme-design.md).
+The planning material: [the spec](docs/process/specs/2026-11-09-tenant-baselines-design.md), [the milestone 1 plan](docs/process/plans/2026-11-09-m1-static-end-to-end.md), [the milestone 2 plan](docs/process/plans/2026-11-10-m2-seasonal-baselines.md), [the milestone 3 plan](docs/process/plans/2026-11-11-m3-alert-noise-control.md), [the milestone 4 plan](docs/process/plans/2026-11-12-m4-eval.md), [the milestone 5 plan](docs/process/plans/2026-11-12-m5-throughput-delay.md) and [the milestone 6 plan](docs/process/plans/2026-11-13-m6-readme-design.md).
+
+How it was built: AI coding agents (Claude Code) wrote the code, tests and documents from the spec and the milestone plans in `docs/process/`. The spec marks which choices were the owner's decisions and which were the builder's calls.
 
 ## What this repo does not do
 

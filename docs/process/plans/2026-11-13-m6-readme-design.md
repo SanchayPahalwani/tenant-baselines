@@ -1,7 +1,5 @@
 # tenant-baselines Milestone 6 Implementation Plan: README and design doc
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Budget:** 6–7 hours, against §8's "~3 h". **The spec's ~3 h does not hold.** The design doc alone is 13 sections against 18 spec subsections with a stronger review: about 2 h. §8 also did not count the tests that tie the documents' numbers to the result files (forced by §2's first anti-goal), the change to the freeze guard without which the panels cannot land, the stack run that proves the panels, or a decision on 60-odd follow-up lines. Per task: T0 0.1 h, T1 0.7 h, T2 0.3 h, T3 1.3 h, T4 0.3 h, T5 0.6 h, T6 2.1 h, T7 1.0 h, whole-branch review 0.5 h. About 0.8 h of it is machine time (one `make reset && make smoke`, `make ci` twice, `make test` once); the smoke run overlaps Tasks 4 and 5.
 
 **Goal:** A reader who opens the repo finds a README with the diagram, the quick start, the measured results and the limits; a `docs/design.md` that gives the reason for every choice in the spec and says what a much larger deployment would change; a Grafana dashboard with the three panels the spec still owes; and tests that tie the published numbers to the result files.
@@ -10,7 +8,7 @@
 
 **Tech stack:** unchanged. No new dependency, no new Grafana plugin, no binary file.
 
-**Spec:** `docs/superpowers/specs/2026-11-09-tenant-baselines-design.md` (v2 with its amendments). Milestone 6 is §8 item 6. Read all of it: the design doc explains §1–§7 section by section. Also read `docs/results.md`, `docs/performance.md`, the "Milestone 6" sections of `docs/superpowers/m1-followups.md`, `m2-followups.md` and `m3-followups.md` as they stand after milestone 5's last commit, and the `Ruling` lines of the two ledgers on disk (`.superpowers/sdd/2026-11-12-m4-eval/progress.md`, `.superpowers/sdd/2026-11-12-m5-throughput-delay/progress.md`). The ledgers are not tracked: explain their rulings in the doc's own words and never link to them.
+**Spec:** `docs/process/specs/2026-11-09-tenant-baselines-design.md` (v2 with its amendments). Milestone 6 is §8 item 6. Read all of it: the design doc explains §1–§7 section by section. Also read `docs/results.md`, `docs/performance.md`, the "Milestone 6" sections of `docs/process/m1-followups.md`, `m2-followups.md` and `m3-followups.md` as they stand after milestone 5's last commit, and the `Ruling` lines of the two ledgers on disk (`.superpowers/sdd/2026-11-12-m4-eval/progress.md`, `.superpowers/sdd/2026-11-12-m5-throughput-delay/progress.md`). The ledgers are not tracked: explain their rulings in the doc's own words and never link to them.
 
 **Precondition:** milestone 5 is merged to `main`. Task 0 checks it and stops otherwise. Work on a branch `m6-docs` cut from `main`.
 
@@ -46,12 +44,12 @@ Each is settled here. None is left for the owner. Calls 9 and 18–24 are the co
 7. **The three panels are:** a score status-history per region (one row per key, 5-minute cells, coloured at the live setting's resolve and fire levels 2 and 4), a notifications table and a unit-status table. *§4.10 names them; a row per key shows a regional incident as a block and a tenant incident as one line.*
 8. **Notifications reach Grafana through `GET /notifications` on pager-sink, read by ClickHouse's `url()` table function inside the panel's query.** *A Kafka topic, a ClickHouse table or a new plugin would each edit a measured path or add a dependency.* **One attempt:** if panel 4's query fails for any reason in Task 3 Step 6, do not debug it. The panel becomes a `text` panel that names `docker compose exec pager-sink cat /data/notifications.jsonl` and the Alertmanager URL, `docs/design.md` says notifications are not in Grafana and why, and `GET /notifications` stays.
 9. **`MEASURED_PATHS` keeps `infra` whole. A new `DISPLAY_ONLY_PATHS = ("infra/grafana/dashboards",)` names what the measured-code check ignores.** The guard still refuses any other difference. The Setup line of `docs/results.md` names every display-only file that differs from the freeze commit, and a dated method note says what was exempted, when and why. The change is its own commit. *No measured file reads a dashboard: the eval reads the alerts topic. The guard was changed after the official runs, so the report must say so on its face. The provisioning files under `infra/grafana` stay frozen: this milestone edits neither.*
-10. **Everything else in the "compose pass" is not done:** the Alertmanager volume, the `ingest_errors` TTL, `LogAppendTime` on `live.*`, start-order waits. *Each edits `docker-compose.yml` or a measured `infra/` file, and would end the claim that the published numbers come from this tree.* They go to `docs/superpowers/open-items.md` and, where a reader would trip on them, to the README's limits.
+10. **Everything else in the "compose pass" is not done:** the Alertmanager volume, the `ingest_errors` TTL, `LogAppendTime` on `live.*`, start-order waits. *Each edits `docker-compose.yml` or a measured `infra/` file, and would end the claim that the published numbers come from this tree.* They go to `docs/process/open-items.md` and, where a reader would trip on them, to the README's limits.
 11. **The README loses its one-run demo figures** (warm-up seconds, event count, the three page times, the outage times, the TaskManager reading). `scripts/demo.sh` stops printing them, and `bench_report` stops citing them. *They came from one run and no result file holds them. Milestone 5's delay figures replace them.*
 12. **The README's performance block is printed by `bench_report.readme_block(...)`** and pasted between two HTML comment markers; a test compares it whole. The eval block keeps milestone 4's sentences and tests. *The sitting has not run when this plan is written, so the plan cannot type the numbers; a rendered block needs none.*
 13. **The README does not say whether CI has run on GitHub.** It names the workflow and `make ci`. The milestone report says the workflow has not run. *The sentence would be false after the owner's first push.*
 14. **CI gets `uv sync --locked`, `fetch-depth: 0` in the Python job, and one test that the workflow's six commands are `make ci`'s, in order.** Nothing else. *The test ends "kept in sync by hand"; full history lets the freeze pins run on GitHub and not skip. The action tags were checked. Docker is on `ubuntu-latest` for `check-am.sh`. What stays unproven until the first push: the runner's Maven against the `maven:3.10.0` image, and MiniCluster timing on a smaller runner.*
-15. **Open items go to one new file, `docs/superpowers/open-items.md`.** The three follow-up files are not marked line by line: one line at the top of each "Milestone 6" section points at this plan's table and at `open-items.md`. *Milestone 6 is the last, so "deferred" needs a place; the table is already committed with the plan.*
+15. **Open items go to one new file, `docs/process/open-items.md`.** The three follow-up files are not marked line by line: one line at the top of each "Milestone 6" section points at this plan's table and at `open-items.md`. *Milestone 6 is the last, so "deferred" needs a place; the table is already committed with the plan.*
 16. **The rule test allows a banned word only on a line that holds three or more of them, or in the two report tests that list them.** *A line with three is a statement of the rule; the plans and the spec quote it.*
 17. **No rule test for company names or production claims.** *No list of names can be written without naming them, and a phrase list fails on a denial. The reviewers of Tasks 6 and 7 read for both.*
 18. **The design doc's measured figures sit in rendered blocks** (the headline table in §9, the README's performance block in §10, the extrapolation table), and prose stays free of them except on tagged lines. *Whole-block comparison checks family and run; token checks cannot.*
@@ -65,7 +63,7 @@ Each is settled here. None is left for the owner. Calls 9 and 18–24 are the co
 
 ## Follow-ups: folded in, open or dropped
 
-"Open" means a line in `docs/superpowers/open-items.md` with the reason given here.
+"Open" means a line in `docs/process/open-items.md` with the reason given here.
 
 | Source | Item | Decision |
 |---|---|---|
@@ -126,7 +124,7 @@ Each is settled here. None is left for the owner. Calls 9 and 18–24 are the co
 7. Spec §7 says "nothing is pushed, so it can't run on GitHub yet" and asks every report to say so; a README sentence saying so would go stale (call 13).
 8. `m1-followups` asks for `broker.address.family=v4`, and `m3-followups` flags `check-paths.json`'s timing; both are already fixed in the tree.
 9. Spec §4.7 asks for page counts per regional outage; `docs/results.md` has the count by scenario type only (Task 1).
-10. Spec §2 lists `docs/superpowers/` as the owner's decision before publishing; the rule test scans it, and it quotes the banned words (call 16).
+10. Spec §2 lists `docs/process/` as the owner's decision before publishing; the rule test scans it, and it quotes the banned words (call 16).
 11. Spec §4.1's picture has no line from the aggregates to the grouper; the code has one, for the active-tenant rule (the diagram in Task 6 draws it).
 
 ## Review Focus
@@ -155,18 +153,16 @@ infra/grafana/dashboards/tenant-baselines.json                   (Task 3)
 scripts/demo.sh  Makefile  .github/workflows/ci.yml (Task 2)   scripts/smoke.sh (Tasks 2, 3)
 docs/results.md (re-rendered, Tasks 1, 7)   docs/performance.md (re-rendered, Task 5)
 docs/design.md (new, Task 6)   README.md (Task 7)
-docs/superpowers/open-items.md (new, Task 0)   docs/superpowers/m{1,2,3}-followups.md (Task 0)
+docs/process/open-items.md (new, Task 0)   docs/process/m{1,2,3}-followups.md (Task 0)
 ```
-
-**Implementer and reviewer levels.** Every task: standard implementer, except Task 6, which gets the stronger one: it is 400 lines of claims. **Stronger reviewer** for Task 1 (it changes what the freeze guard compares), Task 6 (every reason against the spec, every number against its source, every untagged number) and Task 7 (the README is what most readers see; every sentence that carries a figure or a claim). **Standard reviewer** for Tasks 0, 2, 3, 4 and 5; Task 5's reviewer checks each cell of `readme_block` against the JSON key it reads. The whole-branch review at the end is the stronger one.
 
 ---
 
 ### Task 0: Milestone 5 is in, and the follow-ups have a place
 
-**Implementer:** standard. **Reviewer:** standard. No Docker.
+No Docker.
 
-**Files:** Create `docs/superpowers/plans/<date of this commit>-m6-readme-design.md` (this plan), `docs/superpowers/open-items.md`. Modify `docs/superpowers/m1-followups.md`, `m2-followups.md`, `m3-followups.md`.
+**Files:** Create `docs/process/plans/<date of this commit>-m6-readme-design.md` (this plan), `docs/process/open-items.md`. Modify `docs/process/m1-followups.md`, `m2-followups.md`, `m3-followups.md`.
 
 - [ ] **Step 1: Check milestone 5. Any failure: stop, report, do nothing else.**
   - On `main`: `git merge-base --is-ancestor m5-bench main` exits 0 (skip if the branch was deleted; the next checks stand in).
@@ -174,15 +170,13 @@ docs/superpowers/open-items.md (new, Task 0)   docs/superpowers/m{1,2,3}-followu
   - `make performance && git diff --exit-code docs/performance.md` → no change.
   - `grep -c "milestone 5 of 6" README.md` → 1.
   - `git status --short` → empty.
-- [ ] **Step 2: Branch and copy the plan.** `git switch -c m6-docs`; copy this plan to `docs/superpowers/plans/` under the date of today's commit.
+- [ ] **Step 2: Branch and copy the plan.** `git switch -c m6-docs`; copy this plan to `docs/process/plans/` under the date of today's commit.
 - [ ] **Step 3: Read the follow-up files as milestone 5 left them.** For every line under a "Milestone 6" heading, and every line milestone 5 marked `moved to milestone 6`, that this plan's table does not cover: apply the rule under the table.
-- [ ] **Step 4: Write `docs/superpowers/open-items.md`.** First line: planning material; nothing in it blocked a milestone. Then one line per "open" row of the table and per line Step 3 sent here, each with its reason, under `## Job code`, `## Compose and infra (measured paths)`, `## Eval driver and report`, `## Scripts and tests`. Last, a section `## To state in the documents (removed in Task 7)`: the lines Step 3 found that a sentence closes, each with the document and section that will carry it. Write "none" if there are none.
-- [ ] **Step 5: Point the follow-up files at the decisions.** Under each "Milestone 6" heading in the three files, add one first line: "Decided in the milestone 6 plan's follow-up table (`docs/superpowers/plans/<file>`). What stays open is in `open-items.md`." Change nothing else in them.
-- [ ] **Step 6: Commit.** `git add docs/superpowers && git commit -m "Add the milestone 6 plan and the list of open items"`
+- [ ] **Step 4: Write `docs/process/open-items.md`.** First line: planning material; nothing in it blocked a milestone. Then one line per "open" row of the table and per line Step 3 sent here, each with its reason, under `## Job code`, `## Compose and infra (measured paths)`, `## Eval driver and report`, `## Scripts and tests`. Last, a section `## To state in the documents (removed in Task 7)`: the lines Step 3 found that a sentence closes, each with the document and section that will carry it. Write "none" if there are none.
+- [ ] **Step 5: Point the follow-up files at the decisions.** Under each "Milestone 6" heading in the three files, add one first line: "Decided in the milestone 6 plan's follow-up table (`docs/process/plans/<file>`). What stays open is in `open-items.md`." Change nothing else in them.
+- [ ] **Step 6: Commit.** `git add docs/process && git commit -m "Add the milestone 6 plan and the list of open items"`
 
 ### Task 1: The dashboard file may differ from the freeze, and pages per regional outage
-
-**Implementer:** standard. **Reviewer:** stronger.
 
 **Files:** Modify `py/src/tenant_baselines/freeze.py`, `py/src/tenant_baselines/eval_report.py`, `py/tests/test_eval_report.py`, `py/tests/test_bench_world.py`; re-render `docs/results.md`.
 
@@ -212,8 +206,6 @@ docs/superpowers/open-items.md (new, Task 0)   docs/superpowers/m{1,2,3}-followu
 
 ### Task 2: CI sync and the demo script
 
-**Implementer:** standard. **Reviewer:** standard.
-
 **Files:** Create `py/tests/test_ci_sync.py`. Modify `.github/workflows/ci.yml`, `Makefile`, `scripts/demo.sh`, `scripts/smoke.sh`.
 
 - [ ] **Step 1: Write the failing test.** `test_ci_sync.py::test_make_ci_runs_the_workflows_commands_in_order`: the values of the `- run:` lines of `ci.yml`, in order (a regex over the text; there is no YAML dependency), equal `["mvn -B verify", "uv sync --locked", "uv run ruff check .", "uv run ruff format --check .", "uv run pytest -q", "scripts/check-am.sh"]`; and the Makefile's `ci` recipe (the lines after `ci:` up to the next blank line) contains each of the six, at rising positions.
@@ -229,8 +221,6 @@ docs/superpowers/open-items.md (new, Task 0)   docs/superpowers/m{1,2,3}-followu
 The scripts are exercised by Task 3's smoke run.
 
 ### Task 3: The three Grafana panels
-
-**Implementer:** standard. **Reviewer:** standard.
 
 **Files:**
 - Modify: `py/src/tenant_baselines/pager_sink.py`, `py/tests/test_pager_sink.py`, `infra/grafana/dashboards/tenant-baselines.json`, `scripts/smoke.sh`
@@ -313,8 +303,6 @@ The scripts are exercised by Task 3's smoke run.
 
 ### Task 4: The repo-wide rule test
 
-**Implementer:** standard. **Reviewer:** standard.
-
 **Files:** Create `py/tests/test_repo_rules.py`.
 
 **Interfaces (produces):**
@@ -335,8 +323,6 @@ The scripts are exercised by Task 3's smoke run.
 - [ ] **Step 5: Commit** (after Step 3; Step 4 may follow the commit, and Task 5's). `git add py/tests/test_repo_rules.py && git commit -m "Check the banned words and the synthetic label over the tracked tree"` (add any file Step 2 fixed).
 
 ### Task 5: The two blocks the documents copy from the performance files
-
-**Implementer:** standard. **Reviewer:** standard, checking each cell against its JSON key.
 
 **Files:** Modify `py/src/tenant_baselines/bench_report.py`, `py/tests/test_bench_report.py`, `py/tests/test_docs.py`; re-render `docs/performance.md`.
 
@@ -369,8 +355,6 @@ The scripts are exercised by Task 3's smoke run.
 - [ ] **Step 5: Run and commit.** `make test-py && make lint-py` → clean. `git add py/src/tenant_baselines/bench_report.py py/tests/test_bench_report.py py/tests/test_docs.py docs/performance.md && git commit -m "Print the README's performance block and the extrapolation table from the result files"`
 
 ### Task 6: `docs/design.md`
-
-**Implementer:** stronger. **Reviewer:** stronger.
 
 **Files:** Create `docs/design.md`, `py/tests/test_design_doc.py`. Modify `py/tests/test_repo_rules.py` (append `"docs/design.md"` to `SYNTHETIC_DOCS`).
 
@@ -458,9 +442,7 @@ If Task 3 fell back to the text panel, drop the last edge.
 
 ### Task 7: The README and the last checks
 
-**Implementer:** standard. **Reviewer:** stronger.
-
-**Files:** Modify `README.md`, `py/tests/test_docs.py`, `docs/superpowers/open-items.md`; re-render `docs/results.md`.
+**Files:** Modify `README.md`, `py/tests/test_docs.py`, `docs/process/open-items.md`; re-render `docs/results.md`.
 
 **The README, in this order.** Headings exactly as written.
 1. `# tenant-baselines`. Two short paragraphs: what it is (a laptop-sized reference pipeline for multi-tenant anomaly alerting), the question it tests, and the answer in one sentence that carries no figure and points at Results. Then, bold: **Synthetic data only.** Every event comes from the generator in `py/`; none of it describes a real system, and nothing here claims production use. No "work in progress" line.
@@ -490,5 +472,5 @@ If Task 3 fell back to the text panel, drop the last edge.
   - `make performance && git diff --exit-code docs/performance.md` → no change.
   - `make results`, then read `git diff docs/results.md`. Expected: exactly two lines, `Rendered at commit` and the Setup line, now `: yes, except display-only files: infra/grafana/dashboards/tenant-baselines.json`. Anything else: stop and report.
   - `make down`, and the Colima rule.
-- [ ] **Step 6: Commit.** `git add README.md py/tests/test_docs.py docs/superpowers/open-items.md docs/results.md && git commit -m "Milestone 6: the README, the design doc and the remaining panels"`. Do not push. Then follow the owner's milestone workflow for the whole-branch review and the merge to `main`.
+- [ ] **Step 6: Commit.** `git add README.md py/tests/test_docs.py docs/process/open-items.md docs/results.md && git commit -m "Milestone 6: the README, the design doc and the remaining panels"`. Do not push. Then follow the owner's milestone workflow for the whole-branch review and the merge to `main`.
 - [ ] **Step 7: Report.** The README's sections; which panel branches applied in Task 3 Step 6; the count of follow-ups folded, open and dropped; every builder's call made during the build that this plan does not list; the hours spent against the budget line at the top; whether Colima was stopped; and, in these words: the GitHub Actions workflow has still not run on GitHub; `make ci` passed locally; the first push is the owner's.

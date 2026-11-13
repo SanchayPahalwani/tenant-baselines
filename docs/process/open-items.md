@@ -52,8 +52,6 @@ Planning material; nothing in it blocked a milestone. Each line is a follow-up t
 - A warmed-up throughput run (history first, then the dense fill), so the cold-baseline caveat becomes a figure. Needs a new run. (M5 C9.)
 - Two test nits from milestone 5 Task 6: `test_measure_run_fails_when_no_checkpoint_is_in_the_last_share` matches a message both failures contain, and `measure_run` reads `/checkpoints` and `/checkpoints/config` twice each. Reason: test and efficiency nits only; neither changes a result.
 
-## CI and the dashboard
+## CI
 
-- The GitHub Actions workflow has not run on GitHub. Unproven until the owner's first push: the action tags (`checkout@v7`, `setup-java@v6`, `setup-uv@v10.3.3`), the runner's Maven, and MiniCluster timing on a smaller runner. Reason: only the owner pushes; `make ci` runs the same commands locally. (M6 C1.)
 - `test_ci_sync.py` does not catch a command that only `make ci` runs. Reason: such a command makes `make ci` stricter than the workflow, never looser, and the recipe also holds setup lines (the copy of the tree, the image build) that a stricter test would have to list. (M6 C3.)
-- How the panels render was not checked in a browser. Smoke check 13 runs every panel's query through Grafana's query API, and the design doc says the rendering was not checked. Reason: it needs the stack and a person looking at the page. (M6 C4.)

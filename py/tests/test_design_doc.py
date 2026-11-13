@@ -166,7 +166,7 @@ def _compose_services() -> set[str]:
 
 def test_the_diagram():
     fence = mermaid()
-    assert fence.startswith("flowchart LR\n")
+    assert fence.startswith("flowchart TB\n")
     labels = re.findall(r'"([^"]*)"', fence)
     assert labels
     assert [label for label in labels if re.search(r"[<>|]", label)] == []

@@ -1,9 +1,9 @@
 # tenant-baselines: design
 
 Status: v2, 2026-11-09. Revised after two independent reviews: one of systems correctness, one of detection and eval method.
-Owner: Sanchay Pahalwani. Builder: Claude Code, working in this folder.
+Owner: Sanchay Pahalwani.
 
-Planning material. It is written so it can be published, but the owner decides before the repo goes public whether `docs/superpowers/` stays in it.
+Planning material, kept in the repo as the record of the owner's decisions and the builder's calls.
 
 ## 1. Intent
 
@@ -353,7 +353,7 @@ README.md  LICENSE  Makefile  docker-compose.yml  .github/workflows/ci.yml
 flink-job/   Maven, Java 17; package io.github.sanchaypahalwani.tenantbaselines
 py/          uv project: generator (events and aggregates), thresholds, forwarder, pager_sink, eval, bench; tests
 infra/       clickhouse/, grafana/, alertmanager/, kafka/
-docs/        design.md, results.md, performance.md, superpowers/
+docs/        design.md, results.md, performance.md, process/
 data/        generated datasets (git-ignored)
 ```
 

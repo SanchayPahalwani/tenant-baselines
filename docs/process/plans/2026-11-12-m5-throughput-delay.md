@@ -1,14 +1,12 @@
 # tenant-baselines Milestone 5 Implementation Plan: throughput and delay
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** `make bench` measures three things on the laptop stack and writes them down: how many events a second the live Flink job sustains on a pre-filled topic of 2,000 keys; how long an alert takes from the moment it is decidable, and from the incident's start, to its append on the alerts topic (p50 and p95); and how much checkpointed state 48 keys with a real 4-week history hold. A script renders `docs/performance.md` from the result files.
 
 **Architecture:** Three Python drivers, one per measurement, share a few helpers: a preflight (AC power, VM clock, no other job), an environment record, fresh reads of Flink's REST metrics and checkpoint statistics, and the VM clock's offset from the host. Each driver writes one JSON result file under `docs/performance/`; a report script renders the Markdown from those files and from nothing else. The Flink job is not changed: the benchmark runs the jar that produced `docs/results.md`.
 
 **Tech stack:** unchanged. No new dependency.
 
-**Spec:** `docs/superpowers/specs/2026-11-09-tenant-baselines-design.md` (v2). Milestone 5 is §8 item 5 and §6 is its authority. Read §3, §4.1, §4.2, §4.5, §4.7, §4.9, §6, §7, §8 and §10 before starting. Follow-ups folded in or deferred come from the "Milestone 5" sections of `docs/superpowers/m1-followups.md`, `m2-followups.md` and `m3-followups.md`. If `docs/superpowers/m4-followups.md` exists when this plan is built, read its "Milestone 5" section and apply the rule under "Follow-ups" below.
+**Spec:** `docs/process/specs/2026-11-09-tenant-baselines-design.md` (v2). Milestone 5 is §8 item 5 and §6 is its authority. Read §3, §4.1, §4.2, §4.5, §4.7, §4.9, §6, §7, §8 and §10 before starting. Follow-ups folded in or deferred come from the "Milestone 5" sections of `docs/process/m1-followups.md`, `m2-followups.md` and `m3-followups.md`. If `docs/process/m4-followups.md` exists when this plan is built, read its "Milestone 5" section and apply the rule under "Follow-ups" below.
 
 **Budget:** 6.5–7.5 hours, against §8's "~3 h". About 4.5 h is building and reviewing. About 2.2 h is machine time: the throughput pilot and its two runs about 0.5 h, the delay pilot about 0.35 h, the delay run in the sitting about 1.3 h, state about 0.1 h. The rest is contingency. **The spec's "~3 h" cannot hold:** the delay run alone is about 80 minutes of wall time, §8's figure did not count the follow-ups from three reviews or the run-condition guards, and the milestone 4 plan ran at about three times its §8 figure for the same reasons.
 
@@ -163,11 +161,9 @@ py/tests/test_<module>.py              one per new module; test_bench_world.py; 
 scripts/submit-bench.sh (new, Task 2)  scripts/watermark-lag.sh (modify, Task 5)
 Makefile                               bench-throughput (Task 3), bench-delay (Task 5), bench-state (Task 6), performance, bench (Task 7)
 docs/performance/{throughput,delay,state}.json  docs/performance.md  README.md
-docs/superpowers/m{1,2,3}-followups.md                               (Task 7)
+docs/process/m{1,2,3}-followups.md                               (Task 7)
 data/bench/<run_id>/                   git-ignored: labels.json, result.json, samples
 ```
-
-**Implementer and reviewer levels.** Every task: standard implementer. Stronger reviewer for Task 2 (its reads feed every number), Task 3 (the rate window), Task 4 (the matching and the two delay definitions), Task 5 throughout (the timeline and the clocks: the riskiest logic with the fewest tests) and Task 6 (which checkpoint, and what is divided by what). Standard reviewer for Task 1 (one test) and Task 7, whose reviewer checks every sentence that carries a number against the JSON key it reads. The whole-branch review at the end is the stronger one.
 
 **Run-time estimates** (estimates, replaced by the pilots):
 - Pre-fill: 36 million events at about 200,000 a second, about 3 minutes.
@@ -180,8 +176,6 @@ data/bench/<run_id>/                   git-ignored: labels.json, result.json, sa
 
 ### Task 1: A tick test that needs the ticks
 
-**Implementer:** standard. **Reviewer:** standard.
-
 **Files:** Test: `flink-job/src/test/java/<pkg>/time/TicksTest.java`
 
 - [ ] **Step 1: Change `ticksDoNotOutrunABacklog`.** Collect **4** minutes, not 3. Expect the three minutes of 60 and then `tuple(MON + 3 * MINUTE_MS, 0L)`. Update the Javadoc: the events source ends, so its final watermark closes the three full minutes with or without ticks; the fourth, empty minute is closed only by a watermark that keeps advancing after the input ends, and the aggregator does not re-register at `Long.MAX_VALUE`, so only a tick can close it.
@@ -190,8 +184,6 @@ data/bench/<run_id>/                   git-ignored: labels.json, result.json, sa
 - [ ] **Step 4: Commit.** `git add flink-job/src/test && git commit -m "Make the backlog tick test need the ticks"`
 
 ### Task 2: Bench plumbing: preflight, environment, clock offset, Flink reads, submit script
-
-**Implementer:** standard. **Reviewer:** stronger.
 
 **Files:**
 - Create: `py/src/tenant_baselines/bench_env.py`, `py/src/tenant_baselines/bench_flink.py`, `scripts/submit-bench.sh`, `py/tests/test_bench_env.py`, `py/tests/test_bench_flink.py`
@@ -247,8 +239,6 @@ data/bench/<run_id>/                   git-ignored: labels.json, result.json, sa
   prints a pair whose first element equals `T`. Where a name differs, fix the function and its test; one commit: `git commit -m "Match Flink's REST field names as the running stack has them"`, naming the files.
 
 ### Task 3: Throughput
-
-**Implementer:** standard. **Reviewer:** stronger.
 
 **Files:**
 - Create: `py/src/tenant_baselines/bench_world.py`
@@ -317,8 +307,6 @@ data/bench/<run_id>/                   git-ignored: labels.json, result.json, sa
 
 ### Task 4: Delay: the world, the schedule, the labels and the measures
 
-**Implementer:** standard. **Reviewer:** stronger.
-
 **Files:**
 - Modify: `py/src/tenant_baselines/bench_world.py` (from Task 3), `py/src/tenant_baselines/gen_live.py`
 - Create: `py/src/tenant_baselines/bench_delay.py`, `py/tests/test_bench_delay.py`
@@ -368,8 +356,6 @@ data/bench/<run_id>/                   git-ignored: labels.json, result.json, sa
 
 ### Task 5: The delay driver, the watermark-lag message, and the pilot
 
-**Implementer:** standard. **Reviewer:** stronger throughout.
-
 **Files:**
 - Create: `py/src/tenant_baselines/bench_delay_run.py`, `py/tests/test_bench_delay_run.py`
 - Modify: `scripts/watermark-lag.sh`, `Makefile`
@@ -414,8 +400,6 @@ data/bench/<run_id>/                   git-ignored: labels.json, result.json, sa
 
 ### Task 6: State size
 
-**Implementer:** standard. **Reviewer:** stronger.
-
 **Files:**
 - Create: `py/src/tenant_baselines/bench_state.py`, `py/tests/test_bench_state.py`
 - Modify: `Makefile`
@@ -456,11 +440,9 @@ data/bench/<run_id>/                   git-ignored: labels.json, result.json, sa
 
 ### Task 7: The report, the measured sitting, the docs and the follow-ups
 
-**Implementer:** standard. **Reviewer:** standard, checking every sentence that carries a number against the JSON key it reads.
-
 **Files:**
 - Create: `py/src/tenant_baselines/bench_report.py`, `py/tests/test_bench_report.py`, `docs/performance.md` (rendered)
-- Modify: `Makefile`, `README.md`, `docs/superpowers/m1-followups.md`, `m2-followups.md`, `m3-followups.md`
+- Modify: `Makefile`, `README.md`, `docs/process/m1-followups.md`, `m2-followups.md`, `m3-followups.md`
 
 **Interfaces:**
 - Consumes: the three result files' schemas (Tasks 3, 5, 6).
@@ -511,11 +493,11 @@ data/bench/<run_id>/                   git-ignored: labels.json, result.json, sa
 - [ ] **Step 7: Read `docs/performance.md` end to end against the three JSON files.** Every figure in the text is in a file, and each statement of the list above is there.
 - [ ] **Step 8: The rest of the docs.**
   - `README.md`: "milestone 5 of 6" in the status paragraph; one sentence under `## Design` linking `docs/performance.md` (throughput, alert delay and state size, measured on one laptop on synthetic data) and this plan. No performance number in the README; milestone 6 writes that block.
-  - `docs/superpowers/m1-followups.md`, `m2-followups.md`, `m3-followups.md`: under each "Milestone 5" heading, mark every item `done (milestone 5)` or `moved to milestone 6`, as this plan's table says. Add to `m3-followups.md`'s "Milestone 6" list, one line each: the live job's retained checkpoints; the `live.*` topics' retention; the `PopulationBaselines` sweep; the `unit-tenants` removal; the demo generator's delivery timeout; one `make smoke` on `gen_live`'s loop, which now goes through `take_step`; the offset correction for `watermark-lag.sh`; the `make test-java` flake after a host sleep; moving or linking the extrapolation table into `docs/design.md`; a README performance block rendered from `docs/performance/`; the inconsistent `seconds` in `docs/results/check-paths.json`; and anything Tasks 3–6 found and did not fix, each with its number.
+  - `docs/process/m1-followups.md`, `m2-followups.md`, `m3-followups.md`: under each "Milestone 5" heading, mark every item `done (milestone 5)` or `moved to milestone 6`, as this plan's table says. Add to `m3-followups.md`'s "Milestone 6" list, one line each: the live job's retained checkpoints; the `live.*` topics' retention; the `PopulationBaselines` sweep; the `unit-tenants` removal; the demo generator's delivery timeout; one `make smoke` on `gen_live`'s loop, which now goes through `take_step`; the offset correction for `watermark-lag.sh`; the `make test-java` flake after a host sleep; moving or linking the extrapolation table into `docs/design.md`; a README performance block rendered from `docs/performance/`; the inconsistent `seconds` in `docs/results/check-paths.json`; and anything Tasks 3–6 found and did not fix, each with its number.
   - If the TaskManager's first memory reading was above 90% of its limit, or a run was OOM-killed, add "raise or re-split the TaskManager's memory" to the milestone 6 list with the reading. Otherwise the write-up's reading closes that follow-up.
 - [ ] **Step 9: Check.** `make test && make ci` → green. `git grep -n -i -E 'spearheaded|leveraged|synergy|cutting-edge|results-driven|passionate' -- docs/performance.md README.md` → no output.
 - [ ] **Step 10: Stop the stack.** `make down`. `docker ps`: if nothing is left, `colima stop`; if other containers are running, leave Colima up and say so in the report.
-- [ ] **Step 11: Commit.** `git add docs/performance docs/performance.md README.md docs/superpowers/m1-followups.md docs/superpowers/m2-followups.md docs/superpowers/m3-followups.md && git commit -m "Milestone 5: throughput, delay and state size, measured and written up"`. Do not push. Then follow the owner's milestone workflow for the merge to `main`. Report: the three headline figures as `docs/performance.md` has them; the spread between the throughput runs and the `drop-ticks` share; matched and missed incidents, and the measured minimum time-to-page; which follow-ups were folded in and which moved; every builder's call made during the build that this plan did not already list; the hours spent against the budget line at the top; whether Colima was stopped; and that the GitHub Actions workflow has not run on GitHub.
+- [ ] **Step 11: Commit.** `git add docs/performance docs/performance.md README.md docs/process/m1-followups.md docs/process/m2-followups.md docs/process/m3-followups.md && git commit -m "Milestone 5: throughput, delay and state size, measured and written up"`. Do not push. Then follow the owner's milestone workflow for the merge to `main`. Report: the three headline figures as `docs/performance.md` has them; the spread between the throughput runs and the `drop-ticks` share; matched and missed incidents, and the measured minimum time-to-page; which follow-ups were folded in and which moved; every builder's call made during the build that this plan did not already list; the hours spent against the budget line at the top; whether Colima was stopped; and that the GitHub Actions workflow has not run on GitHub.
 
 ## Changes during the build (2026-11-12)
 

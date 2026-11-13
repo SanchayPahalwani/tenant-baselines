@@ -1,6 +1,6 @@
 # Milestone 1 follow-ups
 
-Planning material, like the rest of `docs/superpowers/`. These are review findings from milestone 1 that were deferred on purpose, each with the milestone where it should land. None blocked the merge.
+Planning material, like the rest of `docs/process/`. These are review findings from milestone 1 that were deferred on purpose, each with the milestone where it should land. None blocked the merge.
 
 ## Milestone 5
 
@@ -12,7 +12,7 @@ Planning material, like the rest of `docs/superpowers/`. These are review findin
 
 ## Milestone 6 (README and compose pass)
 
-Decided in the milestone 6 plan's follow-up table (`docs/superpowers/plans/2026-11-13-m6-readme-design.md`). What stays open is in `open-items.md`.
+Decided in the milestone 6 plan's follow-up table (`docs/process/plans/2026-11-13-m6-readme-design.md`). What stays open is in `open-items.md`.
 
 - Alertmanager state lives on an anonymous volume, so silences are lost when the container is recreated.
 - `tb.ingest_errors` has no TTL.

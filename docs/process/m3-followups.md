@@ -1,6 +1,6 @@
 # Milestone 3 follow-ups
 
-Planning material, like the rest of `docs/superpowers/`. These are review findings from milestone 3 (alert noise control) that were deferred on purpose, grouped by the milestone where each should land. None blocked the merge.
+Planning material, like the rest of `docs/process/`. These are review findings from milestone 3 (alert noise control) that were deferred on purpose, grouped by the milestone where each should land. None blocked the merge.
 
 ## Milestone 5 (throughput and delay)
 
@@ -26,7 +26,7 @@ From the milestone 4 final review:
 
 ## Milestone 6 (README and design doc)
 
-Decided in the milestone 6 plan's follow-up table (`docs/superpowers/plans/2026-11-13-m6-readme-design.md`). What stays open is in `open-items.md`.
+Decided in the milestone 6 plan's follow-up table (`docs/process/plans/2026-11-13-m6-readme-design.md`). What stays open is in `open-items.md`.
 
 - **Live watermark, for `docs/design.md`:**
   - Ticks use the TaskManager's clock; events use the producers' clocks. After a silence, producers more than about 20 s behind the TaskManager lose their first events.

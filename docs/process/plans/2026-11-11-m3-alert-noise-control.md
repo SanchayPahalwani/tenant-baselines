@@ -1,14 +1,12 @@
 # tenant-baselines Milestone 3 Implementation Plan: alert noise control
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** Tenant alerts are held for two minutes and grouped by region before anything pages, unit status is published, Alertmanager routes regional and tenant pages apart and mutes tenant repeats under a regional alert, and the live watermark keeps moving through a total outage that spans a job restore.
 
 **Architecture:** The live job reads Kafka with plain per-partition event time and unions a one-per-second wall-clock tick stream into it; the ticks are filtered out again, so only their watermark reaches `MinuteAggregator`. The `Scorer`'s output becomes a stream of alert *candidates*. A new `RegionGrouper`, keyed by region and fed both the candidates and the minute aggregates, holds each candidate, promotes to one regional alert or releases the tenant alert, resolves and re-holds, and writes drain and undrain events to a side output. Only the grouper's output reaches `<ns>.alerts`.
 
 **Tech stack:** unchanged from milestone 2, plus `org.apache.flink:flink-connector-datagen:2.2.1` (scope `provided`; it is inside `flink-dist-2.2.1.jar` of the `flink:2.2.1-java17` image, checked on the running container, so it is not shaded into the job jar).
 
-**Spec:** `docs/superpowers/specs/2026-11-09-tenant-baselines-design.md` (v2, approved). Milestone 3 is §8 item 3. Read §3, §4.2, §4.5, §4.7–§4.10, §5.5, §7 and §10 before starting. Follow-ups folded in come from `docs/superpowers/m2-followups.md` and `docs/superpowers/m1-followups.md`.
+**Spec:** `docs/process/specs/2026-11-09-tenant-baselines-design.md` (v2, approved). Milestone 3 is §8 item 3. Read §3, §4.2, §4.5, §4.7–§4.10, §5.5, §7 and §10 before starting. Follow-ups folded in come from `docs/process/m2-followups.md` and `docs/process/m1-followups.md`.
 
 **Budget:** about 9 hours, against §8's "~4 h" for milestone 3. Task 1 (the watermark redesign, decided after §8 was written) about 2 h; Tasks 2–8 about 5 h; Tasks 9a and 9b about 2 h, most of it waiting on two full demo runs. The owner should read this figure before approving the plan.
 
@@ -57,7 +55,7 @@
 
 ## Open questions for the owner
 
-Resolved. On 2026-11-11 the owner chose **A** (keep 60 s idleness, with the edits listed under A) and approved the plan for subagent-driven execution, with the budget of about 9 h and the three steady demo tenants.
+Resolved. On 2026-11-11 the owner chose **A** (keep 60 s idleness, with the edits listed under A) and approved the plan, with the budget of about 9 h and the three steady demo tenants.
 
 1. **How far behind the wall clock the live watermark may run (§4.2, the 2026-11-11 decision).** The approved design is sound for the two problems it was chosen for; both are fixed (Task 1, checked end to end in Task 9a). One expected effect does not hold as stated. "Caught up: about a second behind the wall clock" is true only when every partition carries at least about one event a second. A partition that is not idle holds the watermark at its newest event − 20 s, so the watermark runs `20 s + the age of the newest event on the slowest non-idle partition` behind the wall clock, up to 80 s. In the demo world the quietest partition falls to 0.055 events/s on weekend nights (computed from `traffic.py`: an event every 18 s on average), so minutes there close some tens of seconds later than under milestone 2's latch. Nothing is dropped, and nothing stalls.
    - **A (planned):** keep 60 s. The spec amendment in Task 1 states the real bound; Task 9a widens `demo.sh`'s catch-up test to 180 s; Task 9b measures the lag (`scripts/watermark-lag.sh`) and records the weekday, hour and lag beside every page time. A is the default only with those edits.
@@ -92,19 +90,17 @@ flink-job/src/test/java/<pkg>/...   one test class per new class; time/LiveWater
 infra/clickhouse/init/01-schema.sql                                                (Task 6)
 py/src/tenant_baselines/forwarder.py  scripts/check-am.sh (new)  Makefile  .github/workflows/ci.yml  (Task 7)
 py/src/tenant_baselines/{world,traffic,incidents,gen_live}.py  py/tests/...        (Task 8)
-scripts/{demo,smoke}.sh  scripts/watermark-lag.sh (new)  README.md  docs/superpowers/*.md  (Tasks 1, 8, 9a, 9b)
+scripts/{demo,smoke}.sh  scripts/watermark-lag.sh (new)  README.md  docs/process/*.md  (Tasks 1, 8, 9a, 9b)
 ```
 
-Budget: see the header (about 9 h). Tasks 1, 3, 4 and 5 touch watermark semantics or a stateful Flink operator and get the stronger implementer model; the rest don't need it.
+Budget: see the header (about 9 h).
 
 ---
 
 ### Task 1: Live watermark from per-partition event time and wall-clock ticks
 
-**Implementer:** stronger model (watermark semantics; no operator state of its own).
-
 **Files:**
-- Modify: `flink-job/pom.xml`, `model/Event.java`, `time/Watermarks.java`, `TenantBaselinesJob.java`, `docs/superpowers/specs/2026-11-09-tenant-baselines-design.md`, `scripts/demo.sh` (one comment)
+- Modify: `flink-job/pom.xml`, `model/Event.java`, `time/Watermarks.java`, `TenantBaselinesJob.java`, `docs/process/specs/2026-11-09-tenant-baselines-design.md`, `scripts/demo.sh` (one comment)
 - Create: `time/Ticks.java`
 - Delete: `time/LiveWatermarkGenerator.java`, `time/LiveWatermarkGeneratorTest.java`
 - Test: `time/TicksTest.java` (new), `model/EventTest.java` (new), `TenantBaselinesJobTest.java`
@@ -163,7 +159,7 @@ In §7's Java test list, replace "the live watermark generator, caught-up vs bac
 
 Follow-ups from milestone 2. The grouper (Task 3) builds its events with the same factory.
 
-**Implementer:** standard model. The Scorer's behaviour does not change.
+The Scorer's behaviour does not change.
 
 **Files:**
 - Create: `detect/Alerts.java`, `detect/PopulationLookup.java`
@@ -188,8 +184,6 @@ Follow-ups from milestone 2. The grouper (Task 3) builds its events with the sam
 - [ ] **Step 5: Commit.** `git add flink-job && git commit -m "Move the alert factory and the fallback lookup out of the Scorer"`
 
 ### Task 3: RegionGrouper: activity, hold, promote and absorb
-
-**Implementer:** stronger model (stateful Flink operator with timers).
 
 **Files:**
 - Create: `group/KeyActivity.java`, `group/ActivityFlip.java`, `group/TenantAlert.java`, `group/RegionalAlert.java`, `group/RegionGrouper.java`
@@ -305,8 +299,6 @@ A released or absorbed event has the candidate's `alertId` (same inputs to `Aler
 
 ### Task 4: RegionGrouper: regional resolve, fresh hold, end of input, restore
 
-**Implementer:** stronger model (stateful Flink operator with timers).
-
 **Files:**
 - Modify: `group/RegionGrouper.java`
 - Test: `group/RegionGrouperResolveTest.java`
@@ -345,8 +337,6 @@ So while a regional alert fires there is one timer a minute, the streak counts m
 - [ ] **Step 5: Commit.** `git add flink-job && git commit -m "Resolve regional alerts and re-hold what they absorbed"`
 
 ### Task 5: Unit status
-
-**Implementer:** stronger model (state in the same operator).
 
 **Files:**
 - Create: `model/UnitStatusEvent.java`
@@ -399,8 +389,6 @@ Every change of a "sent" alert happens inside a timer (a release, or a buffered 
 
 ### Task 6: Job wiring and `tb.unit_status`
 
-**Implementer:** standard model.
-
 **Files:**
 - Modify: `JobConfig.java`, `Pipeline.java`, `TenantBaselinesJob.java`, `io/JsonSerialization.java`, `infra/clickhouse/init/01-schema.sql`
 - Test: `JobConfigTest.java`, `io/JsonSerializationTest.java`, `PipelineTest.java`, `TenantBaselinesJobTest.java`
@@ -449,8 +437,6 @@ Every change of a "sent" alert happens inside a timer (a release, or a buffered 
 
 `infra/alertmanager/alertmanager.yml` already has the two receivers, the `scope` routes and the inhibit rule (written in milestone 1, never exercised). This task proves the routing in CI and pins the forwarder's handling of the new events. The inhibit rule itself is proven in Task 9a against a running Alertmanager.
 
-**Implementer:** standard model.
-
 **Files:**
 - Modify: `py/src/tenant_baselines/forwarder.py`, `Makefile`, `.github/workflows/ci.yml`, the spec (§7)
 - Create: `scripts/check-am.sh`
@@ -479,8 +465,6 @@ Every change of a "sent" alert happens inside a timer (a release, or a buffered 
 ### Task 8: Demo world and script that always form a regional alert
 
 **Why.** Computed from `world.py` and `traffic.py` at every quarter-hour of a week, counting a tenant as active when one of its keys has a mean rate of at least 20 a minute over the 60 minutes before (one sample a minute): with today's 8 tenants, no region has 3 active tenants in 290 of 672 quarter-hours (weekend and night load is 5% to 17% of peak), so no spike-region rule can guarantee a regional alert. Tenants that follow working hours would need about 500 requests a minute of peak per key to stay active on a weekend night, which triples the history. Three small tenants with a flat profile do it for 3.6 million more events over three weeks (20.7 → 24.3 million, computed). With them, `ap-southeast` has 3 to 5 active tenants in every quarter-hour, and at least 60% of the active ones have a key at 25 requests a minute or more. These are this plan's own computations; none of them goes into the README unless a script in the repo prints it.
-
-**Implementer:** standard model.
 
 **Files:**
 - Modify: `py/src/tenant_baselines/world.py`, `traffic.py`, `incidents.py`, `gen_live.py`, the spec (§4.10)
@@ -522,8 +506,6 @@ Every change of a "sent" alert happens inside a timer (a release, or a buffered 
 - [ ] **Step 5: Commit.** `git add -A && git commit -m "Give the demo world three steady tenants and script a burst before the regional spike"`
 
 ### Task 9a: Smoke test on the grouped demo
-
-**Implementer:** standard model; the debugging, if a check fails, wants the stronger one.
 
 **Files:**
 - Create: `scripts/watermark-lag.sh`
@@ -569,15 +551,13 @@ Every change of a "sent" alert happens inside a timer (a release, or a buffered 
 - [ ] **Step 3: Write the scripts and check their syntax.** `bash -n scripts/smoke.sh scripts/demo.sh scripts/watermark-lag.sh` → no output.
 - [ ] **Step 4: Run the smoke test from empty volumes.**
   Run: `make reset && make smoke`
-  Expected: `PASS` for all 12 checks. On a FAIL, debug with superpowers:systematic-debugging before changing code. If only check 11 or 12 failed, fix and rerun with `CHECKS="11 12" scripts/smoke.sh` (12 needs the generator running again: `docker compose --profile demo start generator`, then wait two minutes). If check 5 alone fails, read `status` of the tenant alert in `GET :9093/api/v2/alerts` and the regional alert's labels before touching the rule; it needs a full rerun.
+  Expected: `PASS` for all 12 checks. On a FAIL, find the cause before changing code. If only check 11 or 12 failed, fix and rerun with `CHECKS="11 12" scripts/smoke.sh` (12 needs the generator running again: `docker compose --profile demo start generator`, then wait two minutes). If check 5 alone fails, read `status` of the tenant alert in `GET :9093/api/v2/alerts` and the regional alert's labels before touching the rule; it needs a full rerun.
 - [ ] **Step 5: Commit.** `git add -A && git commit -m "Smoke-test regional grouping, the inhibit, unit status and an outage across a restore"`
 
 ### Task 9b: Measurements, README and follow-ups
 
-**Implementer:** standard model.
-
 **Files:**
-- Modify: `scripts/demo.sh`, `README.md`, `docs/superpowers/m2-followups.md`, `docs/superpowers/m1-followups.md`
+- Modify: `scripts/demo.sh`, `README.md`, `docs/process/m2-followups.md`, `docs/process/m1-followups.md`
 
 **Behaviour:**
 - **`README.md`:** "milestone 3 of 6"; two sentences on the hold, the regional alert and unit status; the measured warm-up and page times from Step 2, each with the machine, the Docker VM, the UTC weekday and hour of the run and the watermark lag measured on that run; one sentence that the page times include the watermark lag, which is between 21 s and 80 s depending on how busy the quietest partition is; one sentence that three demo tenants have a flat synthetic profile so a regional alert can form at any hour; a link to this plan. No figure from this plan's own computations (event counts, quarter-hours) goes into the README unless a script in the repo prints it.
@@ -598,7 +578,7 @@ Every change of a "sent" alert happens inside a timer (a release, or a buffered 
 - [ ] **Step 4: Check by hand in the browser.** The alert log shows `absorbed` rows and a `region` row; Alertmanager shows the regional alert, and the burst's tenant alert as inhibited; `SELECT * FROM tb.unit_status FINAL ORDER BY at` shows the drain and the undrain.
 - [ ] **Step 5: Do the repo hygiene check.**
   Run: `git grep -n -i -E 'spearhead|leverag|synerg|cutting-edge|results-driven|passionate'`
-  Expected: no matches outside `docs/superpowers/`.
+  Expected: no matches outside `docs/process/`.
 - [ ] **Step 6: Commit and stop.**
   `git add -A && git commit -m "Milestone 3: alert noise control and a watermark that survives a silent restore"`
   Then stop for the owner's review. Report the smoke output and the Step 1 and 2 measurements with their weekday and hour, the hours spent against the budget line at the top of this plan, and say plainly that the GitHub Actions workflow hasn't run on GitHub.

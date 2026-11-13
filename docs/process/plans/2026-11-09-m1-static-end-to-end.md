@@ -1,7 +1,5 @@
 # tenant-baselines Milestone 1 Implementation Plan: end to end with static thresholds
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** `docker compose up` + `make demo` runs the live pipeline end to end:
 1. A Python generator writes events.
 2. The Flink job aggregates them per minute.
@@ -16,7 +14,7 @@
 - Python 3.12 with uv: confluent-kafka 2.16.1, orjson 3.13.0, numpy 2.5.4, httpx 0.28.1, pytest 9.2.0, ruff 0.17.4.
 - Docker images: Kafka 4.4.0, ClickHouse 26.8.36.3, Alertmanager v0.34.2, Grafana 13.2.5 with grafana-clickhouse-datasource 4.23.4.
 
-**Spec:** `docs/superpowers/specs/2026-11-09-tenant-baselines-design.md` (v2, approved). Read §4.1, §4.2, §4.5, §4.9, §4.10 and §7 before starting.
+**Spec:** `docs/process/specs/2026-11-09-tenant-baselines-design.md` (v2, approved). Read §4.1, §4.2, §4.5, §4.9, §4.10 and §7 before starting.
 
 ## Global Constraints
 
@@ -555,11 +553,11 @@ parallelism.default: 2
 
 - [ ] **Step 1: Run the full test suite.** `make test` → Java and Python 0 failures, ruff clean.
 - [ ] **Step 2: Run CI locally.** `make ci` → both jobs exit 0.
-- [ ] **Step 3: Run the end-to-end smoke test.** `make smoke` → `PASS` for all 6 checks. On a FAIL, debug with superpowers:systematic-debugging before changing code.
+- [ ] **Step 3: Run the end-to-end smoke test.** `make smoke` → `PASS` for all 6 checks. On a FAIL, find the cause before changing code.
 - [ ] **Step 4: Check by hand in the browser.** Open the Grafana dashboard and confirm both panels show data for an `eu-central` key. In Alertmanager, confirm the `TenantAnomaly` alerts grouped by region and signal.
 - [ ] **Step 5: Do the repo hygiene check.**
   Run: `git grep -n -i -E 'spearhead|leverag|synerg|cutting-edge|results-driven|passionate'`
-  Expected: no matches outside `docs/superpowers/`.
+  Expected: no matches outside `docs/process/`.
 - [ ] **Step 6: Commit and stop.**
   `git add -A && git commit -m "Milestone 1: end to end with static thresholds"`
   Then stop for the owner's review. Report what works and the smoke output, and say plainly that the GitHub Actions workflow hasn't run on GitHub.
