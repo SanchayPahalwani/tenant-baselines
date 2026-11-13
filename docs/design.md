@@ -309,6 +309,7 @@ flowchart LR
 | global static | 31/50 (0.48–0.74) | 12.69 |
 <!-- headline:end -->
 
+- Every official seed selected k6 for the seasonal detector. The live stack (the demo, its dashboard and the forwarder) and the delay benchmark run seasonal k4. On the same week, k4 had 34.57 false pages per day against 9.63 for k6, and found 46/50 against 45/50 ([results](results.md))
 - At the main amplitude the seasonal detector found more scenarios than either static detector and had the fewest false pages per day, pooled. Per seed, and in the recall intervals, some of those gaps are not settled with 5 seeds; `docs/results.md` gives the ranges.
 - At the weakest seasonality, the seasonal detector's recall held up, but global static had fewer false pages per day than seasonal, pooled. The figures are in the sweep table of [`docs/results.md`](results.md).
 - Most pages are false in every family.
@@ -327,8 +328,9 @@ flowchart LR
 - The fill is 240 event minutes, so every key is scored against the fallback baselines, not its own history ([performance](performance.md))
 - **Run to run.** The rate moves between runs. Other projects' containers share the VM, and the drivers read its load only at a run's start and end.
 - At the throughput readings, other projects' containers used 12.7 to 65.8 percent of one CPU, out of the VM's 8 CPUs ([performance](performance.md))
-- The valid throughput pilots read from 13,102 to 66,533 events a second ([performance](performance.md))
-- The pilots ran on earlier commits of the drivers, some on battery, and with other projects' containers busier. The range has no single cause, and no run measured which of these moved it.
+- Every valid throughput pilot read lower than the published runs, from 13,102 to 66,533 events a second ([performance](performance.md))
+- The throughput pilots ran on earlier commits of the drivers, with fills of 30 or 90 event minutes against 240, and some on battery ([performance](performance.md))
+- One throughput pilot recorded other projects' containers busier than at every published reading. No run measured which of these moved the rate.
 - **Delay.** A live generator sends at a fixed rate from the compose image, with injected incidents. *Reason:* event time comes from the generator's clock and append time from the broker's, and in one VM they share a clock.
 - The delay world has 36 keys at up to 40 requests a minute per key, in 8 partitions ([performance](performance.md))
 - It had 21 days of history before live traffic ([performance](performance.md))
@@ -338,7 +340,7 @@ flowchart LR
 - **Time to page against spec 6.** The spec says time to page is at least about 5 minutes for every detector. That does not hold.
 - An alert's streak starts at the first breaching minute (`AlertStateMachine`). The 3 confirmation minutes and the 2-minute hold (both configured) are counted from that minute's start, and the row is stamped at the hold's end (`RegionGrouper`).
 - An incident usually starts partway into a minute and breaches in that minute. Its page then comes about 5 minutes (configured) after the minute's start, plus the pipeline delay. When the incident starts later in its minute than the pipeline delay, it is paged in under 5 minutes of its own start.
-- The measured minimum is 269.4 s for every setting, and for the headline setting, seasonal/k4, 35 of 60 matched incidents were paged in under five minutes from their start ([performance](performance.md))
+- The measured minimum is 269.4 s for every setting, and for the live setting, seasonal/k4, 35 of 60 matched incidents were paged in under five minutes from their start ([performance](performance.md))
 - **Watermark lag** was sampled once a minute during the delay run, against the VM's clock. By design it is the 20 s bound plus the age of the newest event on the slowest busy partition (configured). The run kept every partition busy, so a sparse partition was not measured.
 - **Sleep and power.** The drivers read the power source only at a run's start and end; the OS power log shows what came between. On macOS, `time.monotonic` stops while the machine sleeps, so its intervals cannot show a lid-close sleep.
 - The drivers read the OS sleep counter at every poll: `CLOCK_MONOTONIC_RAW` minus `CLOCK_UPTIME_RAW` (`bench_env.slept_s`). A run in which it rises by more than 1 s (configured) is invalid. So is a run in which the job restarted or dropped an event as late.

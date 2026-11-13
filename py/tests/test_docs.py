@@ -138,6 +138,34 @@ def test_the_readme_sentences_carry_the_scripts_figures(records, machine, check_
     assert "paged less than both" not in README
 
 
+def test_the_readme_says_which_seasonal_setting_was_selected_and_which_one_runs_live(records):
+    """The headline's seasonal row is the setting every seed selected; the demo and the delay
+    benchmark run another one, and the README says so with that setting's false pages."""
+    summaries, _, _ = records
+    main = eval_report.MAIN_AMPLITUDE
+    seasonal = eval_report.headline(summaries, main)["seasonal"]
+    selected = {x["setting"] for x in seasonal["seeds"]}
+    assert len(selected) == 1, selected
+    (chosen,) = selected
+    compose = (REPO / "docker-compose.yml").read_text()
+    live = re.search(r"- --live-setting\n\s*- (\w+)\n", compose).group(1)
+    bench = json.loads((PERFORMANCE / "delay.json").read_text())["headline"]
+    assert (bench["detector"], bench["setting"]) == ("seasonal", live)
+    assert live != chosen
+    row = next(
+        r
+        for r in eval_report.curve(summaries, main)
+        if (r["family"], r["setting"]) == ("seasonal", live)
+    )
+    assert row["false_per_day"] > seasonal["pooled_false_per_day"]
+    sentence = (
+        f"Every official seed selected {chosen} for the seasonal detector; the demo and the delay"
+        f" benchmark run {live}, which had {row['false_per_day']:.2f} false pages per day on the"
+        " same week."
+    )
+    assert sentence in eval_section()
+
+
 def test_the_readme_claims_hold_for_the_figures(records, check_paths):
     summaries, _, _ = records
     main = eval_report.headline(summaries, eval_report.MAIN_AMPLITUDE)
