@@ -40,6 +40,9 @@ TAGS = {
     "([performance](performance.md))": "performance.md",
 }
 PLACEHOLDERS = ("TODO", "TBD", "PENDING", "XXX")
+# The rendered blocks, in the doc's order; each must equal what a report script prints.
+BLOCKS = ("headline", "performance", "extrapolation")
+BLOCK_BEGIN = re.compile(r"<!-- (\w+):begin -->")
 
 TOKEN = re.compile(r"\d+(?:,\d{3})*(?:\.\d+)?(?:/\d+)?")
 # Removed, in this order, before a line is checked: none of these can be a measured figure.
@@ -73,6 +76,11 @@ def block(name: str, doc: str | None = None) -> str:
     return doc[doc.index(begin) + len(begin) : doc.index(end)].strip()
 
 
+def block_names(doc: str) -> list[str]:
+    """The names of the doc's `<!-- name:begin -->` lines, in order."""
+    return [m.group(1) for line in doc.splitlines() if (m := BLOCK_BEGIN.fullmatch(line.strip()))]
+
+
 def mermaid() -> str:
     fences = re.findall(r"```mermaid\n(.*?)```", text(), re.S)
     assert len(fences) == 1
@@ -92,7 +100,7 @@ def prose_lines() -> list[str]:
             if line.strip() == skipping:
                 skipping = None
             continue
-        begin = re.fullmatch(r"<!-- (\w+):begin -->", line.strip())
+        begin = BLOCK_BEGIN.fullmatch(line.strip())
         if begin:
             skipping = f"<!-- {begin.group(1)}:end -->"
             continue
@@ -101,6 +109,16 @@ def prose_lines() -> list[str]:
             continue
         out.append(line)
     return out
+
+
+def missing_tokens(body: str, source: str) -> list[str]:
+    """The number tokens of `body` that `source` does not hold as a whole number: "69.4" is not
+    found inside "269.4", nor "6" inside "1.6" or "46/50"."""
+    return [
+        t
+        for t in tokens(body)
+        if not re.search(r"(?<![\d.,/])" + re.escape(t) + r"(?![\d/]|[.,]\d)", source)
+    ]
 
 
 def measured_looking(line: str) -> bool:
@@ -177,6 +195,15 @@ def _cells(line: str) -> list[str]:
     return [c.strip() for c in line.strip().strip("|").split("|")]
 
 
+def test_the_only_blocks_are_the_three_the_scripts_print():
+    """The prose checks skip every block, and only these three are compared with a script."""
+    assert block_names(text()) == list(BLOCKS)
+    planted = text().replace(
+        "## 10. Performance", "<!-- note:begin -->\n9.99\n<!-- note:end -->\n\n## 10. Performance"
+    )
+    assert block_names(planted) == ["headline", "note", "performance", "extrapolation"]
+
+
 def test_the_headline_block_is_the_results():
     results = (DOCS / "results.md").read_text()
     lines = block("headline").splitlines()
@@ -230,9 +257,18 @@ def test_tagged_lines_carry_only_their_sources_figures():
         tagged += 1
         source = (DOCS / TAGS[tag]).read_text(encoding="utf-8")
         body = SPEC_REF.sub("", line.rstrip()[: -len(tag)])
-        missing = [t for t in tokens(body) if t not in source]
+        missing = missing_tokens(body, source)
         assert missing == [], f"{TAGS[tag]} lacks {missing}: {line}"
     assert tagged >= 3
+
+
+def test_a_tagged_figure_must_stand_alone_in_its_source():
+    assert missing_tokens("69.4", "a minimum of 269.4 s") == ["69.4"]
+    assert missing_tokens("6", "a 1.6 share and 46/50") == ["6"]
+    assert missing_tokens("46/50", "146/500") == ["46/50"]
+    assert missing_tokens("1,300", "1,300,000") == ["1,300"]
+    assert missing_tokens("9.63 and 46/50 and k6", "k6: 9.63. Then 46/50 (0.81).") == []
+    assert missing_tokens("35 of 60", "35 of 60 matched") == []
 
 
 def test_every_tag_ends_its_line():

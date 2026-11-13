@@ -72,6 +72,16 @@ def headline_rows(text: str) -> list[tuple[str, str, str]]:
     return rows
 
 
+def _cells(line: str) -> list[str]:
+    return [c.strip() for c in line.strip().strip("|").split("|")]
+
+
+def headline_header(text: str) -> list[str]:
+    """The header cells of the first table after the 6:1 headline heading."""
+    section = text[text.index("## Headline") :]
+    return _cells(next(line for line in section.splitlines() if line.startswith("| Family")))
+
+
 def readme_rows() -> list[tuple[str, str, str]]:
     rows = [line for line in eval_section().splitlines() if line.startswith("| ")]
     cells = [[c.strip() for c in r.strip("|").split("|")] for r in rows]
@@ -83,6 +93,12 @@ def test_the_readme_table_is_the_headline_table_of_results_md(rendered):
     assert len(readme) == 3
     assert readme == headline_rows((REPO / "docs" / "results.md").read_text())
     assert readme == headline_rows(rendered)
+
+
+def test_the_readme_table_header_is_the_header_of_results_md(rendered):
+    header = next(line for line in eval_section().splitlines() if line.startswith("| Family"))
+    for source in ((REPO / "docs" / "results.md").read_text(), rendered):
+        assert _cells(header) == [headline_header(source)[i] for i in (0, 2, 5)]
 
 
 def test_the_readme_sentences_carry_the_scripts_figures(records, machine, check_paths):
