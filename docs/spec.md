@@ -353,7 +353,7 @@ README.md  LICENSE  Makefile  docker-compose.yml  .github/workflows/ci.yml
 flink-job/   Maven, Java 17; package io.github.sanchaypahalwani.tenantbaselines
 py/          uv project: generator (events and aggregates), thresholds, forwarder, pager_sink, eval, bench; tests
 infra/       clickhouse/, grafana/, alertmanager/, kafka/
-docs/        design.md, results.md, performance.md, process/
+docs/        design.md, results.md, performance.md, spec.md, open-items.md
 data/        generated datasets (git-ignored)
 ```
 

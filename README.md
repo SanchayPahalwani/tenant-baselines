@@ -106,9 +106,9 @@ Time to page includes the confirmation minutes and the hold, both configured. It
 
 [docs/design.md](docs/design.md) gives the reason for each choice, why there is one OLAP store, and what a much larger deployment would change. The eval figures are in [docs/results.md](docs/results.md) and the measurements in [docs/performance.md](docs/performance.md).
 
-The planning material: [the spec](docs/process/specs/2026-11-09-tenant-baselines-design.md), [the milestone 1 plan](docs/process/plans/2026-11-09-m1-static-end-to-end.md), [the milestone 2 plan](docs/process/plans/2026-11-10-m2-seasonal-baselines.md), [the milestone 3 plan](docs/process/plans/2026-11-11-m3-alert-noise-control.md), [the milestone 4 plan](docs/process/plans/2026-11-12-m4-eval.md), [the milestone 5 plan](docs/process/plans/2026-11-12-m5-throughput-delay.md) and [the milestone 6 plan](docs/process/plans/2026-11-13-m6-readme-design.md).
+[The spec](docs/spec.md) states what was built, and marks which choices were the owner's decisions and which were the builder's calls. [The open items](docs/open-items.md) list what the build left undone, with the reason for each.
 
-How it was built: AI coding agents (Claude Code) wrote the code, tests and documents from the spec and the milestone plans in `docs/process/`. The spec marks which choices were the owner's decisions and which were the builder's calls.
+How it was built: AI coding agents (Claude Code) wrote the code, tests and documents from the spec and a plan for each of the six milestones. The plans and the review notes are no longer in the tree; they are in the history at [commit 322733c](https://github.com/SanchayPahalwani/tenant-baselines/tree/322733c04ffac2d6030e46aa34f368c0da0b432b/docs/process).
 
 ## What this repo does not do
 

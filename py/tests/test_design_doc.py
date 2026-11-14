@@ -48,6 +48,7 @@ TOKEN = re.compile(r"\d+(?:,\d{3})*(?:\.\d+)?(?:/\d+)?")
 # Removed, in this order, before a line is checked: none of these can be a measured figure.
 NOT_FIGURES = (
     re.compile(r"^#+ \d+(\.\d+)*\.? "),  # a heading's section number
+    re.compile(r"\]\(https?://[^)]*\)"),  # a link's web address, such as a commit in the history
     re.compile(r"\d{4}-\d{2}-\d{2}"),  # dates
     re.compile(r"FLINK-39728"),
     re.compile(r"\d+\.\d+\.\d+-\d+\.\d+"),  # versions such as 5.0.0-2.2
@@ -294,6 +295,8 @@ def test_the_number_rule_on_literal_lines():
     assert not measured_looking("1.4826 × MAD (spec 4.3)")
     assert measured_looking("Recall was 9.63. See spec 4.3.")
     assert not measured_looking("Recall is about 2.3 (spec 4.3); the bound is 20 s.")
+    assert not measured_looking("[the plan](https://example.org/blob/0123456789abcdef/plan.md)")
+    assert measured_looking("[the plan](https://example.org/plan.md) gave 9.63")
 
 
 def test_the_world_is_48_keys():

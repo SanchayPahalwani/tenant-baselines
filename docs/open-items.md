@@ -1,6 +1,6 @@
 # Open items
 
-Planning material; nothing in it blocked a milestone. Each line is a follow-up that milestone 6 did not do, with the reason. The decisions are in the milestone 6 plan's follow-up table (`plans/2026-11-13-m6-readme-design.md`). The sources are `m1-followups.md`, `m2-followups.md` and `m3-followups.md`.
+Planning material; nothing in it blocked a milestone. Each line is a follow-up that milestone 6 did not do, with the reason. The decisions are in the milestone 6 plan's follow-up table, and the sources are the follow-up notes of milestones 1 to 3. Both are no longer in the tree; they are in the history at [commit `322733c`](https://github.com/SanchayPahalwani/tenant-baselines/tree/322733c04ffac2d6030e46aa34f368c0da0b432b/docs/process).
 
 ## Job code
 

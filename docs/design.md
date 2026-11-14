@@ -2,7 +2,7 @@
 
 **Synthetic data only.** Every event and incident here comes from a generator in `py/`, and every figure from runs on one laptop. None of it describes a real system. The figures are not evidence about any real system or any larger deployment, and nothing here claims production use.
 
-This document gives the reason for each choice in [the spec](process/specs/2026-11-09-tenant-baselines-design.md), what the choice costs, and where the build departs from the spec. It follows the data through the pipeline, then the eval, then the measurements.
+This document gives the reason for each choice in [the spec](spec.md), what the choice costs, and where the build departs from the spec. It follows the data through the pipeline, then the eval, then the measurements.
 
 ## 1. What this is
 
@@ -21,7 +21,7 @@ This document gives the reason for each choice in [the spec](process/specs/2026-
 - Figures sit in three blocks. Each is pasted unchanged from a script's output, and a test compares the two. The eval headline (§9) and the performance table (§10) are measured. The state extrapolation (§10) is arithmetic on a measurement, not a measurement.
 - A few other figures sit on lines that end with a source tag, `([results](results.md))` or `([performance](performance.md))`. A test checks that every number on such a line appears in the file the tag names.
 - A value marked "configured" is set in the code or in the stack's configuration. It is a design value, not a measurement. "spec 4.3" cites a section of the spec.
-- The milestone plans hold the detail behind the builder's calls: [milestone 1](process/plans/2026-11-09-m1-static-end-to-end.md), [milestone 2](process/plans/2026-11-10-m2-seasonal-baselines.md), [milestone 3](process/plans/2026-11-11-m3-alert-noise-control.md), [milestone 4](process/plans/2026-11-12-m4-eval.md), [milestone 5](process/plans/2026-11-12-m5-throughput-delay.md) and [milestone 6](process/plans/2026-11-13-m6-readme-design.md). What the build left open is in [the open items](process/open-items.md).
+- The milestone plans hold the detail behind the builder's calls. They are no longer in the tree; these links open them in the git history: [milestone 1](https://github.com/SanchayPahalwani/tenant-baselines/blob/322733c04ffac2d6030e46aa34f368c0da0b432b/docs/process/plans/2026-11-09-m1-static-end-to-end.md), [milestone 2](https://github.com/SanchayPahalwani/tenant-baselines/blob/322733c04ffac2d6030e46aa34f368c0da0b432b/docs/process/plans/2026-11-10-m2-seasonal-baselines.md), [milestone 3](https://github.com/SanchayPahalwani/tenant-baselines/blob/322733c04ffac2d6030e46aa34f368c0da0b432b/docs/process/plans/2026-11-11-m3-alert-noise-control.md), [milestone 4](https://github.com/SanchayPahalwani/tenant-baselines/blob/322733c04ffac2d6030e46aa34f368c0da0b432b/docs/process/plans/2026-11-12-m4-eval.md), [milestone 5](https://github.com/SanchayPahalwani/tenant-baselines/blob/322733c04ffac2d6030e46aa34f368c0da0b432b/docs/process/plans/2026-11-12-m5-throughput-delay.md) and [milestone 6](https://github.com/SanchayPahalwani/tenant-baselines/blob/322733c04ffac2d6030e46aa34f368c0da0b432b/docs/process/plans/2026-11-13-m6-readme-design.md). What the build left open is in [the open items](open-items.md).
 
 ## 2. Architecture
 
@@ -441,7 +441,7 @@ Design reasoning, not measured. Nothing in this section was built or run.
 - **Holiday calendars, DST handling and change-point detection.** *Reason:* the synthetic world uses fixed offsets. The holiday dip is a should-not-page scenario, so the cost of having no calendar shows in the results instead of being hidden.
 - **The stretch items:** OTLP ingest through a collector, the Flink Kubernetes Operator, and a generated "what changed" note per alert. *Reason:* the spec drops them first, and the claim needs none of them.
 
-**Known gaps a reader could hit** (from [the open items](process/open-items.md)):
+**Known gaps a reader could hit** (from [the open items](open-items.md)):
 
 - Alertmanager's state is on an anonymous volume, so silences do not survive `make down`. A fix edits `docker-compose.yml`, a measured path.
 - `tb.ingest_errors` has no TTL. A fix edits a measured file under `infra/`.
